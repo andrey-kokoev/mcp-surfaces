@@ -7,7 +7,7 @@ import {
   assertSiteOperatingLoopRuntimeHostAuthority,
   heartbeatSiteOperatingLoopRuntimeHost,
   transitionSiteOperatingLoopRuntimeHost,
-} from '@narada2/site-operating-loop/site-loop-store';
+} from '@narada-core/site-operating-loop/site-loop-store';
 import { loadSiteLoopConfig } from './site-loop-config.js';
 import { openSiteLoopStore } from './site-loop-store.js';
 

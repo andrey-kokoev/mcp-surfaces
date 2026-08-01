@@ -4,6 +4,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createServerState, handleRequest } from '../src/main.js';
+import { sha256Canonical } from '../src/ticket-draft-store.js';
 
 type DynamicTestValue = any & {
   [key: string]: DynamicTestValue;
@@ -108,6 +109,7 @@ try {
     'graph_mail_reply_all_draft_create',
     'graph_mail_forward_draft_create',
     'graph_mail_reply_all_to_last_in_thread_draft_create',
+    'graph_mail_ticket_draft_upsert',
     'graph_mail_draft_update',
     'graph_mail_draft_discard',
     'graph_mail_draft_send',
@@ -122,6 +124,8 @@ try {
   assert.equal(toolRows.find((tool: DynamicTestValue) => tool.name === 'graph_mail_folder_create')?.annotations.readOnlyHint, false);
   assert.equal(toolRows.find((tool: DynamicTestValue) => tool.name === 'graph_mail_message_move')?.annotations.destructiveHint, true);
   assert.equal(toolRows.find((tool: DynamicTestValue) => tool.name === 'graph_mail_attachment_upload_chunk')?.annotations.readOnlyHint, false);
+  assert.equal(toolRows.find((tool: DynamicTestValue) => tool.name === 'graph_mail_ticket_draft_upsert')?.annotations.idempotentHint, true);
+  assert.equal(toolRows.find((tool: DynamicTestValue) => tool.name === 'graph_mail_ticket_draft_upsert')?.annotations.readOnlyHint, false);
   assert.equal(toolRows.find((tool: DynamicTestValue) => tool.name === 'graph_mail_folder_list')?.inputSchema.properties.limit.default, 50);
   assert.equal(toolRows.find((tool: DynamicTestValue) => tool.name === 'graph_mail_folder_create')?.inputSchema.properties.confirm_write.default, false);
   assert.equal(toolRows.find((tool: DynamicTestValue) => tool.name === 'graph_mail_message_move')?.inputSchema.properties.confirm_write.default, false);
@@ -830,6 +834,120 @@ try {
   assert.equal(createBody.subject, 'Customer follow-up');
   assert.equal(createBody.body.contentType, 'Text');
   assert.equal(createBody.toRecipients[0].emailAddress.address, 'customer@example.test');
+
+  const ticketDraftCalls: CapturedRequest[] = [];
+  const ticketDraftState = createServerState({
+    siteRoot: root,
+    accessToken: 'test-token',
+    fetchImpl: mockFetch(ticketDraftCalls, [
+      { body: { value: [] } },
+      { body: { id: 'ticket-draft-1', isDraft: true, conversationId: 'conversation-1' } },
+    ]),
+  });
+  const ticketDraftRequest = {
+    source_id: 'source-1',
+    mailbox_id: 'support@example.test',
+    source_message_id: 'source-message-1',
+    reply_mode: 'reply_all',
+    body_text: 'Prepared but unsent response.',
+  };
+  const ticketDraftArguments = {
+    ticket_id: 'ticket-1',
+    effect_claim_id: 'effect-claim-1',
+    draft_operation_key: 'draft_operation_ticket_1',
+    draft_request_digest: sha256Canonical(ticketDraftRequest),
+    draft_source_id: ticketDraftRequest.source_id,
+    mailbox_id: ticketDraftRequest.mailbox_id,
+    source_message_id: ticketDraftRequest.source_message_id,
+    reply_mode: ticketDraftRequest.reply_mode,
+    body_text: ticketDraftRequest.body_text,
+    idempotency_key: 'sop-action-ticket-draft-1',
+  };
+  const ticketDraft = await rpc({
+    jsonrpc: '2.0',
+    id: 1401,
+    method: 'tools/call',
+    params: { name: 'graph_mail_ticket_draft_upsert', arguments: ticketDraftArguments },
+  }, ticketDraftState);
+  assert.equal(ticketDraft.error, undefined);
+  assert.equal(ticketDraft.result.structuredContent.schema, 'narada.domain_operation.v1');
+  assert.equal(ticketDraft.result.structuredContent.result.draft_id, 'ticket-draft-1');
+  assert.equal(ticketDraft.result.structuredContent.result.idempotency_replayed_or_recovered, false);
+  assert.equal(ticketDraftCalls.length, 2);
+  assert.equal(ticketDraftCalls[0].init.method, 'GET');
+  assert.match(ticketDraftCalls[0].url, /singleValueExtendedProperties/);
+  assert.equal(ticketDraftCalls[1].init.method, 'POST');
+  assert.match(ticketDraftCalls[1].url, /source-message-1\/createReplyAll$/);
+  const ticketDraftBody = JSON.parse(ticketDraftCalls[1].init.body);
+  assert.equal(ticketDraftBody.message.body.content, ticketDraftRequest.body_text);
+  assert.equal(
+    ticketDraftBody.message.singleValueExtendedProperties[0].value,
+    ticketDraftArguments.draft_operation_key,
+  );
+
+  const ticketDraftReplay = await rpc({
+    jsonrpc: '2.0',
+    id: 1402,
+    method: 'tools/call',
+    params: { name: 'graph_mail_ticket_draft_upsert', arguments: ticketDraftArguments },
+  }, ticketDraftState);
+  assert.equal(ticketDraftReplay.error, undefined);
+  assert.equal(ticketDraftReplay.result.structuredContent.result.draft_id, 'ticket-draft-1');
+  assert.equal(ticketDraftReplay.result.structuredContent.result.idempotency_replayed_or_recovered, true);
+  assert.equal(ticketDraftCalls.length, 2, 'exact replay must not call Graph');
+
+  const recoveryCalls: CapturedRequest[] = [];
+  let injectCrash = true;
+  const recoveryState = createServerState({
+    siteRoot: root,
+    accessToken: 'test-token',
+    fetchImpl: mockFetch(recoveryCalls, [
+      { body: { value: [] } },
+      { body: { id: 'ticket-draft-recovered', isDraft: true, conversationId: 'conversation-2' } },
+      { body: { value: [{ id: 'ticket-draft-recovered', isDraft: true, conversationId: 'conversation-2' }] } },
+    ]),
+    ticketDraftFaultInjector: () => {
+      if (!injectCrash) return;
+      injectCrash = false;
+      throw new Error('injected_after_graph_commit');
+    },
+  });
+  const recoveryDraftRequest = {
+    source_id: 'source-2',
+    mailbox_id: 'support@example.test',
+    source_message_id: 'source-message-2',
+    reply_mode: 'reply',
+    body_html: '<p>Prepared response.</p>',
+  };
+  const recoveryArguments = {
+    ticket_id: 'ticket-2',
+    effect_claim_id: 'effect-claim-2',
+    draft_operation_key: 'draft_operation_ticket_2',
+    draft_request_digest: sha256Canonical(recoveryDraftRequest),
+    draft_source_id: recoveryDraftRequest.source_id,
+    mailbox_id: recoveryDraftRequest.mailbox_id,
+    source_message_id: recoveryDraftRequest.source_message_id,
+    reply_mode: recoveryDraftRequest.reply_mode,
+    body_html: recoveryDraftRequest.body_html,
+    idempotency_key: 'sop-action-ticket-draft-2',
+  };
+  const interrupted = await rpc({
+    jsonrpc: '2.0',
+    id: 1403,
+    method: 'tools/call',
+    params: { name: 'graph_mail_ticket_draft_upsert', arguments: recoveryArguments },
+  }, recoveryState);
+  assert.match(String(interrupted.error?.message), /injected_after_graph_commit/);
+  const recovered = await rpc({
+    jsonrpc: '2.0',
+    id: 1404,
+    method: 'tools/call',
+    params: { name: 'graph_mail_ticket_draft_upsert', arguments: recoveryArguments },
+  }, recoveryState);
+  assert.equal(recovered.error, undefined);
+  assert.equal(recovered.result.structuredContent.result.draft_id, 'ticket-draft-recovered');
+  assert.equal(recovered.result.structuredContent.result.idempotency_replayed_or_recovered, true);
+  assert.equal(recoveryCalls.filter((call) => call.init.method === 'POST').length, 1);
 
   const replyDraftCalls: CapturedRequest[] = [];
   const replyDraftState = createServerState({

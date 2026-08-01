@@ -1,4 +1,4 @@
-# @narada2/launcher-mcp
+# @narada-core/launcher-mcp
 
 Read-only MCP surface for Narada launcher registry inspection, option modeling, startup planning, and coherence checks.
 

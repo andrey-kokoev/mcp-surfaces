@@ -1,4 +1,4 @@
-import { openTaskLifecycleStore, type TaskLifecycleStore } from '@narada2/task-governance-core/task-lifecycle-store';
+import { openTaskLifecycleStore, type TaskLifecycleStore } from '@narada-core/task-governance-core/task-lifecycle-store';
 import {
   assembleDeclaredEnvironment,
   checkTaskExecutabilityDispatch,
@@ -6,7 +6,7 @@ import {
   declaredEnvironmentDigest,
   resolveEffectiveTaskExecutabilityPolicy,
   taskSpecDigest,
-} from '@narada2/task-governance-core/task-executability-service';
+} from '@narada-core/task-governance-core/task-executability-service';
 import { TASK_EXECUTABILITY_ASSESSMENT_PROFILE_VERSION, TASK_EXECUTABILITY_ASSESSMENT_TEMPLATE_ID, taskExecutabilityAssessmentTemplate } from './task-executability-assessment.js';
 
 type JsonRecord = Record<string, unknown>;

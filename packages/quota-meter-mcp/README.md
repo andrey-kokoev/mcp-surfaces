@@ -1,4 +1,4 @@
-# @narada2/quota-meter-mcp
+# @narada-core/quota-meter-mcp
 
 Host-level MCP surface for the local `quota-meter` CLI. It reads current
 Codex/Kimi glide status and manages the transparent desktop overlay without
@@ -32,5 +32,5 @@ initialize correctly.
 ## Quick start
 
 ```text
-pnpm --filter @narada2/quota-meter-mcp test
+pnpm --filter @narada-core/quota-meter-mcp test
 ```

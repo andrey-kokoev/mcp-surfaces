@@ -1,7 +1,7 @@
 import { existsSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { requireTaskTagsArray } from '@narada2/task-governance-core/task-tags';
+import { requireTaskTagsArray } from '@narada-core/task-governance-core/task-tags';
 import { resolveFreshServerPath } from './fresh-server-path.js';
 
 export const TASK_LIFECYCLE_OPERATIONS_TOOL_NAMES: any = Object.freeze([
@@ -433,7 +433,7 @@ export function createTaskLifecycleOperationsHandlers(context: any) {
           status: 'refused',
           error: admission.reason,
           server_path_admission: admission,
-          remediation: 'Use a site-root-relative MCP server script, a script under the running @narada2/task-lifecycle-mcp package root, or configure an explicit root with NARADA_TASK_LIFECYCLE_FRESH_SERVER_ALLOWED_ROOTS.',
+          remediation: 'Use a site-root-relative MCP server script, a script under the running @narada-core/task-lifecycle-mcp package root, or configure an explicit root with NARADA_TASK_LIFECYCLE_FRESH_SERVER_ALLOWED_ROOTS.',
         }, true);
       }
       const result: any = await testMcpTool(siteRoot, admission.resolved_path, toolName, toolArgs, { timeoutSeconds });

@@ -1,4 +1,5 @@
-import { constants, accessSync, existsSync, mkdirSync } from 'node:fs';
+import { createHash } from 'node:crypto';
+import { constants, accessSync, existsSync, mkdirSync, readFileSync } from 'node:fs';
 import { dirname, extname, isAbsolute, join, relative, resolve } from 'node:path';
 import { diagnosticError } from './errors.js';
 import { buildRuntimeDiagnostics, classifyRuntimeError, compactRunError, partialFailurePosture, readDiagnosticTail, readRunProgress, readTextTail, runtimeFailureRemediation, workerBudgetStatus } from './diagnostics.js';
@@ -509,8 +510,15 @@ async function workerRunInner(args: Record<string, unknown>, state: WorkerMcpSta
   const startedAt = new Date();
   if (args.config_overrides !== undefined) throw diagnosticError('worker_raw_config_overrides_not_allowed');
   const request = normalizeWorkerRunToolInput(args, resumeSessionId !== null);
+  if (resumeSessionId !== null && request.idempotency_key) throw diagnosticError('worker_resume_idempotency_key_not_allowed');
   const inheritedSession = resumeSessionId ? readWorkerSessionRecord(state.policy, resumeSessionId) : null;
   if (inheritedSession) inheritSessionConstraints(request, inheritedSession.resolved_worker_config);
+  const idempotency = request.idempotency_key
+    ? workerRunIdempotency(request.idempotency_key, request, resumeSessionId)
+    : null;
+  if (idempotency && existsSync(resolve(state.policy.runRoot, idempotency.runId))) {
+    return replayIdempotentWorkerRun(state, idempotency);
+  }
   const authority = resolveAuthority(request.constraints.authority, state.policy);
   const cognition = resolveCognition(request.constraints.cognition, state.policy);
   let overrides = request.constraints.overrides ?? {};
@@ -563,7 +571,24 @@ async function workerRunInner(args: Record<string, unknown>, state: WorkerMcpSta
   const promptBytes = Buffer.byteLength(prompt, 'utf8');
   if (promptBytes > state.policy.maxPromptBytes) throw diagnosticError('worker_prompt_too_large', 'worker_prompt_too_large', { prompt_byte_length: promptBytes, max_prompt_bytes: state.policy.maxPromptBytes });
 
-  const runRecord = createRunRecord(state.policy);
+  let runRecord: RunRecordPaths;
+  if (idempotency) {
+    try {
+      runRecord = createRunRecord(state.policy, idempotency.runId);
+    } catch (error) {
+      if (!isAlreadyExistsError(error)) throw error;
+      return replayIdempotentWorkerRun(state, idempotency);
+    }
+    writeJson(join(runRecord.runDir, 'idempotency.json'), {
+      schema: 'narada.worker.run_idempotency.v1',
+      run_id: runRecord.runId,
+      idempotency_key: idempotency.key,
+      request_fingerprint: idempotency.requestFingerprint,
+      created_at: startedAt.toISOString(),
+    });
+  } else {
+    runRecord = createRunRecord(state.policy);
+  }
   writeWorkerOutputSchema(runRecord.schemaPath);
   const skipGitRepoCheck = optionalBoolean(overrides.skip_git_repo_check, 'skip_git_repo_check');
 
@@ -674,6 +699,10 @@ async function workerRunInner(args: Record<string, unknown>, state: WorkerMcpSta
   const executorRequest: WorkerExecutorRequest = {
     schema: 'narada.worker.executor_request.v1',
     run_id: runRecord.runId,
+    ...(idempotency ? {
+      idempotency_key: idempotency.key,
+      request_fingerprint: idempotency.requestFingerprint,
+    } : {}),
     resume_worker_session_id: resumeSessionId,
     intent: request.intent,
     requested_mode: requestedMode,
@@ -957,6 +986,9 @@ function buildWorkerRunPayload(options: {
     run_dir: options.runRecord.runDir,
     runtime: options.runtime,
     worker_session_id: options.workerSessionId,
+    idempotency_key: options.executorRequest.idempotency_key ?? null,
+    request_fingerprint: options.executorRequest.request_fingerprint ?? null,
+    idempotency_replayed: false,
     resolved_worker_config: options.resolvedWorkerConfig,
     executor_request: options.executorRequest,
     requested_mode: options.metadata.requested_mode,
@@ -1715,10 +1747,93 @@ function normalizeWorkerRunToolInput(args: Record<string, unknown>, isResume: bo
   const instructionValue = intentInput.instruction ?? (isResume ? 'Continue the previous worker session and return an updated structured result.' : undefined);
   const instruction = requiredNonEmptyString(instructionValue, 'worker_prompt_too_large');
   const authorityValue = String(asRecord(args.constraints).authority ?? args.authority ?? '');
+  const outputContract = asRecord(intentInput.output_contract);
+  const idempotencyKey = optionalIdempotencyKey(args.idempotency_key);
   return {
-    intent: { instruction, mode: parseDelegationMode(intentInput.mode ?? args.mode, authorityValue) },
+    ...(idempotencyKey ? { idempotency_key: idempotencyKey } : {}),
+    intent: {
+      instruction,
+      mode: parseDelegationMode(intentInput.mode ?? args.mode, authorityValue),
+      ...(Object.keys(outputContract).length > 0 ? { output_contract: outputContract } : {}),
+    },
     constraints: normalizeWorkerConstraintRequest(args, constraintsInput),
   };
+}
+
+type WorkerRunIdempotency = {
+  key: string;
+  runId: string;
+  requestFingerprint: string;
+};
+
+function workerRunIdempotency(key: string, request: WorkerRunToolInput, resumeSessionId: string | null): WorkerRunIdempotency {
+  const requestFingerprint = sha256(canonicalJson({
+    schema: 'narada.worker.run_request.v1',
+    intent: request.intent,
+    constraints: request.constraints,
+    resume_worker_session_id: resumeSessionId,
+  }));
+  return {
+    key,
+    runId: `run-idem-${sha256(key).slice(0, 40)}`,
+    requestFingerprint,
+  };
+}
+
+function replayIdempotentWorkerRun(state: WorkerMcpState, expected: WorkerRunIdempotency): Record<string, unknown> {
+  const runDir = resolve(state.policy.runRoot, expected.runId);
+  const claimPath = join(runDir, 'idempotency.json');
+  let claim: Record<string, unknown>;
+  try {
+    claim = asRecord(JSON.parse(readFileSync(claimPath, 'utf8')));
+  } catch {
+    throw diagnosticError('worker_run_idempotency_claim_incomplete', 'worker_run_idempotency_claim_incomplete', {
+      run_id: expected.runId,
+      remediation: 'Retry the same request; no second worker run was launched.',
+    });
+  }
+  if (claim.schema !== 'narada.worker.run_idempotency.v1'
+    || claim.idempotency_key !== expected.key
+    || claim.request_fingerprint !== expected.requestFingerprint) {
+    throw diagnosticError('worker_run_idempotency_conflict', 'worker_run_idempotency_conflict', {
+      run_id: expected.runId,
+      idempotency_key: expected.key,
+      existing_request_fingerprint: claim.request_fingerprint ?? null,
+      request_fingerprint: expected.requestFingerprint,
+    });
+  }
+  const run = readRunResult(state, expected.runId, false);
+  if (!run) {
+    throw diagnosticError('worker_run_idempotency_claim_incomplete', 'worker_run_idempotency_claim_incomplete', {
+      run_id: expected.runId,
+      idempotency_key: expected.key,
+      request_fingerprint: expected.requestFingerprint,
+      remediation: 'Retry the same request; no second worker run was launched.',
+    });
+  }
+  return { ...run, idempotency_replayed: true };
+}
+
+function optionalIdempotencyKey(value: unknown): string | null {
+  if (value === undefined || value === null || value === '') return null;
+  const key = requiredNonEmptyString(value, 'worker_idempotency_key_required');
+  if (key.length > 512) throw diagnosticError('worker_idempotency_key_too_long', 'worker_idempotency_key_too_long', { max_length: 512 });
+  return key;
+}
+
+function sha256(value: string): string {
+  return createHash('sha256').update(value).digest('hex');
+}
+
+function canonicalJson(value: unknown): string {
+  if (value === null || typeof value !== 'object') return JSON.stringify(value);
+  if (Array.isArray(value)) return `[${value.map(canonicalJson).join(',')}]`;
+  const record = value as Record<string, unknown>;
+  return `{${Object.keys(record).filter((key) => record[key] !== undefined).sort().map((key) => `${JSON.stringify(key)}:${canonicalJson(record[key])}`).join(',')}}`;
+}
+
+function isAlreadyExistsError(error: unknown): boolean {
+  return Boolean(error && typeof error === 'object' && 'code' in error && (error as { code?: unknown }).code === 'EEXIST');
 }
 
 function normalizeWorkerConstraintRequest(args: Record<string, unknown>, constraintsInput: Record<string, unknown>): WorkerConstraintRequest {

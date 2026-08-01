@@ -1,4 +1,4 @@
-import { defineNativeSurface, type DefinedSurface, type McpToolDefinition } from '@narada2/mcp-fabric-contracts';
+import { defineNativeSurface, type DefinedSurface, type McpToolDefinition } from '@narada-core/mcp-fabric-contracts';
 import { listTools } from './main.js';
 
 const READ_ONLY_TOOLS = [
@@ -13,7 +13,7 @@ export function surfaceDefinition(): DefinedSurface {
   return defineNativeSurface({
     surface_id: 'agent-context',
     surface_version: '0.1.0',
-    package: '@narada2/agent-context-mcp',
+    package: '@narada-core/agent-context-mcp',
     entrypoint: '{mcp_surfaces_root}/agent-context-mcp/dist/src/main.js',
     tools: listTools() as McpToolDefinition[],
     read_only_tools: READ_ONLY_TOOLS,

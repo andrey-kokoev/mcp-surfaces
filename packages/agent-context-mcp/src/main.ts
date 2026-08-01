@@ -19,7 +19,7 @@ import {
   listOutputResources,
   outputShowAsync,
   readOutputResource,
-} from '@narada2/mcp-transport';
+} from '@narada-core/mcp-transport';
 import {
   listAgentStartSessions,
   materializeAgentSessionStart,

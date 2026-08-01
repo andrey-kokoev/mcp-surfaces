@@ -4,18 +4,18 @@ import { guidanceToolDefinition } from './guidance.js';
 import { createHash } from 'node:crypto';
 import { DatabaseSync } from 'node:sqlite';
 import { spawn } from 'node:child_process';
-import { payloadShow } from '@narada2/mcp-transport';
+import { payloadShow } from '@narada-core/mcp-transport';
 import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from 'node:fs';
 import { basename, dirname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { defineNativeSurface, surfaceDescriptorDigest, surfaceToolContractDigest, type DefinedSurface, type McpToolDefinition, type SurfaceDescriptorV2 } from '@narada2/mcp-fabric-contracts';
+import { defineNativeSurface, surfaceDescriptorDigest, surfaceToolContractDigest, type DefinedSurface, type McpToolDefinition, type SurfaceDescriptorV2 } from '@narada-core/mcp-fabric-contracts';
 import {
   MCP_RUNTIME_CONTRACT_VERSION,
   buildMaterializationGeneration,
   materializationSidecarPath,
   validateMaterializedConfiguration,
   writeMaterializationGeneration,
-} from '@narada2/mcp-runtime-proxy/materialization-contract';
+} from '@narada-core/mcp-runtime-proxy/materialization-contract';
 import { NATIVE_SURFACE_DEFINITIONS } from './native-catalog.js';
 
 const SERVER_NAME = 'mcp-registrar';
@@ -235,7 +235,7 @@ function nativeSurfaceToRegistrarRecord(native: DefinedSurface): RegistrarSurfac
   const startupTimeout = descriptor.metadata?.codex_startup_timeout_sec;
   return {
     id: descriptor.surface_id,
-    package: descriptor.package.replace('@narada2/', ''),
+    package: descriptor.package.replace('@narada-core/', ''),
     entrypoint: first.entrypoint,
     kind: 'mcp_surface',
     args: (first.args ?? []).map(nativeEntrypoint),
@@ -354,6 +354,36 @@ function canonicalWorkspaceRoot(root: string): string {
   return basename(resolved).toLowerCase() === '.narada' ? dirname(resolved) : resolved;
 }
 
+export function readSiteSurfaceOverrides(
+  configPath: string,
+  fallback: Record<string, SurfaceOverride> = {},
+): Record<string, SurfaceOverride> {
+  if (!existsSync(configPath)) return fallback;
+  let parsed: JsonRecord;
+  try {
+    parsed = asRecord(JSON.parse(readFileSync(configPath, 'utf8').replace(/^\uFEFF/, '')));
+  } catch (error) {
+    throw diagnosticError('registrar_site_config_parse_failed', `registrar_site_config_parse_failed:${configPath}`, {
+      config_path: configPath,
+      error: error instanceof Error ? error.message : String(error),
+    });
+  }
+  const raw = asRecord(parsed.surface_overrides);
+  const overrides: Record<string, SurfaceOverride> = { ...fallback };
+  for (const [surfaceId, value] of Object.entries(raw)) {
+    const record = asRecord(value);
+    if (typeof record.enabled !== 'boolean') {
+      throw diagnosticError('registrar_site_surface_override_invalid', `registrar_site_surface_override_invalid:${surfaceId}`, {
+        config_path: configPath,
+        surface_id: surfaceId,
+        required_field: 'enabled:boolean',
+      });
+    }
+    overrides[surfaceId] = { enabled: record.enabled };
+  }
+  return overrides;
+}
+
 /**
  * Read the User Site's canonical local Site catalog.
  *
@@ -377,13 +407,14 @@ function readSiteRegistryCatalog(): SiteRegistryCatalog {
       if (!siteId || !rawRoot) return [];
       const root = canonicalWorkspaceRoot(rawRoot);
       const known = KNOWN_SITES.find((site) => comparableSiteRoot(site.root) === comparableSiteRoot(root));
+      const configPath = siteConfigPathForRoot(root);
       return [{
         site_id: siteId,
         root,
-        config_path: siteConfigPathForRoot(root),
+        config_path: configPath,
         surfaces: known?.surfaces ?? [],
         local_surface_allowlist: known?.local_surface_allowlist,
-        surface_overrides: known?.surface_overrides,
+        surface_overrides: readSiteSurfaceOverrides(configPath, known?.surface_overrides),
       } satisfies SiteDef];
     });
     return { status: 'ready', path, items };
@@ -874,7 +905,7 @@ export function registrarSurfaceDefinition(): DefinedSurface {
   return defineNativeSurface({
     surface_id: 'mcp-registrar',
     surface_version: SERVER_VERSION,
-    package: '@narada2/mcp-registrar',
+    package: '@narada-core/mcp-registrar',
     entrypoint: MCP_REGISTRAR_ENTRYPOINT,
     tools: listTools() as McpToolDefinition[],
     read_only_tools: listTools()
@@ -1425,10 +1456,12 @@ function assertCarrierBindingLoadingMode(binding: SiteBinding): void {
   }
 }
 
-export function sharedSurfaceIdsForBinding(binding: SiteBinding): string[] {
+export function sharedSurfaceIdsForBinding(binding: SiteBinding, site?: SiteDef): string[] {
   assertCarrierBindingLoadingMode(binding);
+  const isEnabled = (surfaceId: string) => site?.surface_overrides?.[surfaceId]?.enabled !== false;
   const explicit = binding.surfaces === 'all'
     ? SURFACES.filter((surface) => {
+      if (!isEnabled(surface.id)) return false;
       try {
         selectSurfaceProjection(surface.id, undefined, binding.runtime_kind);
         return true;
@@ -1436,11 +1469,11 @@ export function sharedSurfaceIdsForBinding(binding: SiteBinding): string[] {
         return false;
       }
     }).map((surface) => surface.id)
-    : binding.surfaces.filter((surfaceId) => !surfaceId.endsWith('.local'));
+    : binding.surfaces.filter((surfaceId) => !surfaceId.endsWith('.local') && isEnabled(surfaceId));
   if (binding.loading_mode === 'progressive') return Array.from(new Set(explicit));
   const ids = new Set(explicit);
   for (const surface of SURFACES) {
-    if (automaticProjectionForBinding(surface, binding)) ids.add(surface.id);
+    if (isEnabled(surface.id) && automaticProjectionForBinding(surface, binding)) ids.add(surface.id);
   }
   return Array.from(ids);
 }
@@ -1451,7 +1484,7 @@ function collectCarrierServers(carrier: CarrierDef): Record<string, Materialized
     const site = lookupSite(binding.site_id);
     const siteRoot = canonicalWorkspaceRoot(site.root);
     const extraRoots = dedupeRoots([siteRoot, ...(carrier.extra_allowed_roots ?? []), ...(binding.extra_allowed_roots ?? [])]);
-    const sharedSurfaceIds = sharedSurfaceIdsForBinding(binding);
+    const sharedSurfaceIds = sharedSurfaceIdsForBinding(binding, site);
     for (const surfaceId of sharedSurfaceIds) {
       const { key, server } = materializeSharedSurface(binding, site, surfaceId, extraRoots);
       if (servers[key]) {
@@ -1610,7 +1643,7 @@ function runtimeExportTargetExists(exportPath: string): boolean {
 }
 
 function dependencyPackageRoot(dependency: string): string {
-  const packageName = dependency.replace('@narada2/', '');
+  const packageName = dependency.replace('@narada-core/', '');
   const sharedRoot = `${MCP_SURFACES_ROOT}/shared/${packageName}`;
   if (existsSync(`${sharedRoot}/package.json`)) return sharedRoot;
   return `${MCP_SURFACES_ROOT}/${packageName}`;
@@ -1628,7 +1661,7 @@ function sharedRuntimeDependencyChecks(surface: RegistrarSurfaceRecord): Runtime
   }
   const dependencies = asRecord(packageJson.dependencies);
   const checks: RuntimeDependencyCheck[] = [];
-  for (const dependency of Object.keys(dependencies).filter((name) => name.startsWith('@narada2/mcp-'))) {
+  for (const dependency of Object.keys(dependencies).filter((name) => name.startsWith('@narada-core/mcp-'))) {
     const dependencyRoot = dependencyPackageRoot(dependency);
     const dependencyPackagePath = `${dependencyRoot}/package.json`;
     if (!existsSync(dependencyPackagePath)) {
@@ -1689,7 +1722,7 @@ function addRuntimePreflightFindings(
       add('error', 'registrar_runtime_proxy_missing', `Runtime proxy does not exist: ${MCP_RUNTIME_PROXY_ENTRYPOINT}`, {
         ...detail,
         runtime_proxy_entrypoint: MCP_RUNTIME_PROXY_ENTRYPOINT,
-        remediation: 'Run pnpm --filter @narada2/mcp-runtime-proxy build before launching carrier MCPs.',
+        remediation: 'Run pnpm --filter @narada-core/mcp-runtime-proxy build before launching carrier MCPs.',
       });
     } else if (includeOk) {
       add('info', 'registrar_runtime_proxy_exists', `Runtime proxy exists: ${MCP_RUNTIME_PROXY_ENTRYPOINT}`, { ...detail, runtime_proxy_entrypoint: MCP_RUNTIME_PROXY_ENTRYPOINT });
@@ -3616,6 +3649,7 @@ export function validateSiteMcpFabric(site: SiteDef, includeOk = false): JsonRec
   }
 
   for (const surface of SURFACES) {
+    if (site.surface_overrides?.[surface.id]?.enabled === false) continue;
     for (const projection of surfaceProjections(surface)) {
       if (projection.injection_scope !== 'local_site' || projection.default_injection !== 'all_site_bound_sessions') continue;
       if (presentSurfaceIds.has(surface.id)) continue;

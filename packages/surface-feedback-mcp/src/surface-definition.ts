@@ -1,4 +1,4 @@
-import { defineNativeSurface, type DefinedSurface, type McpToolDefinition } from '@narada2/mcp-fabric-contracts';
+import { defineNativeSurface, type DefinedSurface, type McpToolDefinition } from '@narada-core/mcp-fabric-contracts';
 import { listTools } from './main.js';
 
 const READ_ONLY_TOOLS = ["surface_feedback_guidance","surface_feedback_doctor","surface_feedback_list","surface_feedback_actionable_queue","surface_feedback_show","surface_feedback_stats","surface_feedback_live_proof_template"] as const;
@@ -7,7 +7,7 @@ export function surfaceDefinition(): DefinedSurface {
   return defineNativeSurface({
     surface_id: 'surface-feedback',
     surface_version: '0.2.0',
-    package: '@narada2/surface-feedback-mcp',
+    package: '@narada-core/surface-feedback-mcp',
     entrypoint: '{mcp_surfaces_root}/surface-feedback-mcp/dist/src/main.js',
     tools: listTools() as McpToolDefinition[],
     read_only_tools: READ_ONLY_TOOLS,

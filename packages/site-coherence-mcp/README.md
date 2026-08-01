@@ -1,4 +1,4 @@
-# @narada2/site-coherence-mcp
+# @narada-core/site-coherence-mcp
 
 Site-level continuity coherence readback MCP surface for comparing local Narada posture with Cloudflare embodiment posture.
 

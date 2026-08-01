@@ -4,8 +4,8 @@ import { guidanceToolDefinition } from './guidance.js';
 import { existsSync, readFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { buildPathMetadataTelemetryDeclaration, emitTelemetryEvent, telemetryErrorCodeFromUnknown, type TelemetryDeclaration, type TelemetryEventKind } from '@narada2/mcp-telemetry';
-import { defineSurface, type DefinedSurface } from '@narada2/mcp-fabric-contracts';
+import { buildPathMetadataTelemetryDeclaration, emitTelemetryEvent, telemetryErrorCodeFromUnknown, type TelemetryDeclaration, type TelemetryEventKind } from '@narada-core/mcp-telemetry';
+import { defineSurface, type DefinedSurface } from '@narada-core/mcp-fabric-contracts';
 
 const SERVER_NAME = 'launcher-mcp';
 const SERVER_VERSION = '0.1.0';
@@ -98,7 +98,7 @@ export function launcherSurfaceDefinition(): DefinedSurface {
   return defineSurface({
     surface_id: SURFACE_ID,
     surface_version: SERVER_VERSION,
-    package: '@narada2/launcher-mcp',
+    package: '@narada-core/launcher-mcp',
     tools: definitions.map((definition) => ({
       definition,
       effect: { class: 'read', idempotency: 'replayable', confirmation: 'never' },

@@ -13,7 +13,7 @@ import {
   structured,
   type JsonRecord,
   type JsonRpcResponse,
-} from '@narada2/mcp-e2e-harness';
+} from '@narada-core/mcp-e2e-harness';
 import { openSiteLoopStore } from '../src/site-loop/site-loop-store.js';
 
 const siteRoot = createTemporaryE2eRoot('site-loop-mcp-configured-surface-e2e');

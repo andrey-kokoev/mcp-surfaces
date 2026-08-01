@@ -1,5 +1,5 @@
 {
-  "name": "@narada2/calendar-mcp",
+  "name": "@narada-core/calendar-mcp",
   "version": "0.1.0",
   "license": "Apache-2.0",
   "type": "module",
@@ -25,15 +25,15 @@
     "test:e2e:external": "pnpm build && node --disable-warning=ExperimentalWarning dist/test/site-fabric-calendar-e2e.test.js"
   },
   "dependencies": {
-    "@narada2/mcp-fabric-contracts": "workspace:*",
-    "@narada2/mcp-telemetry": "workspace:*",
-    "@narada2/mcp-transport": "workspace:*"
+    "@narada-core/mcp-fabric-contracts": "workspace:*",
+    "@narada-core/mcp-telemetry": "workspace:*",
+    "@narada-core/mcp-transport": "workspace:*"
   },
   "files": [
     "dist/",
     "README.md"
   ],
   "devDependencies": {
-    "@narada2/mcp-e2e-harness": "workspace:*"
+    "@narada-core/mcp-e2e-harness": "workspace:*"
   }
 }

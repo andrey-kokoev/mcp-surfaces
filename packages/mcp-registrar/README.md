@@ -1,4 +1,4 @@
-# @narada2/mcp-registrar
+# @narada-core/mcp-registrar
 
 MCP surface registrar for binding/unbinding surfaces across Narada sites and carriers (opencode, Kimi, Codex).
 
@@ -99,7 +99,7 @@ Use the registrar when you want to inject a standalone MCP surface into Codex, o
 - `registrar_carrier_bind` writes carrier config in the carrier's own format.
 - `registrar_sync` applies the same surface binding across the supported sites and carriers.
 
-For a concrete example, `@narada2/local-filesystem-mcp` can run standalone, while this registrar handles how it gets exposed to a specific CLI or TUI. See `docs/mcp-wiring.md` for the emitted Codex, opencode, and Kimi shapes.
+For a concrete example, `@narada-core/local-filesystem-mcp` can run standalone, while this registrar handles how it gets exposed to a specific CLI or TUI. See `docs/mcp-wiring.md` for the emitted Codex, opencode, and Kimi shapes.
 
 ## Kimi Carrier Contract
 
@@ -135,6 +135,6 @@ normal MCP stdio server.
 ## Quick Start
 
 ```
-pnpm --filter @narada2/mcp-registrar test
+pnpm --filter @narada-core/mcp-registrar test
 pnpm test:registrar:kimi-contract
 ```

@@ -11,7 +11,7 @@ import {
   type FabricBindingV2,
   type CarrierProjectionV2,
   type RuntimeObservationV2,
-} from '@narada2/mcp-fabric-contracts';
+} from '@narada-core/mcp-fabric-contracts';
 import {
   CarrierSchemaCompatibilityError,
   compileAllCarrierArtifacts,

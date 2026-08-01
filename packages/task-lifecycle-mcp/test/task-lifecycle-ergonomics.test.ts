@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
-import { prepareTaskLifecycleStore } from '@narada2/task-governance-core/task-lifecycle-store';
+import { prepareTaskLifecycleStore } from '@narada-core/task-governance-core/task-lifecycle-store';
 import { handleTaskLifecycleMcpRequest } from '../src/task-lifecycle/task-mcp-server.js';
 import { withSqliteBusyRetry, withStoreSavepoint } from '../src/task-lifecycle/sqlite-contention.js';
 import { evaluateRecoveryTruthfulnessTrigger, recoveryTruthfulnessTriggerContract, validateRecoveryTruthfulnessBody } from '../src/task-lifecycle/recovery-truthfulness-guard.js';

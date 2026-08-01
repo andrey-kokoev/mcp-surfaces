@@ -8,44 +8,44 @@ Guidance for agents working in this repository.
 
 Current packages:
 
-- `@narada2/mcp-transport`: shared MCP payload/output-ref helpers.
-- `@narada2/mcp-telemetry`: shared optional MCP telemetry helpers.
-- `@narada2/mcp-affordances`: shared UI-neutral MCP affordance schema and validation helpers.
-- `@narada2/mcp-runtime-proxy`: shared carrier stdio proxy for MCP startup diagnostics.
-- `@narada2/mcp-e2e-harness`: shared bounded mechanics for real MCP end-to-end tests.
-- `@narada2/mcp-fabric-contracts`: shared versioned MCP descriptor, manifest, carrier projection, observation, and reconciliation contracts.
-- `@narada2/mcp-fabric-compiler`: pure manifest and Codex/Kimi/OpenCode carrier projection compiler with strict Moonshot schema validation.
-- `@narada2/execution-contract`: shared typed execution binding and request fingerprint contract.
-- `@narada2/provider-registry`: shared typed, policy-neutral provider/model capability registry loading and resolution.
-- `@narada2/local-filesystem-mcp`: governed filesystem MCP surface.
-- `@narada2/structured-command-mcp`: policy-gated structured command MCP surface.
-- `@narada2/git-mcp`: governed Git inspection and publication MCP surface.
-- `@narada2/site-inbox-mcp`: governed inbox intake and triage MCP surface.
-- `@narada2/mailbox-mcp`: read-only synced mailbox projection MCP surface.
-- `@narada2/graph-mail-mcp`: policy-gated Microsoft Graph mail MCP surface for live reads and draft management.
-- `@narada2/calendar-mcp`: policy-gated Microsoft Graph calendar MCP surface for live calendar reads and guarded event management.
-- `@narada2/task-lifecycle-mcp`: task lifecycle MCP surface.
-- `@narada2/site-loop-mcp`: config-governed site loop MCP surface.
-- `@narada2/agent-context-mcp`: agent context MCP surface.
-- `@narada2/worker-delegation-mcp`: policy-gated worker delegation MCP surface.
-- `@narada2/delegated-task-mcp`: outcome-oriented delegated task orchestration MCP surface.
-- `@narada2/sop-mcp`: versioned standard operating procedure runbook engine with SQLite-backed execution.
-- `@narada2/scheduler-mcp`: Windows Task Scheduler MCP surface for governed task registration, inspection, and execution.
-- `@narada2/mcp-registrar`: MCP surface registrar for binding/unbinding surfaces across Narada sites and carriers.
-- `@narada2/surface-feedback-mcp`: cross-site MCP surface feedback intake and routing MCP surface.
-- `@narada2/launcher-mcp`: read-only launcher registry, option matrix, plan, and coherence MCP surface.
-- `@narada2/mcp-loader-mcp`: policy-gated runtime MCP surface loader and proxy.
-- `@narada2/runtime-introspection-mcp`: Narada-owned runtime trace and session composition analysis MCP surface.
-- `@narada2/speech-mcp`: host-level speech MCP surface for TTS, bounded capture, transcription, prompt-response, and listen sessions.
-- `@narada2/cloudflare-carrier-mcp`: Cloudflare-carrier live operations MCP surface wrapping product-read, session status, and continuity health.
-- `@narada2/site-coherence-mcp`: Site-level continuity coherence readback MCP surface for detecting posture mismatches between local and Cloudflare embodiments.
-- `@narada2/site-lifecycle-mcp`: governed MCP surface aligned with `narada sites ...` CLI commands for Site creation planning, lifecycle inspection, relations, and gated configuration mutations.
-- `@narada2/site-registry-mcp`: User Site MCP surface for canonical cross-site registry inspection and reconciliation planning.
-- `@narada2/operator-routing-mcp`: User Site operator routing surface for transcript-to-target decisions and inbox fallback packaging.
-- `@narada2/artifacts-mcp`: NARS session artifact registration and renderable artifact reference MCP surface.
-- `@narada2/nars-session-mcp`: governed input and bounded readback for existing NARS sessions.
-- `@narada2/quota-meter-mcp`: host-level quota-meter glide status and desktop overlay lifecycle surface.
-- `@narada2/browser-control-mcp`: bounded host-level browser-control surface for authenticated UX verification.
+- `@narada-core/mcp-transport`: shared MCP payload/output-ref helpers.
+- `@narada-core/mcp-telemetry`: shared optional MCP telemetry helpers.
+- `@narada-core/mcp-affordances`: shared UI-neutral MCP affordance schema and validation helpers.
+- `@narada-core/mcp-runtime-proxy`: shared carrier stdio proxy for MCP startup diagnostics.
+- `@narada-core/mcp-e2e-harness`: shared bounded mechanics for real MCP end-to-end tests.
+- `@narada-core/mcp-fabric-contracts`: shared versioned MCP descriptor, manifest, carrier projection, observation, and reconciliation contracts.
+- `@narada-core/mcp-fabric-compiler`: pure manifest and Codex/Kimi/OpenCode carrier projection compiler with strict Moonshot schema validation.
+- `@narada-core/execution-contract`: shared typed execution binding and request fingerprint contract.
+- `@narada-core/provider-registry`: shared typed, policy-neutral provider/model capability registry loading and resolution.
+- `@narada-core/local-filesystem-mcp`: governed filesystem MCP surface.
+- `@narada-core/structured-command-mcp`: policy-gated structured command MCP surface.
+- `@narada-core/git-mcp`: governed Git inspection and publication MCP surface.
+- `@narada-core/site-inbox-mcp`: governed inbox intake and triage MCP surface.
+- `@narada-core/mailbox-mcp`: read-only synced mailbox projection MCP surface.
+- `@narada-core/graph-mail-mcp`: policy-gated Microsoft Graph mail MCP surface for live reads and draft management.
+- `@narada-core/calendar-mcp`: policy-gated Microsoft Graph calendar MCP surface for live calendar reads and guarded event management.
+- `@narada-core/task-lifecycle-mcp`: task lifecycle MCP surface.
+- `@narada-core/site-loop-mcp`: config-governed site loop MCP surface.
+- `@narada-core/agent-context-mcp`: agent context MCP surface.
+- `@narada-core/worker-delegation-mcp`: policy-gated worker delegation MCP surface.
+- `@narada-core/delegated-task-mcp`: outcome-oriented delegated task orchestration MCP surface.
+- `@narada-core/sop-mcp`: versioned standard operating procedure runbook engine with SQLite-backed execution.
+- `@narada-core/scheduler-mcp`: Windows Task Scheduler MCP surface for governed task registration, inspection, and execution.
+- `@narada-core/mcp-registrar`: MCP surface registrar for binding/unbinding surfaces across Narada sites and carriers.
+- `@narada-core/surface-feedback-mcp`: cross-site MCP surface feedback intake and routing MCP surface.
+- `@narada-core/launcher-mcp`: read-only launcher registry, option matrix, plan, and coherence MCP surface.
+- `@narada-core/mcp-loader-mcp`: policy-gated runtime MCP surface loader and proxy.
+- `@narada-core/runtime-introspection-mcp`: Narada-owned runtime trace and session composition analysis MCP surface.
+- `@narada-core/speech-mcp`: host-level speech MCP surface for TTS, bounded capture, transcription, prompt-response, and listen sessions.
+- `@narada-core/cloudflare-carrier-mcp`: Cloudflare-carrier live operations MCP surface wrapping product-read, session status, and continuity health.
+- `@narada-core/site-coherence-mcp`: Site-level continuity coherence readback MCP surface for detecting posture mismatches between local and Cloudflare embodiments.
+- `@narada-core/site-lifecycle-mcp`: governed MCP surface aligned with `narada sites ...` CLI commands for Site creation planning, lifecycle inspection, relations, and gated configuration mutations.
+- `@narada-core/site-registry-mcp`: User Site MCP surface for canonical cross-site registry inspection and reconciliation planning.
+- `@narada-core/operator-routing-mcp`: User Site operator routing surface for transcript-to-target decisions and inbox fallback packaging.
+- `@narada-core/artifacts-mcp`: NARS session artifact registration and renderable artifact reference MCP surface.
+- `@narada-core/nars-session-mcp`: governed input and bounded readback for existing NARS sessions.
+- `@narada-core/quota-meter-mcp`: host-level quota-meter glide status and desktop overlay lifecycle surface.
+- `@narada-core/browser-control-mcp`: bounded host-level browser-control surface for authenticated UX verification.
 
 Site Loop doctrine and boundaries are documented in `docs/site-loop-doctrine.md`.
 
@@ -53,7 +53,7 @@ Site-root convention is documented in `docs/site-root-contract.md`: the
 workspace is the canonical Site root, `.narada` is the control root, and
 `.narada/site.json` is a generated local marker ignored by Git.
 
-- @narada2/operator-console-overlay-mcp: host-level dedicated MCP surface for the Narada Operator Console overlay; canonical overlay mechanics remain owned by Narada proper.
+- @narada-core/operator-console-overlay-mcp: host-level dedicated MCP surface for the Narada Operator Console overlay; canonical overlay mechanics remain owned by Narada proper.
 
 ## Getting Started
 
@@ -81,11 +81,11 @@ Most MCP surface packages should expose a read-only `_guidance` command using th
 
 These commands are for model-facing operating guidance. They should explain the surface's purpose, first-use workflow, preferred tool sequence, state semantics, examples, anti-patterns, recovery steps, payload/output-ref conventions when relevant, and boundary notes. They must not mutate state, weaken policy, or replace authoritative tool schemas and policy checks.
 
-When a model is unfamiliar with a surface, uncertain about the correct workflow, or recovering from a refusal/error, prefer calling that surface's `_guidance` command before guessing. If the guidance is missing, unclear, stale, or contradicted by live behavior, submit feedback through `@narada2/surface-feedback-mcp`.
+When a model is unfamiliar with a surface, uncertain about the correct workflow, or recovering from a refusal/error, prefer calling that surface's `_guidance` command before guessing. If the guidance is missing, unclear, stale, or contradicted by live behavior, submit feedback through `@narada-core/surface-feedback-mcp`.
 
 ## Surface Feedback
 
-Agents can submit feedback about any MCP surface via `@narada2/surface-feedback-mcp`:
+Agents can submit feedback about any MCP surface via `@narada-core/surface-feedback-mcp`:
 
 - `surface_feedback_submit` — submit a bug, improvement, gap, or observation about a surface.
 - `surface_feedback_list` — list feedback with an explicit server-bound read scope.
@@ -121,10 +121,10 @@ Use this surface for any MCP usage friction, runtime failures, schema issues, or
 - Preserve ESM/NodeNext package behavior.
 - Prefer package-local tests for narrow changes, then root tests when shared behavior changes.
 - Keep MCP tool schemas explicit and conservative: no broad shell strings, wildcard filesystem access, or implicit mutation paths.
-- Keep transport helpers generic. Do not add Narada task-domain behavior to `@narada2/mcp-transport`.
+- Keep transport helpers generic. Do not add Narada task-domain behavior to `@narada-core/mcp-transport`.
 - Model-facing MCP tool output that can exceed a small inline envelope must pass through the shared `mcp-transport` output-ref boundary or an explicit package-owned equivalent. Large domain results should be materialized and returned with a bounded inline envelope plus a reader tool.
 - Keep shared transport readers bound to one site authority scope. Do not accept raw cross-site roots or infer cross-site authority from local filesystem reachability; explicit cross-site transfer belongs to an authorized User Site or artifact/export surface. See `docs/mcp-surfaces-target-shape.md`.
-- Shared libraries such as `@narada2/mcp-transport` live under `packages/shared/*`; runnable MCP surfaces remain top-level packages until the broader `packages/surfaces/*` migration is executed.
+- Shared libraries such as `@narada-core/mcp-transport` live under `packages/shared/*`; runnable MCP surfaces remain top-level packages until the broader `packages/surfaces/*` migration is executed.
 - Register every package in the root `tsconfig.json` `references`; root `pnpm build` and `pnpm typecheck` only cover referenced packages.
 - When you add or rename a package, root test alias, command, or convention, update this `AGENTS.md` in the same change.
 

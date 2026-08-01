@@ -6,8 +6,8 @@ import { createHash, randomUUID } from 'node:crypto';
 import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { basename, dirname, join, relative, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { buildCommandMetadataTelemetryDeclaration, emitTelemetryEvent, telemetryErrorCodeFromUnknown, telemetryRefusalCodeFromResult, type TelemetryDeclaration, type TelemetryEventKind } from '@narada2/mcp-telemetry';
-import { buildBoundedToolResult, outputShowAsync } from '@narada2/mcp-transport';
+import { buildCommandMetadataTelemetryDeclaration, emitTelemetryEvent, telemetryErrorCodeFromUnknown, telemetryRefusalCodeFromResult, type TelemetryDeclaration, type TelemetryEventKind } from '@narada-core/mcp-telemetry';
+import { buildBoundedToolResult, outputShowAsync } from '@narada-core/mcp-transport';
 import {
   buildAllowedRoots,
   createExecutionPolicy,

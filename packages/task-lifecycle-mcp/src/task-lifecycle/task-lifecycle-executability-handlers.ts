@@ -12,7 +12,7 @@ import {
   TASK_EXECUTABILITY_ASSESSMENT_SCHEMA,
   TASK_EXECUTABILITY_EVALUATOR_PROVENANCE_SCHEMA,
   type TaskExecutabilityVerdict,
-} from '@narada2/task-governance-core/task-executability-contract';
+} from '@narada-core/task-governance-core/task-executability-contract';
 import {
   admitTaskExecutabilityAssessment,
   assembleDeclaredEnvironment,
@@ -26,7 +26,7 @@ import {
   resolveEffectiveTaskExecutabilityPolicy,
   taskExecutabilityRequestId,
   taskSpecDigest,
-} from '@narada2/task-governance-core/task-executability-service';
+} from '@narada-core/task-governance-core/task-executability-service';
 
 export const TASK_LIFECYCLE_EXECUTABILITY_TOOL_NAMES = Object.freeze([
   'task_lifecycle_executability_request',
@@ -438,7 +438,7 @@ export function buildCompactExecutabilityPosture(args: {
     };
     const environment = assembleDeclaredEnvironment(siteRoot);
     const posture = buildTaskExecutabilityPosture({
-      store: args.store as unknown as import('@narada2/task-governance-core/task-lifecycle-store').TaskLifecycleStore,
+      store: args.store as unknown as import('@narada-core/task-governance-core/task-lifecycle-store').TaskLifecycleStore,
       taskId,
       currentSpecDigest: taskSpecDigest(digestable),
       currentEnvDigest: declaredEnvironmentDigest(environment),

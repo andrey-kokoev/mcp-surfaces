@@ -1,16 +1,17 @@
-import { defineNativeSurface, type DefinedSurface, type McpToolDefinition } from '@narada2/mcp-fabric-contracts';
+import { defineNativeSurface, type DefinedSurface, type McpToolDefinition } from '@narada-core/mcp-fabric-contracts';
 import { listTools } from './main.js';
 
-const READ_ONLY_TOOLS = ["scheduler_guidance","scheduler_task_list","scheduler_task_show","scheduler_task_history"] as const;
-
 export function surfaceDefinition(): DefinedSurface {
+  const tools = listTools() as McpToolDefinition[];
   return defineNativeSurface({
     surface_id: 'scheduler',
     surface_version: '0.1.0',
-    package: '@narada2/scheduler-mcp',
+    package: '@narada-core/scheduler-mcp',
     entrypoint: '{mcp_surfaces_root}/scheduler-mcp/dist/src/main.js',
-    tools: listTools() as McpToolDefinition[],
-    read_only_tools: READ_ONLY_TOOLS,
+    tools,
+    read_only_tools: tools
+      .filter((tool) => tool.annotations?.readOnlyHint)
+      .map((tool) => tool.name),
     default_effect: 'runtime_admin',
     projections: [{
       id: 'default',

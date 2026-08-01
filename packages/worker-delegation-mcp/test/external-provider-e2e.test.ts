@@ -9,7 +9,7 @@ import {
   runMcpProtocolSmoke,
   spawnJsonlMcpServer,
   structured,
-} from '@narada2/mcp-e2e-harness';
+} from '@narada-core/mcp-e2e-harness';
 import { resolveWorkerProviderRuntimeBindingFromRegistry } from '../src/provider-runtime-binding.js';
 
 const siteRoot = createTemporaryE2eRoot('worker-external-provider-e2e');

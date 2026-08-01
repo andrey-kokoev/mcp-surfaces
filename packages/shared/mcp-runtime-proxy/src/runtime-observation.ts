@@ -14,7 +14,7 @@ import {
   RuntimeServerObservationV2Schema,
   type RuntimeObservationV2,
   type RuntimeServerObservationV2,
-} from '@narada2/mcp-fabric-contracts';
+} from '@narada-core/mcp-fabric-contracts';
 import type {
   GenerationObservationEvent,
   GenerationObservationSink,

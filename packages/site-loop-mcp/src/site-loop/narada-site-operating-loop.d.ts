@@ -1,4 +1,4 @@
-declare module '@narada2/site-operating-loop/site-loop-store' {
+declare module '@narada-core/site-operating-loop/site-loop-store' {
   export const DEFAULT_SITE_OPERATING_LOOP_ID: string;
   export const DEFAULT_SITE_OPERATING_LOOP_OWNER_ID: string;
   export function ensureSiteLoopTables(db: any): any;

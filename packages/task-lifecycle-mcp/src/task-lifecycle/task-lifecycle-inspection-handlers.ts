@@ -1,7 +1,7 @@
 import { join } from 'path';
 import { existsSync, readFileSync } from 'node:fs';
-import { evaluateTaskDependencySatisfaction } from '@narada2/task-governance-core/task-dependency-satisfaction';
-import { parseStoredTaskTags, parseTaskTagsValue } from '@narada2/task-governance-core/task-tags';
+import { evaluateTaskDependencySatisfaction } from '@narada-core/task-governance-core/task-dependency-satisfaction';
+import { parseStoredTaskTags, parseTaskTagsValue } from '@narada-core/task-governance-core/task-tags';
 import { readTaskExecutionBinding } from './task-execution-state.js';
 import { buildCompactExecutabilityPosture } from './task-lifecycle-executability-handlers.js';
 

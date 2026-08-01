@@ -1,6 +1,6 @@
 # Task Lifecycle MCP Target Shape
 
-This document defines the implementation target for simplifying review mechanics in `@narada2/task-lifecycle-mcp`.
+This document defines the implementation target for simplifying review mechanics in `@narada-core/task-lifecycle-mcp`.
 
 ## Target
 

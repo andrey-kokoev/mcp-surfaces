@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { runMcpProtocolSmoke, spawnJsonlMcpServer } from '@narada2/mcp-e2e-harness';
+import { runMcpProtocolSmoke, spawnJsonlMcpServer } from '@narada-core/mcp-e2e-harness';
 
 type ToolSummary = { name: string; annotations: { readOnlyHint: boolean; destructiveHint: boolean }; inputSchema: { properties: Record<string, { default?: unknown; minimum?: number }>; required?: string[] } };
 const root = mkdtempSync(join(tmpdir(), 'graph-mail-mcp-protocol-'));
@@ -37,6 +37,7 @@ try {
     'graph_mail_reply_all_draft_create',
     'graph_mail_forward_draft_create',
     'graph_mail_reply_all_to_last_in_thread_draft_create',
+    'graph_mail_ticket_draft_upsert',
     'graph_mail_draft_update',
     'graph_mail_draft_discard',
     'graph_mail_draft_send',
@@ -52,6 +53,7 @@ try {
   assert.equal(toolRows.find((tool) => tool.name === 'graph_mail_attachment_list')?.annotations.readOnlyHint, true);
   assert.equal(toolRows.find((tool) => tool.name === 'graph_mail_attachment_delete')?.annotations.destructiveHint, true);
   assert.equal(toolRows.find((tool) => tool.name === 'graph_mail_draft_create')?.annotations.readOnlyHint, false);
+  assert.equal((toolRows.find((tool) => tool.name === 'graph_mail_ticket_draft_upsert') as any)?.annotations.idempotentHint, true);
   assert.equal(toolRows.find((tool) => tool.name === 'graph_mail_draft_send')?.annotations.destructiveHint, true);
   assert.equal(toolRows.find((tool) => tool.name === 'graph_mail_draft_send')?.inputSchema.properties.confirm_send.default, false);
   assert.equal(toolRows.find((tool) => tool.name === 'graph_mail_folder_list')?.inputSchema.properties.limit.default, 50);

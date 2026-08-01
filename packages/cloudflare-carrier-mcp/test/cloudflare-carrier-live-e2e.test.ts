@@ -10,7 +10,7 @@ import {
   spawnJsonlMcpServer,
   structured,
   type JsonRecord,
-} from '@narada2/mcp-e2e-harness';
+} from '@narada-core/mcp-e2e-harness';
 
 const TEST_ID = 'cloudflare-carrier.live-e2e';
 const DEFAULT_WORKER_URL = 'https://narada-cloudflare-carrier.andrei-kokoev.workers.dev';

@@ -1,4 +1,4 @@
-import { defineNativeSurface, type DefinedSurface, type McpToolDefinition } from '@narada2/mcp-fabric-contracts';
+import { defineNativeSurface, type DefinedSurface, type McpToolDefinition } from '@narada-core/mcp-fabric-contracts';
 import { listTools } from './git-tool-list.js';
 
 const READ_ONLY_TOOLS = ["git_guidance","git_policy_inspect","git_status","git_branch_list","git_output_show","git_changed_summary","git_repositories_summary","git_diff","git_log","git_show"] as const;
@@ -7,7 +7,7 @@ export function surfaceDefinition(): DefinedSurface {
   return defineNativeSurface({
     surface_id: 'git',
     surface_version: '0.1.0',
-    package: '@narada2/git-mcp',
+    package: '@narada-core/git-mcp',
     entrypoint: '{mcp_surfaces_root}/git-mcp/dist/src/main.js',
     tools: listTools('write') as McpToolDefinition[],
     read_only_tools: READ_ONLY_TOOLS,

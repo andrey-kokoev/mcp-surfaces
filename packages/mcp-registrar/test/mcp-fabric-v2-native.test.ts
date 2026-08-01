@@ -3,7 +3,7 @@ import { readFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import test from 'node:test';
 import { fileURLToPath } from 'node:url';
-import { assertLiveToolsConform } from '@narada2/mcp-fabric-contracts';
+import { assertLiveToolsConform } from '@narada-core/mcp-fabric-contracts';
 import { nativeSurfaceDescriptor, SURFACES } from '../src/main.js';
 
 const REPOSITORY_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..', '..', '..');
@@ -15,7 +15,7 @@ test('every registered surface is backed by a package-owned native descriptor', 
     const descriptor = nativeSurfaceDescriptor(surface.id);
     assert.equal(descriptor.source, 'native', surface.id);
     assert.equal(descriptor.surface_id, surface.id);
-    assert.equal(descriptor.package, '@narada2/' + surface.package);
+    assert.equal(descriptor.package, '@narada-core/' + surface.package);
     assert.deepEqual(
       descriptor.tools.map((tool) => tool.name),
       surface.tools,

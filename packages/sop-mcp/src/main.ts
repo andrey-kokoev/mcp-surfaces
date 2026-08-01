@@ -31,6 +31,27 @@ import {
   type ValueContext,
   type ValueRef,
 } from './procedure-contract.js';
+import {
+  SOP_HANDOFF_EXECUTORS,
+  SOP_HANDOFF_STATUSES,
+  SOP_TERMINAL_TOPIC,
+  acknowledgeSopOutbox,
+  cancelSopHandoffsForRun,
+  claimSopHandoff,
+  compactSopOutbox,
+  completeSopHandoff,
+  ensureSopHandoff,
+  getSopHandoff,
+  listSopHandoffs,
+  listSopOutbox,
+  prepareSopDurabilitySchema,
+  publicSopHandoff,
+  putSopTerminalOutbox,
+  registerSopOutboxConsumer,
+  releaseSopHandoff,
+  renewSopHandoff,
+  sopDurabilityStats,
+} from './durability.js';
 
 const DEFAULT_SERVER_NAME = 'sop-mcp';
 const SERVER_VERSION = '0.2.0';
@@ -288,6 +309,7 @@ export function createServerState(options: JsonRecord = {}): SopState {
   db.exec('PRAGMA busy_timeout=5000');
   for (const sql of CREATE_TABLES) db.exec(sql);
   migrateDatabase(db);
+  prepareSopDurabilitySchema(db);
   const sopsDirs: string[] = [];
   if (Array.isArray(options.sopsDirs)) {
     for (const d of options.sopsDirs as string[]) sopsDirs.push(resolve(String(d)));
@@ -887,12 +909,15 @@ export function listTools() {
     },
     {
       name: 'sop_run_advance',
-      description: 'Idempotently complete or fail one running agent/operator handoff and automatically reconcile its occurrence and ancestors.',
+      description: 'Idempotently complete or fail one leased agent/operator handoff and automatically reconcile its occurrence and ancestors.',
       inputSchema: {
         type: 'object',
         properties: {
+          handoff_id: { type: 'string', description: 'Durable handoff identity returned by sop_handoff_claim.' },
           run_id: { type: 'string' },
           step_id: { type: 'string' },
+          consumer_id: { type: 'string', description: 'Stable consumer identity that owns the active lease.' },
+          lease_token: { type: 'string', description: 'Opaque active lease token returned by sop_handoff_claim.' },
           completion_key: { type: 'string', description: 'Stable completion-attempt key. Exact retries return the already-recorded outcome.' },
           outcome: { type: 'string', enum: ['completed', 'failed'] },
           result: { type: 'object', additionalProperties: true, description: `Bounded successful inline result (maximum ${MAX_INLINE_VALUE_BYTES} UTF-8 JSON bytes).` },
@@ -900,10 +925,89 @@ export function listTools() {
           error_message: { type: 'string', description: 'Required for a failed outcome.' },
           principal: { type: 'string', description: 'Identity of the principal completing the handoff.' },
         },
-        required: ['run_id', 'step_id', 'completion_key', 'outcome', 'principal'],
+        required: ['handoff_id', 'run_id', 'step_id', 'consumer_id', 'lease_token', 'completion_key', 'outcome', 'principal'],
         additionalProperties: false,
       },
       annotations: { title: 'sop_run_advance', readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+      outputSchema: { type: 'object', additionalProperties: true },
+    },
+    {
+      name: 'sop_handoff_list',
+      description: 'List durable agent/operator handoffs without exposing lease tokens.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          run_id: { type: 'string' },
+          executor: { type: 'string', enum: SOP_HANDOFF_EXECUTORS },
+          status: { type: 'string', enum: SOP_HANDOFF_STATUSES },
+          limit: { type: 'integer', minimum: 1, maximum: 100, default: 50 },
+        },
+        additionalProperties: false,
+      },
+      annotations: { title: 'sop_handoff_list', readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+      outputSchema: { type: 'object', additionalProperties: true },
+    },
+    {
+      name: 'sop_handoff_show',
+      description: 'Show one durable agent/operator handoff without exposing its lease token.',
+      inputSchema: {
+        type: 'object',
+        properties: { handoff_id: { type: 'string' } },
+        required: ['handoff_id'],
+        additionalProperties: false,
+      },
+      annotations: { title: 'sop_handoff_show', readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+      outputSchema: { type: 'object', additionalProperties: true },
+    },
+    {
+      name: 'sop_handoff_claim',
+      description: 'Atomically claim the oldest eligible agent/operator handoff, including recovery of an expired lease.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          consumer_id: { type: 'string', description: 'Stable handoff-consumer identity.' },
+          handoff_id: { type: 'string', description: 'Optional exact handoff to claim; omitted claims the oldest eligible handoff.' },
+          executor: { type: 'string', enum: SOP_HANDOFF_EXECUTORS },
+          lease_ms: { type: 'integer', minimum: 1000, maximum: 300000, default: 60000 },
+        },
+        required: ['consumer_id'],
+        additionalProperties: false,
+      },
+      annotations: { title: 'sop_handoff_claim', readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
+      outputSchema: { type: 'object', additionalProperties: true },
+    },
+    {
+      name: 'sop_handoff_renew',
+      description: 'Renew an unexpired handoff lease owned by the supplied consumer and token.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          handoff_id: { type: 'string' },
+          consumer_id: { type: 'string' },
+          lease_token: { type: 'string' },
+          lease_ms: { type: 'integer', minimum: 1000, maximum: 300000, default: 60000 },
+        },
+        required: ['handoff_id', 'consumer_id', 'lease_token'],
+        additionalProperties: false,
+      },
+      annotations: { title: 'sop_handoff_renew', readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
+      outputSchema: { type: 'object', additionalProperties: true },
+    },
+    {
+      name: 'sop_handoff_release',
+      description: 'Return an owned handoff lease to the durable pending queue without failing the SOP step.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          handoff_id: { type: 'string' },
+          consumer_id: { type: 'string' },
+          lease_token: { type: 'string' },
+          error_message: { type: 'string' },
+        },
+        required: ['handoff_id', 'consumer_id', 'lease_token'],
+        additionalProperties: false,
+      },
+      annotations: { title: 'sop_handoff_release', readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
       outputSchema: { type: 'object', additionalProperties: true },
     },
     {
@@ -1018,6 +1122,66 @@ export function listTools() {
       annotations: { title: 'sop_run_events', readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
       outputSchema: { type: 'object', additionalProperties: true },
     },
+    {
+      name: 'sop_outbox_consumer_register',
+      description: 'Durably register a required terminal-event consumer from an explicit start boundary.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          topic: { type: 'string', const: SOP_TERMINAL_TOPIC, default: SOP_TERMINAL_TOPIC },
+          consumer_id: { type: 'string' },
+          start_at: { type: 'string', description: 'ISO timestamp; defaults to registration time. Backdated registration is refused if required history was compacted.' },
+        },
+        required: ['consumer_id'],
+        additionalProperties: false,
+      },
+      annotations: { title: 'sop_outbox_consumer_register', readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+      outputSchema: { type: 'object', additionalProperties: true },
+    },
+    {
+      name: 'sop_outbox_list',
+      description: 'List unacknowledged durable SOP events for one registered consumer.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          consumer_id: { type: 'string' },
+          topic: { type: 'string', const: SOP_TERMINAL_TOPIC },
+          limit: { type: 'integer', minimum: 1, maximum: 500, default: 100 },
+        },
+        required: ['consumer_id'],
+        additionalProperties: false,
+      },
+      annotations: { title: 'sop_outbox_list', readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+      outputSchema: { type: 'object', additionalProperties: true },
+    },
+    {
+      name: 'sop_outbox_ack',
+      description: 'Idempotently record one consumer receipt for a durable SOP event.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          event_id: { type: 'string' },
+          consumer_id: { type: 'string' },
+          receipt: { type: 'object', additionalProperties: true },
+        },
+        required: ['event_id', 'consumer_id', 'receipt'],
+        additionalProperties: false,
+      },
+      annotations: { title: 'sop_outbox_ack', readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+      outputSchema: { type: 'object', additionalProperties: true },
+    },
+    {
+      name: 'sop_outbox_compact',
+      description: 'Compact acknowledged outbox payloads before an ISO cutoff while retaining event and receipt identity.',
+      inputSchema: {
+        type: 'object',
+        properties: { before: { type: 'string' } },
+        required: ['before'],
+        additionalProperties: false,
+      },
+      annotations: { title: 'sop_outbox_compact', readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: false },
+      outputSchema: { type: 'object', additionalProperties: true },
+    },
   ];
 }
 
@@ -1045,6 +1209,11 @@ async function callTool(params: JsonRecord, state: SopState) {
     case 'sop_run_status': result = await sopRunStatus(args, state); break;
     case 'sop_run_refresh': result = await sopRunRefresh(args, state); break;
     case 'sop_run_advance': result = await sopRunAdvance(args, state); break;
+    case 'sop_handoff_list': result = sopHandoffList(args, state); break;
+    case 'sop_handoff_show': result = sopHandoffShow(args, state); break;
+    case 'sop_handoff_claim': result = sopHandoffClaim(args, state); break;
+    case 'sop_handoff_renew': result = sopHandoffRenew(args, state); break;
+    case 'sop_handoff_release': result = sopHandoffRelease(args, state); break;
     case 'sop_action_list': result = sopActionList(args, state); break;
     case 'sop_action_show': result = sopActionShow(args, state); break;
     case 'sop_action_resolve': result = sopActionResolve(args, state); break;
@@ -1052,6 +1221,10 @@ async function callTool(params: JsonRecord, state: SopState) {
     case 'sop_run_coverage_since': result = sopRunCoverageSince(args, state); break;
     case 'sop_run_cancel': result = sopRunCancel(args, state); break;
     case 'sop_run_events': result = sopRunEvents(args, state); break;
+    case 'sop_outbox_consumer_register': result = sopOutboxConsumerRegister(args, state); break;
+    case 'sop_outbox_list': result = sopOutboxList(args, state); break;
+    case 'sop_outbox_ack': result = sopOutboxAck(args, state); break;
+    case 'sop_outbox_compact': result = sopOutboxCompact(args, state); break;
     default: throw diagnosticError('unknown_tool', `unknown_tool:${name}`, { tool_name: name });
   }
   return { content: [{ type: 'text', text: renderResult(result) }], structuredContent: result };
@@ -1146,6 +1319,7 @@ function sopTemplateCandidateShow(args: JsonRecord, state: SopState) {
 function sopDoctor(state: SopState): JsonRecord {
   const discovery = discoverTemplateCandidates(state);
   const candidates = discovery.candidates;
+  const durability = sopDurabilityStats(state.db);
   const registeredTemplateCount = Number((state.db.prepare(
     'SELECT COUNT(*) as c FROM (SELECT sop_id, MAX(version) FROM sop_templates GROUP BY sop_id)'
   ).get() as JsonRecord | undefined)?.c ?? 0);
@@ -1160,15 +1334,19 @@ function sopDoctor(state: SopState): JsonRecord {
     template_response_schema: 'narada.sop.template.v2',
     run_response_schema: 'narada.sop.run.v2',
     action_response_schema: 'narada.sop.action.v1',
+    handoff_response_schema: 'narada.sop.handoff.v1',
+    terminal_event_schema: 'narada.sop.run_terminal.v2',
     template_show_render_mode: 'summary_text_with_full_structured_content',
     full_step_definitions_path: 'structuredContent.steps',
-    recovery_tools: ['sop_template_show', 'sop_template_export', 'sop_template_candidate_list', 'sop_template_candidate_show', 'sop_run_refresh', 'sop_action_show'],
+    recovery_tools: ['sop_template_show', 'sop_template_export', 'sop_template_candidate_list', 'sop_template_candidate_show', 'sop_run_refresh', 'sop_action_show', 'sop_handoff_list', 'sop_handoff_show', 'sop_handoff_claim', 'sop_outbox_list'],
     execution_posture: {
       occurrence_admission: 'idempotent',
       definition_pinning: 'template_and_child_versions_with_definition_fingerprints',
       reconciliation: 'automatic_transactional',
       activation_owner: 'scheduler_or_event_caller',
       effect_owner: 'domain_mcp_surfaces',
+      handoff_delivery: 'durable_expiring_consumer_leases',
+      terminal_delivery: 'transactional_outbox_with_required_consumer_receipts',
       direct_command_execution: 'unsupported',
       max_inline_value_bytes: MAX_INLINE_VALUE_BYTES,
       max_run_state_bytes: MAX_RUN_STATE_BYTES,
@@ -1178,6 +1356,7 @@ function sopDoctor(state: SopState): JsonRecord {
       error_count: state.startupReconciliationErrors.length,
       errors: state.startupReconciliationErrors,
     },
+    durability,
     sop_root: state.sopRoot,
     db_path: resolve(state.sopRoot, '.sop', 'sop.db'),
     sops_dirs: state.sopsDirs,
@@ -1604,6 +1783,54 @@ async function sopRunStart(args: JsonRecord, state: SopState) {
   });
 }
 
+function sopHandoffList(args: JsonRecord, state: SopState): JsonRecord {
+  const items = listSopHandoffs(state.db, {
+    run_id: optionalString(args.run_id),
+    executor: optionalString(args.executor),
+    status: optionalString(args.status),
+    limit: args.limit === undefined ? undefined : Number(args.limit),
+  }).map((handoff) => publicSopHandoff(handoff));
+  return { schema: 'narada.sop.handoff_list.v1', items, count: items.length };
+}
+
+function sopHandoffShow(args: JsonRecord, state: SopState): JsonRecord {
+  return publicSopHandoff(getSopHandoff(state.db, requiredString(args.handoff_id, 'sop_handoff_id_required')));
+}
+
+function sopHandoffClaim(args: JsonRecord, state: SopState): JsonRecord {
+  return inTransaction(state, () => {
+    const handoff = claimSopHandoff(state.db, {
+      consumer_id: requiredString(args.consumer_id, 'sop_handoff_consumer_id_required'),
+      handoff_id: optionalString(args.handoff_id),
+      executor: optionalString(args.executor),
+      lease_ms: args.lease_ms === undefined ? undefined : Number(args.lease_ms),
+    });
+    return {
+      schema: 'narada.sop.handoff_claim.v1',
+      status: handoff ? 'claimed' : 'empty',
+      handoff: handoff ? publicSopHandoff(handoff, true) : null,
+    };
+  });
+}
+
+function sopHandoffRenew(args: JsonRecord, state: SopState): JsonRecord {
+  return inTransaction(state, () => publicSopHandoff(renewSopHandoff(state.db, {
+    handoff_id: requiredString(args.handoff_id, 'sop_handoff_id_required'),
+    consumer_id: requiredString(args.consumer_id, 'sop_handoff_consumer_id_required'),
+    lease_token: requiredString(args.lease_token, 'sop_handoff_lease_token_required'),
+    lease_ms: args.lease_ms === undefined ? undefined : Number(args.lease_ms),
+  }), true));
+}
+
+function sopHandoffRelease(args: JsonRecord, state: SopState): JsonRecord {
+  return inTransaction(state, () => publicSopHandoff(releaseSopHandoff(state.db, {
+    handoff_id: requiredString(args.handoff_id, 'sop_handoff_id_required'),
+    consumer_id: requiredString(args.consumer_id, 'sop_handoff_consumer_id_required'),
+    lease_token: requiredString(args.lease_token, 'sop_handoff_lease_token_required'),
+    error_message: optionalBoundedString(args.error_message, 'sop_handoff_error_message_too_long', 4096),
+  })));
+}
+
 function sopActionList(args: JsonRecord, state: SopState): JsonRecord {
   const limit = clamp(integer(args.limit, 50, 1, 100), 1, 100);
   const runId = optionalString(args.run_id);
@@ -1702,8 +1929,11 @@ async function sopRunRefresh(args: JsonRecord, state: SopState) {
 
 async function sopRunAdvance(args: JsonRecord, state: SopState) {
   return inTransaction(state, () => {
+    const handoffId = requiredString(args.handoff_id, 'sop_handoff_id_required');
     const runId = requiredString(args.run_id, 'sop_requires_run_id');
     const stepId = requiredString(args.step_id, 'sop_requires_step_id');
+    const consumerId = boundedString(args.consumer_id, 'sop_handoff_consumer_id_required', 512);
+    const leaseToken = boundedString(args.lease_token, 'sop_handoff_lease_token_required', 512);
     const completionKey = boundedString(args.completion_key, 'sop_requires_completion_key', 512);
     const principal = boundedString(args.principal, 'sop_requires_principal', 512);
     const outcome = requiredString(args.outcome, 'sop_requires_outcome');
@@ -1719,25 +1949,40 @@ async function sopRunAdvance(args: JsonRecord, state: SopState) {
     if (run.step_states_parse_error) throw diagnosticError('sop_run_corrupt', `sop_run_corrupt:${runId}`, { reason: run.step_states_parse_error });
     const target = run.step_states.find((step) => step.step_id === stepId);
     if (!target) throw diagnosticError('sop_step_not_found', `sop_step_not_found:${stepId}`);
+    if (target.executor !== 'agent' && target.executor !== 'operator') throw diagnosticError('sop_step_not_manual_handoff', `sop_step_not_manual_handoff:${stepId}`, { executor: target.executor });
+    if (!target.completion_fingerprint && RUN_TERMINAL.has(run.status)) throw diagnosticError('sop_run_terminal', `sop_run_terminal:${runId}`, { status: run.status });
+    if (!target.completion_fingerprint && target.status !== 'running') throw diagnosticError('sop_step_not_running', `sop_step_not_running:${stepId}`, { status: target.status });
+    if (outcome === 'completed') validateAgainstSchema(target.result_schema, result, 'sop_step_result_schema_mismatch', { run_id: runId, step_id: stepId });
+    const handoffReceipt = completeSopHandoff(state.db, {
+      handoff_id: handoffId,
+      run_id: runId,
+      step_id: stepId,
+      consumer_id: consumerId,
+      lease_token: leaseToken,
+      completion_key: completionKey,
+      outcome,
+      principal,
+      result,
+      result_ref: resultRef,
+      error_message: outcome === 'failed' ? errorMessage : null,
+    });
     if (target.completion_fingerprint) {
-      if (target.completion_key === completionKey && target.completion_fingerprint === completionFingerprint) return { ...runResult(run), completion_replayed: true };
+      if (target.completion_key === completionKey && target.completion_fingerprint === completionFingerprint && handoffReceipt.completion_replayed) {
+        return { ...runResult(run), handoff: publicSopHandoff(handoffReceipt.handoff), completion_replayed: true };
+      }
       throw diagnosticError('sop_step_completion_conflict', `sop_step_completion_conflict:${runId}:${stepId}`, { recorded_completion_key: target.completion_key, supplied_completion_key: completionKey });
     }
-    if (RUN_TERMINAL.has(run.status)) throw diagnosticError('sop_run_terminal', `sop_run_terminal:${runId}`, { status: run.status });
-    if (target.executor !== 'agent' && target.executor !== 'operator') throw diagnosticError('sop_step_not_manual_handoff', `sop_step_not_manual_handoff:${stepId}`, { executor: target.executor });
-    if (target.status !== 'running') throw diagnosticError('sop_step_not_running', `sop_step_not_running:${stepId}`, { status: target.status });
-    if (outcome === 'completed') validateAgainstSchema(target.result_schema, result, 'sop_step_result_schema_mismatch', { run_id: runId, step_id: stepId });
     target.status = outcome;
-    target.completed_at = nowIso();
+    target.completed_at = handoffReceipt.handoff.completed_at ?? nowIso();
     target.result = result as JsonRecord;
     target.result_ref = resultRef;
     target.completion_key = completionKey;
     target.completion_fingerprint = completionFingerprint;
     target.error_message = outcome === 'failed' ? errorMessage : null;
-    appendRunEvent(state, runId, stepId, outcome === 'completed' ? 'step_completed' : 'step_failed', { principal, completion_key: completionKey, result_ref: resultRef, error_message: target.error_message });
+    appendRunEvent(state, runId, stepId, outcome === 'completed' ? 'step_completed' : 'step_failed', { handoff_id: handoffId, consumer_id: consumerId, principal, completion_key: completionKey, result_ref: resultRef, error_message: target.error_message });
     persistRunState(run, state);
     reconcileRunAndAncestors(runId, state);
-    return { ...runResult(getRunById(runId, state)), completion_replayed: false };
+    return { ...runResult(getRunById(runId, state)), handoff: publicSopHandoff(handoffReceipt.handoff), completion_replayed: false };
   });
 }
 
@@ -1842,12 +2087,14 @@ function cancelRunInternal(runId: string, reason: string, state: SopState, seen:
   }
   const now = nowIso();
   state.db.prepare("UPDATE sop_actions SET status = 'cancelled', error_message = ?, updated_at = ?, completed_at = ? WHERE run_id = ? AND status = 'pending'").run(`run_cancelled:${reason}`, now, now, runId);
+  cancelSopHandoffsForRun(state.db, runId, `run_cancelled:${reason}`, new Date(now));
   run.status = 'cancelled';
   run.completed_at = now;
   run.output = {};
   run.output_ref = null;
   persistRunState(run, state);
   appendRunEvent(state, runId, null, 'run_cancelled', { reason });
+  appendTerminalOutbox(state, run, new Date(now));
 }
 
 function sopRunEvents(args: JsonRecord, state: SopState) {
@@ -1858,6 +2105,36 @@ function sopRunEvents(args: JsonRecord, state: SopState) {
     'SELECT * FROM sop_events WHERE run_id = ? ORDER BY rowid DESC LIMIT ? OFFSET ?'
   ).all(runId, limit, offset) as JsonRecord[];
   return { items: rows.map(hydrateEvent), count: rows.length, run_id: runId };
+}
+
+function sopOutboxConsumerRegister(args: JsonRecord, state: SopState): JsonRecord {
+  return inTransaction(state, () => registerSopOutboxConsumer(state.db, {
+    topic: optionalString(args.topic) ?? SOP_TERMINAL_TOPIC,
+    consumer_id: requiredString(args.consumer_id, 'sop_outbox_consumer_id_required'),
+    start_at: optionalString(args.start_at),
+  }));
+}
+
+function sopOutboxList(args: JsonRecord, state: SopState): JsonRecord {
+  const items = listSopOutbox(state.db, {
+    consumer_id: requiredString(args.consumer_id, 'sop_outbox_consumer_id_required'),
+    topic: optionalString(args.topic),
+    limit: args.limit === undefined ? undefined : Number(args.limit),
+  });
+  return { schema: 'narada.sop.outbox_list.v1', items, count: items.length };
+}
+
+function sopOutboxAck(args: JsonRecord, state: SopState): JsonRecord {
+  if (!isJsonObject(args.receipt)) throw diagnosticError('sop_outbox_receipt_must_be_object');
+  return inTransaction(state, () => acknowledgeSopOutbox(state.db, {
+    event_id: requiredString(args.event_id, 'sop_outbox_event_id_required'),
+    consumer_id: requiredString(args.consumer_id, 'sop_outbox_consumer_id_required'),
+    receipt: args.receipt as JsonRecord,
+  }));
+}
+
+function sopOutboxCompact(args: JsonRecord, state: SopState): JsonRecord {
+  return inTransaction(state, () => compactSopOutbox(state.db, requiredString(args.before, 'sop_outbox_compact_before_required')));
 }
 
 function inTransaction<T>(state: SopState, work: () => T): T {
@@ -2097,7 +2374,13 @@ function reconcileRun(runId: string, state: SopState, stack: Set<string>): SopRu
       if (passes > run.step_states.length * 4 + 8) throw diagnosticError('sop_reconciliation_did_not_converge', `sop_reconciliation_did_not_converge:${runId}`);
       for (const step of run.step_states) {
         if (step.status !== 'running') continue;
-        if (step.executor === 'sop' && step.child_run_id) {
+        if (step.executor === 'agent' || step.executor === 'operator') {
+          const handoff = ensureHandoffIntent(run, step, state);
+          if (step.result.handoff_id !== handoff.handoff_id) {
+            step.result = { ...step.result, handoff_id: handoff.handoff_id, handoff_occurrence_key: handoff.occurrence_key };
+            changed = true;
+          }
+        } else if (step.executor === 'sop' && step.child_run_id) {
           reconcileRun(step.child_run_id, state, stack);
           const child = getRunById(step.child_run_id, state);
           assertChildRunBinding(run, step, child);
@@ -2194,9 +2477,10 @@ function reconcileRun(runId: string, state: SopState, stack: Set<string>): SopRu
             step.result = {};
             appendRunEvent(state, runId, step.step_id, 'step_completed', { executor: 'engine' });
           } else if (step.executor === 'agent' || step.executor === 'operator') {
+            const handoff = ensureHandoffIntent(run, step, state, instructions);
             step.status = 'running';
-            step.result = { instructions };
-            appendRunEvent(state, runId, step.step_id, 'step_started', { executor: step.executor, handoff: true });
+            step.result = { instructions, handoff_id: handoff.handoff_id, handoff_occurrence_key: handoff.occurrence_key };
+            appendRunEvent(state, runId, step.step_id, 'step_started', { executor: step.executor, handoff: true, handoff_id: handoff.handoff_id, occurrence_key: handoff.occurrence_key });
           } else if (step.executor === 'action') {
             const action = ensureActionIntent(run, step, state);
             step.status = 'running';
@@ -2242,7 +2526,10 @@ function reconcileRun(runId: string, state: SopState, stack: Set<string>): SopRu
     }
     if (changed || priorStatus !== run.status) {
       persistRunState(run, state);
-      if (priorStatus !== run.status) appendRunEvent(state, runId, null, RUN_TERMINAL.has(run.status) ? (run.status === 'completed' ? 'run_completed' : 'run_failed') : 'run_state_changed', { from: priorStatus, to: run.status, step_states: run.step_states.map((step) => ({ step_id: step.step_id, status: step.status })) });
+      if (priorStatus !== run.status) {
+        appendRunEvent(state, runId, null, RUN_TERMINAL.has(run.status) ? (run.status === 'completed' ? 'run_completed' : 'run_failed') : 'run_state_changed', { from: priorStatus, to: run.status, step_states: run.step_states.map((step) => ({ step_id: step.step_id, status: step.status })) });
+        if (RUN_TERMINAL.has(run.status)) appendTerminalOutbox(state, run);
+      }
     }
     return run;
   } finally {
@@ -2283,6 +2570,30 @@ function persistRunState(run: SopRun, state: SopState): void {
   state.db.prepare('UPDATE sop_runs SET status = ?, output_json = ?, output_ref_json = ?, step_states_json = ?, updated_at = ?, completed_at = ? WHERE run_id = ?').run(
     run.status, JSON.stringify(run.output), nullableJson(run.output_ref), JSON.stringify(run.step_states), now, run.completed_at, run.run_id,
   );
+}
+
+function ensureHandoffIntent(run: SopRun, step: SopStepState, state: SopState, renderedInstructions?: string) {
+  if (step.executor !== 'agent' && step.executor !== 'operator') {
+    throw diagnosticError('sop_step_not_manual_handoff', `sop_step_not_manual_handoff:${step.step_id}`, { executor: step.executor });
+  }
+  const context = valueContext(run);
+  const input = step.input === null ? {} : resolveMapping(step.input, context);
+  assertInlineValue(input, 'sop_handoff_input');
+  const inputRefValue = step.input_ref === null ? null : resolveMapping(step.input_ref, context);
+  const inputRef = normalizeValueRef(inputRefValue, 'sop_handoff_input_ref');
+  const instructions = renderedInstructions ?? String(step.result.instructions ?? renderInstructions(step.instructions, context));
+  return ensureSopHandoff(state.db, {
+    run_id: run.run_id,
+    step_id: step.step_id,
+    sop_id: run.sop_id,
+    sop_version: run.sop_version,
+    executor: step.executor,
+    title: step.title,
+    instructions,
+    input,
+    input_ref: inputRef,
+    result_schema: step.result_schema,
+  });
 }
 
 function ensureActionIntent(run: SopRun, step: SopStepState, state: SopState): SopAction {
@@ -2443,6 +2754,11 @@ function appendSopEvent(state: SopState, eventKind: string, details: JsonRecord)
 function appendRunEvent(state: SopState, runId: string, stepId: string | null, eventKind: string, details: JsonRecord) {
   const eventId = `soe_${randomUUID().slice(0, 12)}`;
   state.db.prepare('INSERT INTO sop_events (event_id, run_id, step_id, event_kind, details_json, recorded_at) VALUES (?, ?, ?, ?, ?, ?)').run(eventId, runId, stepId ?? '', eventKind, JSON.stringify(details), nowIso());
+}
+
+function appendTerminalOutbox(state: SopState, run: SopRun, now?: Date): void {
+  if (state.transactionDepth <= 0) throw diagnosticError('sop_terminal_outbox_requires_transaction', `sop_terminal_outbox_requires_transaction:${run.run_id}`);
+  putSopTerminalOutbox(state.db, run, now);
 }
 
 function hydrateTemplate(row: JsonRecord): SopTemplate {

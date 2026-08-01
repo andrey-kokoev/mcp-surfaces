@@ -2,7 +2,7 @@
 
 ## Purpose
 
-`@narada2/delegated-task-mcp` provides a higher-level delegation surface than `worker-delegation-mcp`.
+`@narada-core/delegated-task-mcp` provides a higher-level delegation surface than `worker-delegation-mcp`.
 
 A caller should be able to ask for an outcome, provide mechanical constraints and an acceptance contract, and receive a durable task handle. The caller should not need to manage worker run IDs, reviewer fan-out, repair loops, or internal implementation choices unless it explicitly asks for diagnostic detail.
 

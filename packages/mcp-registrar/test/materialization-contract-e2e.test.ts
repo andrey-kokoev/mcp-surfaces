@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { test } from 'node:test';
-import { preflightMaterializationGeneration } from '@narada2/mcp-runtime-proxy/materialization-contract';
+import { preflightMaterializationGeneration } from '@narada-core/mcp-runtime-proxy/materialization-contract';
 
 type JsonRecord = Record<string, any>;
 

@@ -12,7 +12,7 @@ import {
   siteFabricChildEnv,
   spawnJsonlMcpServer,
   type JsonRecord,
-} from '@narada2/mcp-e2e-harness';
+} from '@narada-core/mcp-e2e-harness';
 
 const siteRoot = createTemporaryE2eRoot('nars-session-site-fabric-e2e');
 const resultPath = join(fileURLToPath(new URL('../..', import.meta.url)), '.tmp', 'e2e-results', 'nars-session.site-fabric.discovery-health-input-status.json');

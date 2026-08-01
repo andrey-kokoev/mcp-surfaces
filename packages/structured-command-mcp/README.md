@@ -1,4 +1,4 @@
-# @narada2/structured-command-mcp
+# @narada-core/structured-command-mcp
 
 Structured, policy-gated local command execution MCP surface.
 
@@ -92,7 +92,7 @@ When an audit log directory is configured, command decisions and executions are 
 ## Run
 
 ```powershell
-pnpm --filter @narada2/structured-command-mcp build
+pnpm --filter @narada-core/structured-command-mcp build
 node packages/structured-command-mcp/dist/src/main.js --allowed-root D:/code --allow-command node --allow-command git
 ```
 
@@ -103,5 +103,5 @@ Agents should use package-specific MCP surfaces when available. Use this surface
 ## Verification
 
 ```powershell
-pnpm --filter @narada2/structured-command-mcp test
+pnpm --filter @narada-core/structured-command-mcp test
 ```

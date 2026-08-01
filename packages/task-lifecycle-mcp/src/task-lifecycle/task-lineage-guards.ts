@@ -1,4 +1,4 @@
-import { parseStoredTaskTags } from '@narada2/task-governance-core/task-tags';
+import { parseStoredTaskTags } from '@narada-core/task-governance-core/task-tags';
 
 type TaskLifecycleRecord = { task_id: string; task_number: number; status?: string | null };
 

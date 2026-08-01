@@ -1,4 +1,4 @@
-# @narada2/task-lifecycle-mcp
+# @narada-core/task-lifecycle-mcp
 
 Task lifecycle MCP stdio runtime and tool dispatch surface.
 
@@ -23,7 +23,7 @@ task-lifecycle-mcp
 It is launched against a site root and uses site-local task governance state and projections.
 
 ```powershell
-pnpm --filter @narada2/task-lifecycle-mcp build
+pnpm --filter @narada-core/task-lifecycle-mcp build
 node packages/task-lifecycle-mcp/dist/src/task-lifecycle/task-mcp-server.js --prepare --site-root D:/code/site
 node packages/task-lifecycle-mcp/dist/src/task-lifecycle/task-mcp-server.js --site-root D:/code/site
 ```
@@ -125,11 +125,11 @@ Verification helpers:
 
 Transport helpers:
 
-- payload tools from `@narada2/mcp-transport`
+- payload tools from `@narada-core/mcp-transport`
 
 ## Payload Refs
 
-Some tools accept `payload_ref` for large structured companion payloads. `task_lifecycle_create` requires an immutable payload ref carrying the task definition. `task_lifecycle_test_mcp_tool` also accepts a payload ref for the child call: keep `server_path`, `tool_name`, and `timeout_seconds` at the outer level, put required child fields in `arguments`, and the parent merges the immutable payload into those arguments with explicit `arguments` fields winning. Payload transport is generic and comes from `@narada2/mcp-transport`; task lifecycle tools remain responsible for domain validation.
+Some tools accept `payload_ref` for large structured companion payloads. `task_lifecycle_create` requires an immutable payload ref carrying the task definition. `task_lifecycle_test_mcp_tool` also accepts a payload ref for the child call: keep `server_path`, `tool_name`, and `timeout_seconds` at the outer level, put required child fields in `arguments`, and the parent merges the immutable payload into those arguments with explicit `arguments` fields winning. Payload transport is generic and comes from `@narada-core/mcp-transport`; task lifecycle tools remain responsible for domain validation.
 
 The special completion-truthfulness guard is activated only by structured fields, never by words found in titles, summaries, or task prose. Set `recovery_truthfulness_required: true` in a task creation payload to project the opt-in into task front matter, or supply an explicit structured trigger in a completion packet.
 
@@ -147,7 +147,7 @@ visually interchangeable.
 session-bound task-lifecycle server is stale or wedged. Its `server_path`
 contract is explicit: relative paths resolve under the Site root; absolute
 paths are admitted only under the Site root, the running
-`@narada2/task-lifecycle-mcp` package root, or roots configured through
+`@narada-core/task-lifecycle-mcp` package root, or roots configured through
 `NARADA_TASK_LIFECYCLE_FRESH_SERVER_ALLOWED_ROOTS`. Only existing
 `.js`, `.mjs`, and `.cjs` scripts are accepted. A one-shot result proves
 the fresh child call, not that the carrier-bound process reloaded. Carrier-bound
@@ -175,5 +175,5 @@ Task Lifecycle is the authority for assessment requests, leases, attempts, admit
 ## Verification
 
 ```powershell
-pnpm --filter @narada2/task-lifecycle-mcp test
+pnpm --filter @narada-core/task-lifecycle-mcp test
 ```

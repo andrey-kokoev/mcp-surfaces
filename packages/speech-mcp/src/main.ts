@@ -3,7 +3,7 @@ import { buildGuidanceResult } from './guidance.js';
 import { spawnSync as nodeSpawnSync } from 'node:child_process';
 import { unlinkSync } from 'node:fs';
 import { pathToFileURL } from 'node:url';
-import { resolveCapabilitySelection, type ResolvedCapabilitySelection } from '@narada2/provider-registry';
+import { resolveCapabilitySelection, type ResolvedCapabilitySelection } from '@narada-core/provider-registry';
 import { parseArgs } from './cli.js';
 import { DEFAULT_LISTEN_DURATION_SECONDS, PROTOCOL_VERSION, SERVER_NAME, SERVER_VERSION } from './constants.js';
 import { diagnosticError, errorDiagnostic } from './diagnostics.js';

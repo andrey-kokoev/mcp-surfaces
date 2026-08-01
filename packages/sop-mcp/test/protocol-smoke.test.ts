@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { runMcpProtocolSmoke, spawnJsonlMcpServer } from '@narada2/mcp-e2e-harness';
+import { runMcpProtocolSmoke, spawnJsonlMcpServer } from '@narada-core/mcp-e2e-harness';
 
 const root = mkdtempSync(join(tmpdir(), 'sop-mcp-protocol-'));
 const serverPath = fileURLToPath(new URL('../src/main.js', import.meta.url));
@@ -30,6 +30,11 @@ try {
     'sop_run_status',
     'sop_run_refresh',
     'sop_run_advance',
+    'sop_handoff_list',
+    'sop_handoff_show',
+    'sop_handoff_claim',
+    'sop_handoff_renew',
+    'sop_handoff_release',
     'sop_action_list',
     'sop_action_show',
     'sop_action_resolve',
@@ -37,6 +42,10 @@ try {
     'sop_run_coverage_since',
     'sop_run_cancel',
     'sop_run_events',
+    'sop_outbox_consumer_register',
+    'sop_outbox_list',
+    'sop_outbox_ack',
+    'sop_outbox_compact',
   ];
   assert.deepEqual(tools.map((tool: { name: string }) => tool.name), expectedTools);
 
@@ -58,13 +67,31 @@ try {
   assert.equal(runTool.inputSchema.required?.includes('occurrence_key'), true);
 
   const advanceTool = tools.find((tool) => tool.name === 'sop_run_advance')!;
+  assert.ok(advanceTool.inputSchema.properties.handoff_id);
   assert.ok(advanceTool.inputSchema.properties.run_id);
   assert.ok(advanceTool.inputSchema.properties.step_id);
+  assert.ok(advanceTool.inputSchema.properties.consumer_id);
+  assert.ok(advanceTool.inputSchema.properties.lease_token);
   assert.ok(advanceTool.inputSchema.properties.result);
   assert.ok(advanceTool.inputSchema.properties.result_ref);
   assert.ok(advanceTool.inputSchema.properties.completion_key);
   assert.ok(advanceTool.inputSchema.properties.outcome);
   assert.ok(advanceTool.inputSchema.properties.principal);
+  assert.equal(advanceTool.inputSchema.required?.includes('lease_token'), true);
+
+  const handoffClaimTool = tools.find((tool) => tool.name === 'sop_handoff_claim')!;
+  assert.ok(handoffClaimTool.inputSchema.properties.consumer_id);
+  assert.ok(handoffClaimTool.inputSchema.properties.lease_ms);
+  assert.equal(handoffClaimTool.annotations.readOnlyHint, false);
+
+  const outboxListTool = tools.find((tool) => tool.name === 'sop_outbox_list')!;
+  assert.ok(outboxListTool.inputSchema.properties.consumer_id);
+  assert.equal(outboxListTool.annotations.readOnlyHint, true);
+
+  const outboxAckTool = tools.find((tool) => tool.name === 'sop_outbox_ack')!;
+  assert.ok(outboxAckTool.inputSchema.properties.event_id);
+  assert.ok(outboxAckTool.inputSchema.properties.receipt);
+  assert.equal(outboxAckTool.annotations.idempotentHint, true);
 
   const actionResolveTool = tools.find((tool) => tool.name === 'sop_action_resolve');
   assert.ok(actionResolveTool?.inputSchema.properties.action_id);

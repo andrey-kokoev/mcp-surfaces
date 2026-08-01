@@ -1,4 +1,4 @@
-# @narada2/scheduler-mcp
+# @narada-core/scheduler-mcp
 
 Windows Task Scheduler MCP surface for governed task registration, inspection, and execution. Wraps `schtasks.exe` with CSV output parsing.
 
@@ -22,5 +22,5 @@ Provides a policy-gated surface for managing Windows scheduled tasks. Bridges th
 ## Quick Start
 
 ```
-pnpm --filter @narada2/scheduler-mcp test
+pnpm --filter @narada-core/scheduler-mcp test
 ```

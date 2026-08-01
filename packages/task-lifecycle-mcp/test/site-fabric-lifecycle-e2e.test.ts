@@ -8,7 +8,7 @@ import {
   siteFabricChildEnv,
   spawnJsonlMcpServer,
   type JsonRecord,
-} from '@narada2/mcp-e2e-harness';
+} from '@narada-core/mcp-e2e-harness';
 import { prepareTaskLifecycleMcpSite } from '../src/task-lifecycle/task-mcp-server.js';
 
 const siteRoot = createTemporaryE2eRoot('task-lifecycle-site-fabric-e2e');

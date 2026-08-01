@@ -4,7 +4,7 @@ import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { basename, dirname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { processSupervisorEntrypoint } from '@narada2/process-launch-posture';
+import { processSupervisorEntrypoint } from '@narada-core/process-launch-posture';
 import {
   RUNTIME_STATUS_TOOL_NAME,
   captureRuntimeFreshness,

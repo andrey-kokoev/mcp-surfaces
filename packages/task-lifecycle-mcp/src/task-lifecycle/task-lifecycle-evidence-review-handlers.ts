@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs';
 import { isAbsolute, join, relative } from 'node:path';
-import { renderTaskBodyFromSpec } from '@narada2/task-governance-core/task-spec';
+import { renderTaskBodyFromSpec } from '@narada-core/task-governance-core/task-spec';
 import { isSqliteBusyError, withSqliteBusyRetry, withStoreSavepoint } from './sqlite-contention.js';
 import { terminalTaskMutationGuard } from './closure-authority.js';
 import { validateGovernedTestEvidenceRefs, type GovernedTestEvidenceResolution } from './governed-test-evidence.js';

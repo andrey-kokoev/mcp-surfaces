@@ -30,13 +30,13 @@ export type WorkerSessionRecord = {
   updated_at: string;
 };
 
-export function createRunRecord(policy: WorkerPolicy): RunRecordPaths {
+export function createRunRecord(policy: WorkerPolicy, requestedRunId?: string): RunRecordPaths {
   mkdirSync(policy.runRoot, { recursive: true });
   const now = new Date();
   const stamp = now.toISOString().replace(/[-:]/g, '').replace(/\.\d{3}Z$/, 'Z');
-  const runId = `run-${stamp}-${randomBytes(4).toString('hex')}`;
+  const runId = requestedRunId ?? `run-${stamp}-${randomBytes(4).toString('hex')}`;
   const runDir = resolve(policy.runRoot, runId);
-  mkdirSync(runDir, { recursive: true });
+  mkdirSync(runDir, { recursive: requestedRunId === undefined });
   return {
     runId,
     runDir,

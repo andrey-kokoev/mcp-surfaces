@@ -9,7 +9,7 @@ import {
 } from '../task-lifecycle/sqlite-discipline.js';
 import {
   getSiteOperatingLoopRuntimeHost as getCanonicalSiteOperatingLoopRuntimeHost,
-} from '@narada2/site-operating-loop/site-loop-store';
+} from '@narada-core/site-operating-loop/site-loop-store';
 import {
   assertSiteLoopStorageSchema,
   ensureSiteLoopTables,

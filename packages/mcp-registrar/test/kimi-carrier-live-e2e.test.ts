@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
 import { join } from 'node:path';
-import { createTemporaryE2eRoot, removeTemporaryE2eRoot } from '@narada2/mcp-e2e-harness';
+import { createTemporaryE2eRoot, removeTemporaryE2eRoot } from '@narada-core/mcp-e2e-harness';
 import { materializeKimiCarrierConfig } from './kimi-carrier-test-support.js';
 
 const enabled = process.env.NARADA_KIMI_CARRIER_LIVE_E2E === '1';

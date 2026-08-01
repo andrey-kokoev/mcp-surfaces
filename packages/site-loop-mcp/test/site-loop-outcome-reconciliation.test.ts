@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { SqliteDirectiveRuntimeStore } from '@narada2/task-governance-core/directive-runtime-store';
+import { SqliteDirectiveRuntimeStore } from '@narada-core/task-governance-core/directive-runtime-store';
 import { runAgentOutcomeReconciliation } from '../src/site-loop/site-loop-engine.js';
 import { openTaskLifecycleStoreWithDiscipline } from '../src/task-lifecycle/sqlite-discipline.js';
 

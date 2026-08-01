@@ -32,6 +32,21 @@ function steps(response: RpcResponse): JsonRecord[] {
   return view(response).step_states as JsonRecord[];
 }
 
+async function leaseHandoff(runId: string, stepId: string, consumerId: string): Promise<JsonRecord> {
+  const pending = view(await call('sop_handoff_list', { run_id: runId, status: 'pending' })).items as JsonRecord[];
+  const expected = pending.find((item) => item.step_id === stepId);
+  assert.ok(expected, `Missing pending handoff for ${runId}:${stepId}`);
+  const claim = view(await call('sop_handoff_claim', { consumer_id: consumerId, handoff_id: expected.handoff_id }));
+  assert.equal(claim.status, 'claimed');
+  const handoff = claim.handoff as JsonRecord;
+  assert.equal(handoff.handoff_id, expected.handoff_id);
+  assert.equal(handoff.run_id, runId);
+  assert.equal(handoff.step_id, stepId);
+  assert.equal(handoff.lease_owner, consumerId);
+  assert.ok(handoff.lease_token);
+  return { handoff_id: handoff.handoff_id, consumer_id: consumerId, lease_token: handoff.lease_token };
+}
+
 const valueRef = { ref: 'artifact:fixture/result', sha256: 'a'.repeat(64), byte_length: 250, media_type: 'application/json' };
 
 try {
@@ -90,28 +105,31 @@ try {
   assert.equal(view(replayed).run_id, admittedRunId);
   assert.equal(errorCode(await call('sop_run_start', { ...admittedArgs, input: { admitted: true, message_id: 'different' } })), 'sop_occurrence_conflict');
 
+  const admittedLease = await leaseHandoff(admittedRunId, 'process', 'consumer:agent-test');
   assert.equal(errorCode(await call('sop_run_advance', {
-    run_id: admittedRunId, step_id: 'process', completion_key: 'agent:m-1:done', outcome: 'completed', principal: 'agent:test', result: { wrong: true },
+    ...admittedLease, run_id: admittedRunId, step_id: 'process', completion_key: 'agent:m-1:done', outcome: 'completed', principal: 'agent:test', result: { wrong: true },
   })), 'sop_step_result_schema_mismatch');
   const completedManual = await call('sop_run_advance', {
-    run_id: admittedRunId, step_id: 'process', completion_key: 'agent:m-1:done', outcome: 'completed', principal: 'agent:test', result: { disposition: 'responded' }, result_ref: valueRef,
+    ...admittedLease, run_id: admittedRunId, step_id: 'process', completion_key: 'agent:m-1:done', outcome: 'completed', principal: 'agent:test', result: { disposition: 'responded' }, result_ref: valueRef,
   });
   assert.equal(view(completedManual).status, 'completed');
   assert.deepEqual(steps(completedManual).find((step) => step.step_id === 'process')?.result, { disposition: 'responded' });
   const completedManualReplay = await call('sop_run_advance', {
-    run_id: admittedRunId, step_id: 'process', completion_key: 'agent:m-1:done', outcome: 'completed', principal: 'agent:test', result: { disposition: 'responded' }, result_ref: valueRef,
+    ...admittedLease, run_id: admittedRunId, step_id: 'process', completion_key: 'agent:m-1:done', outcome: 'completed', principal: 'agent:test', result: { disposition: 'responded' }, result_ref: valueRef,
   });
   assert.equal(view(completedManualReplay).completion_replayed, true);
   assert.equal(errorCode(await call('sop_run_advance', {
-    run_id: admittedRunId, step_id: 'process', completion_key: 'different', outcome: 'completed', principal: 'agent:test', result: { disposition: 'responded' }, result_ref: valueRef,
-  })), 'sop_step_completion_conflict');
+    ...admittedLease, run_id: admittedRunId, step_id: 'process', completion_key: 'different', outcome: 'completed', principal: 'agent:test', result: { disposition: 'responded' }, result_ref: valueRef,
+  })), 'sop_handoff_completion_conflict');
 
   // Failure receipts are not forced through a success-result schema.
   const failedHandoff = await call('sop_run_start', {
     sop_id: 'conditional-procedure', occurrence_key: 'mail:fail-1', input: { admitted: true, message_id: 'm-fail' }, triggered_by: 'test',
   });
+  const failedRunId = String(view(failedHandoff).run_id);
+  const failedLease = await leaseHandoff(failedRunId, 'process', 'consumer:agent-failure');
   const failedHandoffResult = await call('sop_run_advance', {
-    run_id: String(view(failedHandoff).run_id), step_id: 'process', completion_key: 'agent:m-fail:failed', outcome: 'failed', principal: 'agent:test', result: {}, error_message: 'processing failed',
+    ...failedLease, run_id: failedRunId, step_id: 'process', completion_key: 'agent:m-fail:failed', outcome: 'failed', principal: 'agent:test', result: {}, error_message: 'processing failed',
   });
   assert.equal(view(failedHandoffResult).status, 'failed');
 
@@ -315,14 +333,16 @@ try {
   assert.match(String(childPins[0].definition_fingerprint), /^[a-f0-9]{64}$/);
   assert.equal(errorCode(await call('sop_template_unimport', { sop_id: 'child-procedure', version: 1, reason: 'must remain pinned', principal: 'test' })), 'sop_template_has_runs');
   view(await call('sop_template_update', { sop_id: 'child-procedure', title: 'Child v2' }));
-  const gateCompleted = await call('sop_run_advance', { run_id: parentRunId, step_id: 'gate', completion_key: 'gate:1', outcome: 'completed', principal: 'operator:test', result: {} });
+  const gateLease = await leaseHandoff(parentRunId, 'gate', 'consumer:operator-gate');
+  const gateCompleted = await call('sop_run_advance', { ...gateLease, run_id: parentRunId, step_id: 'gate', completion_key: 'gate:1', outcome: 'completed', principal: 'operator:test', result: {} });
   const childStep = steps(gateCompleted).find((step) => step.step_id === 'child');
   assert.equal(childStep?.status, 'running');
   const childRunId = String(childStep?.child_run_id);
   const childRun = view(await call('sop_run_status', { run_id: childRunId }));
   assert.equal(childRun.sop_version, 1);
   assert.equal(childRun.parent_run_id, parentRunId);
-  await call('sop_run_advance', { run_id: childRunId, step_id: 'confirm', completion_key: 'child:1', outcome: 'completed', principal: 'operator:test', result: { disposition: 'respond' }, result_ref: valueRef });
+  const childLease = await leaseHandoff(childRunId, 'confirm', 'consumer:operator-child');
+  await call('sop_run_advance', { ...childLease, run_id: childRunId, step_id: 'confirm', completion_key: 'child:1', outcome: 'completed', principal: 'operator:test', result: { disposition: 'respond' }, result_ref: valueRef });
   const parentCompleted = view(await call('sop_run_status', { run_id: parentRunId }));
   assert.equal(parentCompleted.status, 'completed');
   assert.deepEqual(parentCompleted.output, { child: { disposition: 'respond' } });
@@ -334,11 +354,13 @@ try {
     sop_id: 'bounded-result', title: 'Bounded result', steps: [{ id: 'record', executor: 'agent', blocking: true, title: 'Record', instructions: 'Record.', depends_on: [] }],
   }));
   const boundedRun = view(await call('sop_run_start', { sop_id: 'bounded-result', occurrence_key: 'bounded:1', triggered_by: 'test' }));
+  const boundedRunId = String(boundedRun.run_id);
+  const boundedLease = await leaseHandoff(boundedRunId, 'record', 'consumer:agent-bounded');
   assert.equal(errorCode(await call('sop_run_advance', {
-    run_id: String(boundedRun.run_id), step_id: 'record', completion_key: 'large', outcome: 'completed', principal: 'agent:test', result: { blob: 'x'.repeat(20_000) },
+    ...boundedLease, run_id: boundedRunId, step_id: 'record', completion_key: 'large', outcome: 'completed', principal: 'agent:test', result: { blob: 'x'.repeat(20_000) },
   })), 'sop_result_too_large');
   assert.equal(view(await call('sop_run_advance', {
-    run_id: String(boundedRun.run_id), step_id: 'record', completion_key: 'ref', outcome: 'completed', principal: 'agent:test', result: { summary: 'stored externally' }, result_ref: valueRef,
+    ...boundedLease, run_id: boundedRunId, step_id: 'record', completion_key: 'ref', outcome: 'completed', principal: 'agent:test', result: { summary: 'stored externally' }, result_ref: valueRef,
   })).status, 'completed');
 
   // YAML import uses the same v2 contract.

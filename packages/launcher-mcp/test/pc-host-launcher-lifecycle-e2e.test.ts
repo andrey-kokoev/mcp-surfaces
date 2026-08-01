@@ -19,7 +19,7 @@ import {
   structured,
   type JsonRecord,
   type JsonlMcpClient,
-} from '@narada2/mcp-e2e-harness';
+} from '@narada-core/mcp-e2e-harness';
 
 const TEST_ID = 'launcher-mcp-pc-host-lifecycle-e2e';
 const PACKAGE_ROOT = resolve(fileURLToPath(new URL('..', import.meta.url)), '..');

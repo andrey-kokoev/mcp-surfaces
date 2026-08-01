@@ -41,7 +41,7 @@ export function defineHttpFixtureSurface(url: string): DefinedSurface {
   return defineSurface({
     surface_id: 'mcp-fabric-http-fixture',
     surface_version: '0.1.0',
-    package: '@narada2/mcp-fabric-contracts',
+    package: '@narada-core/mcp-fabric-contracts',
     tools: definitions.map((definition) => ({
       definition,
       effect: { class: 'read', idempotency: 'replayable', confirmation: 'never' },

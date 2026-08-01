@@ -1,4 +1,4 @@
-# @narada2/mcp-transport
+# @narada-core/mcp-transport
 
 Shared transport helpers for MCP payload and output-reference mechanics.
 
@@ -62,8 +62,8 @@ materialized record.
 
 ## Exports
 
-- `@narada2/mcp-transport`
-- `@narada2/mcp-transport/mcp-payload-file`
+- `@narada-core/mcp-transport`
+- `@narada-core/mcp-transport/mcp-payload-file`
 
 Primary helper areas:
 
@@ -78,7 +78,7 @@ Primary helper areas:
 ## Verification
 
 ```powershell
-pnpm --filter @narada2/mcp-transport test
+pnpm --filter @narada-core/mcp-transport test
 ```
 
 ## Runtime Contract

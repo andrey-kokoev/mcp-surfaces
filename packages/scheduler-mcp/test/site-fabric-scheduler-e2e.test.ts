@@ -13,7 +13,7 @@ import {
   type JsonRecord,
   type JsonRpcResponse,
   type SpawnedJsonlMcpServer,
-} from '@narada2/mcp-e2e-harness';
+} from '@narada-core/mcp-e2e-harness';
 
 const TEST_ID = 'scheduler-mcp-pc-host-lifecycle-e2e';
 const PACKAGE_ROOT = resolve(fileURLToPath(new URL('..', import.meta.url)), '..');

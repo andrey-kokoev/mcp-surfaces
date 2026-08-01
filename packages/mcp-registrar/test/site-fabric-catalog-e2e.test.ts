@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { spawnSync } from 'node:child_process';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -11,7 +12,7 @@ import {
   spawnJsonlMcpServer,
   structured,
   type JsonRecord,
-} from '@narada2/mcp-e2e-harness';
+} from '@narada-core/mcp-e2e-harness';
 
 const siteRoot = createTemporaryE2eRoot('registrar-catalog-site-fabric-e2e');
 const resultPath = join(fileURLToPath(new URL('../..', import.meta.url)), '.tmp', 'e2e-results', 'mcp-registrar.site-fabric.full-catalog-sweep.json');
@@ -55,6 +56,24 @@ try {
     assert.ok(Array.isArray(tools) && tools.length > 0, JSON.stringify(item));
     assert.equal(new Set(tools.map(String)).size, tools.length, JSON.stringify(item));
   }
+
+  const workLifecycle = items.find((item) => item.id === 'work-lifecycle');
+  assert.ok(workLifecycle, 'work-lifecycle must be present in the registrar catalog');
+  const preparation = spawnSync(process.execPath, [
+    String(workLifecycle.entrypoint),
+    '--prepare',
+    '--site-root',
+    siteRoot,
+  ], {
+    cwd: siteRoot,
+    env: siteFabricChildEnv(siteRoot),
+    encoding: 'utf8',
+    windowsHide: true,
+    timeout: 30_000,
+    maxBuffer: 128 * 1024,
+  });
+  assert.equal(preparation.status, 0, preparation.stderr || preparation.stdout);
+  assert.equal((JSON.parse(preparation.stdout.trim()) as JsonRecord).status, 'prepared');
 
   writeFileSync(join(siteRoot, 'AGENTS.md'), '# Registrar catalog Site fabric e2e\n', 'utf8');
   mkdirSync(join(siteRoot, '.ai', 'mcp'), { recursive: true });

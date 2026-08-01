@@ -10,7 +10,7 @@ const SERVER_VERSION = '0.1.0';
 const PROTOCOL_VERSION = '2024-11-05';
 
 const DEFAULT_REPO_ROOT = 'D:/code/narada';
-const DEFAULT_PACKAGE_FILTER = '@narada2/cloudflare-carrier';
+const DEFAULT_PACKAGE_FILTER = '@narada-core/cloudflare-carrier';
 const DEFAULT_SESSION_FILE = '.narada/auth/cloudflare-operator-session.json';
 const DEFAULT_WORKER_URL = 'https://narada-cloudflare-carrier.andrei-kokoev.workers.dev';
 const DEFAULT_HEALTH_FILE = '.narada/site-continuity/health/cloudflare-continuity-health-last.json';

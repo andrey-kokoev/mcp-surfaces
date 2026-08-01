@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { runMcpProtocolSmoke, spawnJsonlMcpServer } from '@narada2/mcp-e2e-harness';
+import { runMcpProtocolSmoke, spawnJsonlMcpServer } from '@narada-core/mcp-e2e-harness';
 
 type ToolSummary = { name: string; annotations: { readOnlyHint: boolean }; inputSchema: { properties: Record<string, { default?: unknown }> } };
 const root = mkdtempSync(join(tmpdir(), 'mailbox-mcp-protocol-'));
@@ -16,6 +16,13 @@ try {
   assert.deepEqual(toolRows.map((tool) => tool.name), [
     'mailbox_guidance',
     'mailbox_doctor',
+    'mailbox_sync_generation',
+    'mailbox_message_admit',
+    'mailbox_fact_show',
+    'mailbox_generation_show',
+    'mailbox_outbox_consumer_register',
+    'mailbox_outbox_list',
+    'mailbox_outbox_ack',
     'mailbox_accounts_list',
     'mailbox_messages_list',
     'mailbox_message_show',
@@ -23,7 +30,15 @@ try {
     'mailbox_thread_show',
     'mailbox_output_show',
   ]);
-  assert.equal(toolRows.every((tool) => tool.annotations.readOnlyHint), true);
+  const mutationTools = new Set([
+    'mailbox_sync_generation',
+    'mailbox_message_admit',
+    'mailbox_outbox_consumer_register',
+    'mailbox_outbox_ack',
+  ]);
+  for (const tool of toolRows) {
+    assert.equal(tool.annotations.readOnlyHint, !mutationTools.has(tool.name), tool.name);
+  }
   const list = toolRows.find((tool) => tool.name === 'mailbox_messages_list');
   assert.ok(list);
   assert.equal(list.inputSchema.properties.limit.default, 20);

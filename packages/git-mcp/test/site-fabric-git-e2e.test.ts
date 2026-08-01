@@ -10,7 +10,7 @@ import {
   siteFabricChildEnv,
   spawnJsonlMcpServer,
   type JsonRecord,
-} from '@narada2/mcp-e2e-harness';
+} from '@narada-core/mcp-e2e-harness';
 
 const siteRoot = createTemporaryE2eRoot('git-site-fabric-e2e');
 const repo = join(siteRoot, 'repo');

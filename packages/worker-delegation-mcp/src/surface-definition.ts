@@ -1,4 +1,4 @@
-import { defineNativeSurface, type DefinedSurface, type McpToolDefinition } from '@narada2/mcp-fabric-contracts';
+import { defineNativeSurface, type DefinedSurface, type McpToolDefinition } from '@narada-core/mcp-fabric-contracts';
 import { listTools } from './tool-list.js';
 
 const READ_ONLY_TOOLS = ["worker_guidance","worker_policy_inspect","worker_config_resolve","worker_cognition_defaults_inspect","worker_run_status","worker_runs_list","worker_run_wait","worker_run_wait_batch","worker_runs_synthesize","worker_dashboard_describe","worker_output_show","worker_operator_affordances"] as const;
@@ -7,7 +7,7 @@ export function surfaceDefinition(): DefinedSurface {
   return defineNativeSurface({
     surface_id: 'worker-delegation',
     surface_version: '0.1.0',
-    package: '@narada2/worker-delegation-mcp',
+    package: '@narada-core/worker-delegation-mcp',
     entrypoint: '{mcp_surfaces_root}/worker-delegation-mcp/dist/src/main.js',
     tools: listTools() as McpToolDefinition[],
     read_only_tools: READ_ONLY_TOOLS,

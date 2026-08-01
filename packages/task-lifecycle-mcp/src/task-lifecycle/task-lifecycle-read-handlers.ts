@@ -1,5 +1,5 @@
 import { DEFAULT_INLINE_PAYLOAD_CHAR_LIMIT } from '../mcp-payload-file.js';
-import { normalizeTaskTags, parseStoredTaskTags } from '@narada2/task-governance-core/task-tags';
+import { normalizeTaskTags, parseStoredTaskTags } from '@narada-core/task-governance-core/task-tags';
 import { withSqliteBusyRetry, withStoreSavepoint } from './sqlite-contention.js';
 import { buildCompactExecutabilityPosture } from './task-lifecycle-executability-handlers.js';
 

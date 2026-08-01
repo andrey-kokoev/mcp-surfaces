@@ -9,7 +9,7 @@ import {
   runMcpProtocolSmoke,
   siteFabricChildEnv,
   spawnJsonlMcpServer,
-} from '@narada2/mcp-e2e-harness';
+} from '@narada-core/mcp-e2e-harness';
 
 const siteRoot = createTemporaryE2eRoot('agent-context-site-fabric-e2e');
 const dbPath = `${siteRoot}/.ai/state/agent-context.sqlite`;

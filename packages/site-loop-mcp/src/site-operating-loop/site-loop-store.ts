@@ -1,7 +1,7 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { resolve } from 'node:path';
-import type { SqliteTaskLifecycleStore } from '@narada2/task-governance-core/task-lifecycle-store';
-import { getSiteOperatingLoopRuntimeHost as getCanonicalSiteOperatingLoopRuntimeHost } from '@narada2/site-operating-loop/site-loop-store';
+import type { SqliteTaskLifecycleStore } from '@narada-core/task-governance-core/task-lifecycle-store';
+import { getSiteOperatingLoopRuntimeHost as getCanonicalSiteOperatingLoopRuntimeHost } from '@narada-core/site-operating-loop/site-loop-store';
 import {
   boundedSiteLoopSummary,
   pruneSiteLoopEvidence,

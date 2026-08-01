@@ -1,0 +1,862 @@
+import { createHash, randomUUID } from 'node:crypto';
+import { existsSync } from 'node:fs';
+import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
+import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
+import {
+  loadControlPlaneRuntime,
+  type ControlPlaneRuntime,
+  type Fact,
+  type FactStore,
+  type ScopeConfig,
+  type Source,
+  type SourceBatch,
+  type SourceRecord,
+} from './control-plane-runtime.js';
+import {
+  MailboxDomainStore,
+  sha256,
+  stableId,
+  type GenerationRecordRow,
+  type JsonRecord,
+  type StagedGenerationRecord,
+  type SyncGenerationRow,
+} from './mailbox-domain-store.js';
+
+const DOMAIN_SCHEMA = 'narada.domain_operation.v1';
+const GENERATION_ARTIFACT_SCHEMA = 'narada.mailbox.sync_generation_artifact.v1';
+const DEFAULT_CONFIG_PATH = 'config/config.json';
+const DOMAIN_RELATIVE_ROOT = join('.narada', 'runtime', 'mailbox-domain');
+const MAX_IDEMPOTENCY_KEY = 512;
+const MAX_SCOPE_ID = 256;
+
+export interface MailboxDomainServiceOptions {
+  sourceFactory?: (scope: ScopeConfig) => Source;
+  now?: () => string;
+  faultInjector?: (point: 'after_batch_staged' | 'after_runner', generationId: string) => void | Promise<void>;
+  runtime?: ControlPlaneRuntime;
+}
+
+export class MailboxDomainService {
+  private readonly siteRoot: string;
+  private readonly options: MailboxDomainServiceOptions;
+
+  constructor(siteRoot: string, options: MailboxDomainServiceOptions = {}) {
+    this.siteRoot = resolve(siteRoot);
+    this.options = options;
+  }
+
+  async syncGeneration(args: JsonRecord): Promise<JsonRecord> {
+    const kernel = await this.runtime();
+    const idempotencyKey = requiredBoundedString(args.idempotency_key, 'mailbox_sync_idempotency_key_required', MAX_IDEMPOTENCY_KEY);
+    const loaded = await this.loadScope(args, kernel);
+    const configFingerprint = syncConfigFingerprint(loaded.scope);
+    const requestFingerprint = fingerprint({
+      schema: 'narada.mailbox.sync_generation_request.v1',
+      scope_id: loaded.scope.scope_id,
+      config_fingerprint: configFingerprint,
+    });
+    const generationId = stableId('mbg_', idempotencyKey);
+    const store = this.openStore();
+    const now = this.now();
+    const claim = store.claimGeneration({
+      generation_id: generationId,
+      idempotency_key: idempotencyKey,
+      request_fingerprint: requestFingerprint,
+      scope_id: loaded.scope.scope_id,
+      config_fingerprint: configFingerprint,
+      now,
+    });
+    if (claim.generation.status === 'completed') {
+      store.close();
+      return generationOperation(claim.generation, true);
+    }
+    if (claim.generation.status === 'failed') {
+      store.close();
+      return blockedGenerationOperation(claim.generation, true);
+    }
+    const leaseToken = requiredBoundedString(claim.lease_token, 'mailbox_sync_lease_missing', 128);
+    let leaseReleased = false;
+    let heartbeatError: Error | null = null;
+    const heartbeat = setInterval(() => {
+      try {
+        store.renewLease(loaded.scope.scope_id, generationId, leaseToken, this.now());
+      } catch (error) {
+        heartbeatError = asError(error);
+      }
+    }, 10_000);
+    heartbeat.unref();
+
+    const assertLease = (): void => {
+      if (heartbeatError) throw heartbeatError;
+      store.assertLease(loaded.scope.scope_id, generationId, leaseToken, this.now());
+    };
+
+    let factStore: FactStore | null = null;
+    try {
+      const cursorStore = new kernel.FileCursorStore({ rootDir: loaded.scope.root_dir, scopeId: loaded.scope.scope_id });
+      const currentCursor = await cursorStore.read();
+      let generation = store.requireGeneration(generationId);
+      if (generation.status === 'staged') {
+        await readGenerationArtifact(generation, this.generationArtifactPath(generationId));
+        if (generation.next_cursor !== null && currentCursor === generation.next_cursor) {
+          assertLease();
+          store.reconcileApplicationAfterCursorCommit(generationId);
+          generation = store.finalizeGeneration(generationId, leaseToken, this.now());
+          leaseReleased = true;
+          return generationOperation(generation, true);
+        }
+        if (generation.next_cursor === null && generationReady(store.generationRecords(generationId))) {
+          generation = store.finalizeGeneration(generationId, leaseToken, this.now());
+          leaseReleased = true;
+          return generationOperation(generation, true);
+        }
+        if (currentCursor !== generation.parent_cursor) {
+          throw new Error(`mailbox_sync_cursor_conflict:${generationId}`);
+        }
+      }
+
+      const factDbDir = join(loaded.scope.root_dir, '.narada');
+      await mkdir(factDbDir, { recursive: true });
+      const factDb = new kernel.Database(join(factDbDir, 'facts.db'));
+      factDb.pragma('journal_mode = WAL');
+      factStore = new kernel.SqliteFactStore({ db: factDb });
+      factStore.initSchema();
+
+      const source = new GenerationSource({
+        generationId,
+        leaseToken,
+        store,
+        source: this.options.sourceFactory?.(loaded.scope) ?? createGraphSource(kernel, loaded.scope),
+        sourceRecordToFact: kernel.sourceRecordToFact,
+        artifactPath: this.generationArtifactPath(generationId),
+        assertLease,
+        now: () => this.now(),
+        afterStaged: async () => {
+          await this.options.faultInjector?.('after_batch_staged', generationId);
+        },
+      });
+      const applyLog = new kernel.FileApplyLogStore({ rootDir: loaded.scope.root_dir });
+      const projector = new kernel.DefaultProjector({
+        rootDir: loaded.scope.root_dir,
+        tombstonesEnabled: loaded.scope.normalize.tombstones_enabled,
+      });
+      const trackedApplyLog = {
+        hasApplied: async (recordId: string): Promise<boolean> => {
+          assertLease();
+          const applied = await applyLog.hasApplied(recordId);
+          if (applied) store.markRecordApplication(generationId, recordId, 'already_applied');
+          return applied;
+        },
+        markApplied: async (recordId: string, payload?: unknown): Promise<void> => {
+          assertLease();
+          await applyLog.markApplied(recordId, payload);
+          assertLease();
+        },
+      };
+      const trackedProjector = {
+        applyRecord: async (record: SourceRecord) => {
+          assertLease();
+          const result = await projector.applyRecord(record);
+          assertLease();
+          store.markRecordApplication(
+            generationId,
+            record.recordId,
+            result.applied ? 'projected' : 'not_applied',
+          );
+          return result;
+        },
+      };
+      const trackedCursorStore = {
+        read: async () => await cursorStore.read(),
+        commit: async (nextCursor: string): Promise<void> => {
+          assertLease();
+          await cursorStore.commit(nextCursor);
+          assertLease();
+        },
+      };
+      const trackedFactStore = {
+        db: factStore.db,
+        initSchema: () => factStore!.initSchema(),
+        ingest: (fact: Omit<Fact, 'created_at'>) => {
+          assertLease();
+          const result = factStore!.ingest(fact);
+          assertLease();
+          return result;
+        },
+        getById: (factId: string) => factStore!.getById(factId),
+        getBySourceRecord: (sourceId: string, sourceRecordId: string) => factStore!.getBySourceRecord(sourceId, sourceRecordId),
+        getFactsForCursor: (sourceId: string, sourceCursor: string) => factStore!.getFactsForCursor(sourceId, sourceCursor),
+        getUnadmittedFacts: (sourceId?: string, limit?: number) => factStore!.getUnadmittedFacts(sourceId, limit),
+        markAdmitted: (factIds: string[]) => factStore!.markAdmitted(factIds),
+        getFactsByScope: (scopeId: string, selector?: unknown) => factStore!.getFactsByScope(scopeId, selector),
+        close: () => undefined,
+      };
+      const lock = new kernel.FileLock({
+        rootDir: loaded.scope.root_dir,
+        acquireTimeoutMs: loaded.scope.runtime.acquire_lock_timeout_ms,
+        staleAfterMs: 60 * 60_000,
+      });
+      const runner = new kernel.DefaultSyncRunner({
+        rootDir: loaded.scope.root_dir,
+        source,
+        cursorStore: trackedCursorStore,
+        applyLogStore: trackedApplyLog,
+        projector: trackedProjector,
+        factStore: trackedFactStore,
+        requireFactPersistence: true,
+        cleanupTmp: loaded.scope.runtime.cleanup_tmp_on_startup
+          ? async () => await kernel.cleanupTmp({ rootDir: loaded.scope.root_dir })
+          : undefined,
+        acquireLock: async () => await lock.acquire(),
+        continueOnError: false,
+      });
+      const result = await runner.syncOnce();
+      await this.options.faultInjector?.('after_runner', generationId);
+      assertLease();
+      if (result.status === 'success') {
+        const staged = store.requireGeneration(generationId);
+        if (staged.status !== 'staged') throw new Error(`mailbox_sync_batch_not_staged:${generationId}`);
+        const committedCursor = await cursorStore.read();
+        if (staged.next_cursor !== null && committedCursor !== staged.next_cursor) {
+          throw new Error(`mailbox_sync_cursor_not_committed:${generationId}`);
+        }
+        generation = store.finalizeGeneration(generationId, leaseToken, this.now());
+        leaseReleased = true;
+        return generationOperation(generation, false);
+      }
+
+      if (result.status === 'retryable_failure' || isLockContention(result.error)) {
+        store.releaseLease(loaded.scope.scope_id, generationId, leaseToken, this.now());
+        leaseReleased = true;
+        throw new Error(`mailbox_sync_retryable:${boundedError(result.error ?? 'sync_retryable_failure')}`);
+      }
+      generation = store.failGeneration(
+        generationId,
+        leaseToken,
+        boundedError(result.error ?? 'sync_fatal_failure'),
+        this.now(),
+      );
+      leaseReleased = true;
+      return blockedGenerationOperation(generation, false);
+    } finally {
+      clearInterval(heartbeat);
+      factStore?.close();
+      if (!leaseReleased) {
+        try {
+          store.releaseLease(loaded.scope.scope_id, generationId, leaseToken, this.now());
+        } catch {
+          // A lost lease is already a fail-closed outcome. Its current owner is
+          // the only process allowed to release it.
+        }
+      }
+      store.close();
+    }
+  }
+
+  async admitMessage(args: JsonRecord): Promise<JsonRecord> {
+    const kernel = await this.runtime();
+    const idempotencyKey = requiredBoundedString(args.idempotency_key, 'mailbox_admission_idempotency_key_required', MAX_IDEMPOTENCY_KEY);
+    const factId = requiredBoundedString(args.fact_id, 'mailbox_admission_fact_id_required', 256);
+    const loaded = await this.loadScope(args, kernel);
+    const policyVersion = admissionPolicyVersion(loaded.scope);
+    const expectedPolicyVersion = optionalBoundedString(args.policy_version, 128);
+    if (expectedPolicyVersion && expectedPolicyVersion !== policyVersion) {
+      throw new Error(`mailbox_admission_policy_version_mismatch:${expectedPolicyVersion}:${policyVersion}`);
+    }
+    const factDb = new kernel.Database(join(loaded.scope.root_dir, '.narada', 'facts.db'));
+    const facts = new kernel.SqliteFactStore({ db: factDb });
+    facts.initSchema();
+    try {
+      const fact = facts.getById(factId);
+      if (!fact) throw new Error(`mailbox_admission_fact_not_found:${factId}`);
+      if (fact.fact_type !== 'mail.message.discovered') {
+        throw new Error(`mailbox_admission_fact_type_invalid:${fact.fact_type}`);
+      }
+      const metadata = mailMetadata(fact);
+      if (metadata.mailbox_id !== loaded.scope.scope_id) {
+        throw new Error(`mailbox_admission_scope_mismatch:${metadata.mailbox_id}:${loaded.scope.scope_id}`);
+      }
+      const evaluation = kernel.evaluateMailFactAdmission(fact, loaded.scope.admission?.mail);
+      const requestFingerprint = fingerprint({
+        schema: 'narada.mailbox.message_admission_request.v1',
+        scope_id: loaded.scope.scope_id,
+        fact_id: factId,
+        policy_version: policyVersion,
+      });
+      const admissionId = stableId('mba_', idempotencyKey);
+      const correlationKeys = trustedCorrelationKeys(metadata);
+      const decision: JsonRecord = {
+        schema: 'narada.mailbox.message_admission_receipt.v1',
+        admission_id: admissionId,
+        decision: evaluation.admitted ? 'admitted' : 'rejected',
+        reason: evaluation.reason,
+        policy_version: policyVersion,
+        fact_id: factId,
+        source_kind: 'mailbox_message',
+        source_scope: metadata.mailbox_id,
+        immutable_source_id: metadata.message_id,
+        summary: metadata.subject ? `Mailbox message: ${metadata.subject}`.slice(0, 500) : 'Mailbox message',
+        source_ref: {
+          schema: 'narada.work_lifecycle.source_ref.v1',
+          mailbox_id: metadata.mailbox_id,
+          message_id: metadata.message_id,
+          fact_id: factId,
+          source_record_id: fact.provenance.source_record_id,
+          source_version: fact.provenance.source_version,
+          ...(metadata.conversation_id ? { conversation_id: metadata.conversation_id } : {}),
+          ...(metadata.internet_message_id ? { internet_message_id: metadata.internet_message_id } : {}),
+        },
+        correlation_keys: correlationKeys,
+        evaluated_metadata: {
+          folder_refs: evaluation.folder_refs,
+          sender_email: evaluation.sender_email,
+        },
+        ...(evaluation.admitted ? {
+          ticket_admit_source_arguments: {
+            source_kind: 'mailbox_message',
+            source_scope: metadata.mailbox_id,
+            immutable_source_id: metadata.message_id,
+            causation_id: factId,
+            policy_version: policyVersion,
+            summary: metadata.subject ? `Mailbox message: ${metadata.subject}`.slice(0, 500) : 'Mailbox message',
+            source_ref: {
+              mailbox_id: metadata.mailbox_id,
+              message_id: metadata.message_id,
+              fact_id: factId,
+              source_record_id: fact.provenance.source_record_id,
+              source_version: fact.provenance.source_version,
+              ...(metadata.conversation_id ? { conversation_id: metadata.conversation_id } : {}),
+            },
+            correlation_keys: correlationKeys,
+          },
+        } : {}),
+      };
+      const store = this.openStore();
+      try {
+        const recorded = store.recordAdmission({
+          admission_id: admissionId,
+          idempotency_key: idempotencyKey,
+          request_fingerprint: requestFingerprint,
+          scope_id: loaded.scope.scope_id,
+          fact_id: factId,
+          policy_version: policyVersion,
+          decision,
+          now: this.now(),
+        });
+        return {
+          schema: DOMAIN_SCHEMA,
+          operation_ref: `mailbox-admission:${admissionId}`,
+          outcome: 'completed',
+          result: { ...recorded.decision, idempotency_replayed: recorded.replayed },
+        };
+      } finally {
+        store.close();
+      }
+    } finally {
+      facts.close();
+    }
+  }
+
+  async factShow(args: JsonRecord): Promise<JsonRecord> {
+    const kernel = await this.runtime();
+    const factId = requiredBoundedString(args.fact_id, 'mailbox_fact_id_required', 256);
+    const loaded = await this.loadScope(args, kernel);
+    const databasePath = join(loaded.scope.root_dir, '.narada', 'facts.db');
+    if (!existsSync(databasePath)) {
+      return {
+        schema: 'narada.mailbox.immutable_fact.v1',
+        status: 'not_found',
+        fact_id: factId,
+        scope_id: loaded.scope.scope_id,
+      };
+    }
+    const factDb = new kernel.Database(databasePath);
+    const facts = new kernel.SqliteFactStore({ db: factDb });
+    try {
+      const fact = facts.getById(factId);
+      if (!fact) {
+        return {
+          schema: 'narada.mailbox.immutable_fact.v1',
+          status: 'not_found',
+          fact_id: factId,
+          scope_id: loaded.scope.scope_id,
+        };
+      }
+      if (fact.fact_type !== 'mail.message.discovered') {
+        throw new Error(`mailbox_fact_type_invalid:${fact.fact_type}`);
+      }
+      const payload = requireRecord(JSON.parse(fact.payload_json) as unknown, 'mailbox_fact_payload_invalid');
+      const metadata = mailMetadata(fact);
+      if (metadata.mailbox_id !== loaded.scope.scope_id) {
+        throw new Error(`mailbox_fact_scope_mismatch:${metadata.mailbox_id}:${loaded.scope.scope_id}`);
+      }
+      return {
+        schema: 'narada.mailbox.immutable_fact.v1',
+        status: 'ok',
+        scope_id: loaded.scope.scope_id,
+        fact: {
+          fact_id: fact.fact_id,
+          fact_type: fact.fact_type,
+          provenance: fact.provenance,
+          payload_sha256: createHash('sha256').update(fact.payload_json).digest('hex'),
+          payload,
+          created_at: fact.created_at,
+        },
+      };
+    } finally {
+      facts.close();
+    }
+  }
+
+  generationShow(args: JsonRecord): JsonRecord {
+    const generationId = requiredBoundedString(args.generation_id, 'mailbox_generation_id_required', 128);
+    const store = this.openStore();
+    try {
+      const generation = store.requireGeneration(generationId);
+      return {
+        schema: 'narada.mailbox.sync_generation.v1',
+        generation: publicGeneration(generation),
+        records: store.generationRecords(generationId).slice(0, 100).map(publicGenerationRecord),
+        records_truncated: generation.batch_record_count > 100,
+      };
+    } finally {
+      store.close();
+    }
+  }
+
+  outboxConsumerRegister(args: JsonRecord): JsonRecord {
+    const consumerId = requiredBoundedString(args.consumer_id, 'mailbox_outbox_consumer_id_required', 256);
+    const startAt = timestamp(args.start_at, 'mailbox_outbox_start_at_required');
+    const store = this.openStore();
+    try {
+      return {
+        schema: 'narada.mailbox.outbox_consumer.v1',
+        consumer: store.registerOutboxConsumer(consumerId, startAt, this.now()),
+      };
+    } finally {
+      store.close();
+    }
+  }
+
+  outboxList(args: JsonRecord): JsonRecord {
+    const consumerId = requiredBoundedString(args.consumer_id, 'mailbox_outbox_consumer_id_required', 256);
+    const limit = boundedInteger(args.limit, 100, 1, 100);
+    const store = this.openStore();
+    try {
+      const items = store.listOutbox(consumerId, limit);
+      return { schema: 'narada.mailbox.outbox_list.v1', consumer_id: consumerId, count: items.length, items };
+    } finally {
+      store.close();
+    }
+  }
+
+  outboxAck(args: JsonRecord): JsonRecord {
+    const consumerId = requiredBoundedString(args.consumer_id, 'mailbox_outbox_consumer_id_required', 256);
+    const eventId = requiredBoundedString(args.event_id, 'mailbox_outbox_event_id_required', 256);
+    const receipt = requireRecord(args.receipt, 'mailbox_outbox_receipt_required');
+    const store = this.openStore();
+    try {
+      return {
+        schema: 'narada.mailbox.outbox_ack.v1',
+        ...store.ackOutbox(consumerId, eventId, receipt, this.now()),
+      };
+    } finally {
+      store.close();
+    }
+  }
+
+  private async loadScope(args: JsonRecord, kernel: ControlPlaneRuntime): Promise<{ scope: ScopeConfig; configPath: string }> {
+    const configArgument = optionalBoundedString(args.config_path, 1024) ?? DEFAULT_CONFIG_PATH;
+    const configPath = resolve(this.siteRoot, configArgument);
+    assertInside(this.siteRoot, configPath, 'mailbox_config_path_outside_site');
+    const config = await kernel.loadConfig({ path: configPath });
+    const requestedScope = optionalBoundedString(args.scope_id, MAX_SCOPE_ID);
+    const scope = requestedScope
+      ? config.scopes.find((candidate) => candidate.scope_id === requestedScope)
+      : config.scopes.length === 1 ? config.scopes[0] : undefined;
+    if (!scope) throw new Error(requestedScope ? `mailbox_scope_not_found:${requestedScope}` : 'mailbox_scope_id_required');
+    const rootDir = resolve(scope.root_dir);
+    assertInside(this.siteRoot, rootDir, 'mailbox_scope_root_outside_site');
+    return { scope: { ...scope, root_dir: rootDir }, configPath };
+  }
+
+  private openStore(): MailboxDomainStore {
+    return new MailboxDomainStore(join(this.siteRoot, DOMAIN_RELATIVE_ROOT, 'mailbox-domain.db'));
+  }
+
+  private generationArtifactPath(generationId: string): string {
+    return join(this.siteRoot, DOMAIN_RELATIVE_ROOT, 'generations', `${generationId}.json`);
+  }
+
+  private now(): string {
+    return this.options.now?.() ?? new Date().toISOString();
+  }
+
+  private async runtime(): Promise<ControlPlaneRuntime> {
+    return this.options.runtime ?? await loadControlPlaneRuntime(this.siteRoot);
+  }
+}
+
+class GenerationSource implements Source {
+  readonly sourceId: string;
+  private readonly input: {
+    generationId: string;
+    leaseToken: string;
+    store: MailboxDomainStore;
+    source: Source;
+    sourceRecordToFact: ControlPlaneRuntime['sourceRecordToFact'];
+    artifactPath: string;
+    assertLease: () => void;
+    now: () => string;
+    afterStaged: () => Promise<void>;
+  };
+
+  constructor(input: GenerationSource['input']) {
+    this.input = input;
+    this.sourceId = input.source.sourceId;
+  }
+
+  async pull(checkpoint?: string | null): Promise<SourceBatch> {
+    this.input.assertLease();
+    const generation = this.input.store.requireGeneration(this.input.generationId);
+    if (generation.status === 'staged') {
+      const batch = await readGenerationArtifact(generation, this.input.artifactPath);
+      if ((checkpoint ?? null) !== (batch.priorCheckpoint ?? null)) {
+        throw new Error(`mailbox_sync_staged_parent_cursor_mismatch:${this.input.generationId}`);
+      }
+      return batch;
+    }
+
+    const existingArtifact = await readGenerationArtifactAt(this.input.artifactPath, this.input.generationId);
+    const batch = existingArtifact ?? await this.input.source.pull(checkpoint ?? null);
+    this.input.assertLease();
+    if ((batch.priorCheckpoint ?? checkpoint ?? null) !== (checkpoint ?? null)) {
+      throw new Error(`mailbox_sync_source_parent_cursor_mismatch:${this.input.generationId}`);
+    }
+    const artifact = existingArtifact
+      ? await describeExistingArtifact(this.input.artifactPath)
+      : await writeGenerationArtifact(this.input.artifactPath, this.input.generationId, batch);
+    const records = batch.records.map((record) => stagedRecord(
+      record,
+      batch.nextCheckpoint ?? null,
+      this.input.sourceRecordToFact,
+    ));
+    this.input.store.stageGeneration({
+      generation_id: this.input.generationId,
+      lease_token: this.input.leaseToken,
+      parent_cursor: batch.priorCheckpoint ?? checkpoint ?? null,
+      next_cursor: batch.nextCheckpoint ?? null,
+      batch_path: this.input.artifactPath,
+      batch_sha256: artifact.sha256,
+      records,
+      now: this.input.now(),
+    });
+    await this.input.afterStaged();
+    this.input.assertLease();
+    return batch;
+  }
+}
+
+function createGraphSource(kernel: ControlPlaneRuntime, scope: ScopeConfig): Source {
+  const configured = scope.graph ?? scope.sources.find((source) => source.type === 'graph');
+  if (!configured?.user_id) throw new Error(`mailbox_scope_graph_source_required:${scope.scope_id}`);
+  const graph = {
+    tenant_id: configured.tenant_id,
+    client_id: configured.client_id,
+    client_secret: configured.client_secret,
+    user_id: configured.user_id,
+    base_url: configured.base_url,
+    prefer_immutable_ids: configured.prefer_immutable_ids ?? true,
+  };
+  const tokenProvider = kernel.buildGraphTokenProvider({ graph });
+  const client = new kernel.GraphHttpClient({
+    tokenProvider,
+    baseUrl: graph.base_url,
+    preferImmutableIds: graph.prefer_immutable_ids,
+  });
+  const adapter = new kernel.DefaultGraphAdapter({
+    mailbox_id: scope.scope_id,
+    user_id: graph.user_id,
+    client,
+    adapter_scope: {
+      mailbox_id: scope.scope_id,
+      included_container_refs: scope.scope.included_container_refs,
+      included_item_kinds: scope.scope.included_item_kinds,
+    },
+    body_policy: scope.normalize.body_policy,
+    attachment_policy: scope.normalize.attachment_policy,
+    include_headers: scope.normalize.include_headers,
+    normalize_folder_ref: kernel.normalizeFolderRef,
+    normalize_flagged: kernel.normalizeFlagged,
+  });
+  return new kernel.ExchangeSource({ adapter, sourceId: scope.scope_id });
+}
+
+async function writeGenerationArtifact(path: string, generationId: string, batch: SourceBatch): Promise<{ sha256: string }> {
+  await mkdir(dirname(path), { recursive: true });
+  const document = { schema: GENERATION_ARTIFACT_SCHEMA, generation_id: generationId, batch };
+  const bytes = `${JSON.stringify(document)}\n`;
+  const digest = sha256(bytes);
+  const temporary = `${path}.${process.pid}.${randomUUID()}.tmp`;
+  try {
+    await writeFile(temporary, bytes, { encoding: 'utf8', flag: 'wx' });
+    try {
+      await rename(temporary, path);
+    } catch (error) {
+      const existing = await readFile(path, 'utf8').catch(() => null);
+      if (existing === null || sha256(existing) !== digest) throw error;
+      await rm(temporary, { force: true });
+    }
+    return { sha256: digest };
+  } catch (error) {
+    await rm(temporary, { force: true }).catch(() => undefined);
+    throw error;
+  }
+}
+
+async function describeExistingArtifact(path: string): Promise<{ sha256: string }> {
+  return { sha256: sha256(await readFile(path, 'utf8')) };
+}
+
+async function readGenerationArtifact(generation: SyncGenerationRow, expectedPath: string): Promise<SourceBatch> {
+  if (!generation.batch_path || !generation.batch_sha256) throw new Error(`mailbox_sync_generation_artifact_missing:${generation.generation_id}`);
+  if (resolve(generation.batch_path) !== resolve(expectedPath)) {
+    throw new Error(`mailbox_sync_generation_artifact_path_mismatch:${generation.generation_id}`);
+  }
+  const bytes = await readFile(generation.batch_path, 'utf8');
+  if (sha256(bytes) !== generation.batch_sha256) throw new Error(`mailbox_sync_generation_artifact_hash_mismatch:${generation.generation_id}`);
+  return parseGenerationArtifact(bytes, generation.generation_id);
+}
+
+async function readGenerationArtifactAt(path: string, generationId: string): Promise<SourceBatch | null> {
+  const bytes = await readFile(path, 'utf8').catch((error: NodeJS.ErrnoException) => {
+    if (error.code === 'ENOENT') return null;
+    throw error;
+  });
+  return bytes === null ? null : parseGenerationArtifact(bytes, generationId);
+}
+
+function parseGenerationArtifact(bytes: string, generationId: string): SourceBatch {
+  const document = requireRecord(JSON.parse(bytes) as unknown, 'mailbox_sync_generation_artifact_invalid');
+  if (document.schema !== GENERATION_ARTIFACT_SCHEMA || document.generation_id !== generationId) {
+    throw new Error(`mailbox_sync_generation_artifact_identity_mismatch:${generationId}`);
+  }
+  const batch = requireRecord(document.batch, 'mailbox_sync_generation_batch_invalid');
+  if (!Array.isArray(batch.records)) throw new Error('mailbox_sync_generation_records_invalid');
+  return batch as unknown as SourceBatch;
+}
+
+function stagedRecord(
+  record: SourceRecord,
+  sourceCursor: string | null,
+  sourceRecordToFact: ControlPlaneRuntime['sourceRecordToFact'],
+): StagedGenerationRecord {
+  const event = requireRecord(record.payload, `mailbox_sync_record_payload_invalid:${record.recordId}`);
+  const fact = sourceRecordToFact(record, sourceCursor);
+  return {
+    record_id: record.recordId,
+    ordinal: typeof record.ordinal === 'string' ? record.ordinal : null,
+    fact_id: fact.fact_id,
+    event_kind: optionalBoundedString(event.event_kind, 64) ?? 'unknown',
+    message_id: optionalBoundedString(event.message_id, 512),
+    mailbox_id: optionalBoundedString(event.mailbox_id, 512),
+    conversation_id: optionalBoundedString(event.conversation_id, 1024),
+    source_version: optionalBoundedString(event.source_version, 1024),
+  };
+}
+
+function generationReady(records: GenerationRecordRow[]): boolean {
+  return records.every((record) => record.application_status !== 'staged');
+}
+
+function generationOperation(generation: SyncGenerationRow, replayed: boolean): JsonRecord {
+  const receipt = generation.receipt ?? {};
+  return {
+    schema: DOMAIN_SCHEMA,
+    operation_ref: `mailbox-sync:${generation.generation_id}`,
+    outcome: 'completed',
+    result: { ...receipt, idempotency_replayed: replayed },
+    result_ref: {
+      schema: 'narada.mcp_result_ref.v1',
+      surface_id: 'mailbox',
+      tool_name: 'mailbox_generation_show',
+      arguments: { generation_id: generation.generation_id },
+    },
+  };
+}
+
+function blockedGenerationOperation(generation: SyncGenerationRow, replayed: boolean): JsonRecord {
+  const message = generation.error_message ?? 'mailbox_sync_failed';
+  return {
+    schema: DOMAIN_SCHEMA,
+    operation_ref: `mailbox-sync:${generation.generation_id}`,
+    outcome: 'completed',
+    result: {
+      schema: 'narada.mailbox.sync_generation_failure.v1',
+      generation_id: generation.generation_id,
+      scope_id: generation.scope_id,
+      status: 'blocked',
+      error_message: message,
+      idempotency_replayed: replayed,
+    },
+    result_ref: {
+      schema: 'narada.mcp_result_ref.v1',
+      surface_id: 'mailbox',
+      tool_name: 'mailbox_generation_show',
+      arguments: { generation_id: generation.generation_id },
+    },
+  };
+}
+
+function publicGeneration(generation: SyncGenerationRow): JsonRecord {
+  return {
+    generation_id: generation.generation_id,
+    scope_id: generation.scope_id,
+    config_fingerprint: generation.config_fingerprint,
+    status: generation.status,
+    parent_cursor_sha256: nullableHash(generation.parent_cursor),
+    next_cursor_sha256: nullableHash(generation.next_cursor),
+    batch_sha256: generation.batch_sha256,
+    batch_record_count: generation.batch_record_count,
+    receipt: generation.receipt,
+    error_message: generation.error_message,
+    created_at: generation.created_at,
+    updated_at: generation.updated_at,
+    completed_at: generation.completed_at,
+  };
+}
+
+function publicGenerationRecord(record: GenerationRecordRow): JsonRecord {
+  return {
+    record_id: record.record_id,
+    fact_id: record.fact_id,
+    event_kind: record.event_kind,
+    message_id: record.message_id,
+    mailbox_id: record.mailbox_id,
+    conversation_id: record.conversation_id,
+    source_version: record.source_version,
+    application_status: record.application_status,
+  };
+}
+
+function syncConfigFingerprint(scope: ScopeConfig): string {
+  const graph = scope.graph ?? scope.sources.find((source) => source.type === 'graph');
+  return fingerprint({
+    schema: 'narada.mailbox.sync_config.v1',
+    scope_id: scope.scope_id,
+    root_dir: scope.root_dir,
+    source: graph ? {
+      type: 'graph',
+      user_id: graph.user_id,
+      base_url: graph.base_url,
+      prefer_immutable_ids: graph.prefer_immutable_ids ?? true,
+    } : scope.sources[0] ?? null,
+    scope: scope.scope,
+    normalize: scope.normalize,
+  });
+}
+
+function admissionPolicyVersion(scope: ScopeConfig): string {
+  return `sha256:${fingerprint({
+    schema: 'narada.mailbox.admission_policy.v1',
+    scope_id: scope.scope_id,
+    policy: scope.admission?.mail ?? {},
+  })}`;
+}
+
+function mailMetadata(fact: Fact): {
+  mailbox_id: string;
+  message_id: string;
+  conversation_id: string | null;
+  internet_message_id: string | null;
+  subject: string | null;
+} {
+  const envelope = requireRecord(JSON.parse(fact.payload_json) as unknown, 'mailbox_fact_payload_invalid');
+  const event = requireRecord(envelope.event, 'mailbox_fact_event_invalid');
+  const payload = event.payload && typeof event.payload === 'object' && !Array.isArray(event.payload)
+    ? event.payload as JsonRecord
+    : {};
+  return {
+    mailbox_id: requiredBoundedString(event.mailbox_id ?? payload.mailbox_id, 'mailbox_fact_mailbox_id_missing', 512),
+    message_id: requiredBoundedString(event.message_id ?? payload.message_id, 'mailbox_fact_message_id_missing', 512),
+    conversation_id: optionalBoundedString(event.conversation_id ?? payload.conversation_id, 1024),
+    internet_message_id: optionalBoundedString(payload.internet_message_id, 1024),
+    subject: optionalBoundedString(payload.subject, 500),
+  };
+}
+
+function trustedCorrelationKeys(metadata: ReturnType<typeof mailMetadata>): JsonRecord[] {
+  const keys: JsonRecord[] = [];
+  if (metadata.conversation_id) {
+    keys.push({ kind: 'mailbox_conversation', scope: metadata.mailbox_id, value: metadata.conversation_id });
+  }
+  if (metadata.internet_message_id) {
+    keys.push({ kind: 'internet_message_id', scope: 'rfc5322', value: metadata.internet_message_id });
+  }
+  return keys;
+}
+
+function fingerprint(value: unknown): string {
+  return createHash('sha256').update(canonicalJson(value)).digest('hex');
+}
+
+function canonicalJson(value: unknown): string {
+  if (value === null || typeof value !== 'object') return JSON.stringify(value);
+  if (Array.isArray(value)) return `[${value.map(canonicalJson).join(',')}]`;
+  const record = value as JsonRecord;
+  return `{${Object.keys(record).sort().filter((key) => record[key] !== undefined).map((key) => `${JSON.stringify(key)}:${canonicalJson(record[key])}`).join(',')}}`;
+}
+
+function assertInside(root: string, path: string, code: string): void {
+  const rel = relative(root, path);
+  if (rel.startsWith('..') || rel.includes(`..${sep}`) || isAbsolute(rel)) throw new Error(`${code}:${path}`);
+}
+
+function requireRecord(value: unknown, code: string): JsonRecord {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error(code);
+  return value as JsonRecord;
+}
+
+function requiredBoundedString(value: unknown, code: string, max: number): string {
+  const normalized = typeof value === 'string' ? value.trim() : '';
+  if (!normalized) throw new Error(code);
+  if (normalized.length > max) throw new Error(`${code}_too_long`);
+  return normalized;
+}
+
+function optionalBoundedString(value: unknown, max: number): string | null {
+  if (value === undefined || value === null || value === '') return null;
+  if (typeof value !== 'string') throw new Error('mailbox_string_argument_invalid');
+  const normalized = value.trim();
+  if (!normalized) return null;
+  if (normalized.length > max) throw new Error('mailbox_string_argument_too_long');
+  return normalized;
+}
+
+function timestamp(value: unknown, code: string): string {
+  const normalized = requiredBoundedString(value, code, 64);
+  if (Number.isNaN(Date.parse(normalized))) throw new Error(`${code}_invalid`);
+  return new Date(normalized).toISOString();
+}
+
+function boundedInteger(value: unknown, fallback: number, min: number, max: number): number {
+  const resolved = value === undefined ? fallback : Number(value);
+  if (!Number.isSafeInteger(resolved) || resolved < min || resolved > max) throw new Error('mailbox_integer_argument_invalid');
+  return resolved;
+}
+
+function nullableHash(value: string | null): string | null {
+  return value === null ? null : sha256(value);
+}
+
+function boundedError(value: string): string {
+  return value.length <= 2048 ? value : value.slice(0, 2048);
+}
+
+function isLockContention(value: string | undefined): boolean {
+  return typeof value === 'string' && value.includes('Failed to acquire lock');
+}
+
+function asError(error: unknown): Error {
+  return error instanceof Error ? error : new Error(String(error));
+}

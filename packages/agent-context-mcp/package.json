@@ -1,5 +1,5 @@
 {
-  "name": "@narada2/agent-context-mcp",
+  "name": "@narada-core/agent-context-mcp",
   "version": "0.1.0",
   "license": "Apache-2.0",
   "type": "module",
@@ -33,8 +33,8 @@
     "test": "pnpm build && node --disable-warning=ExperimentalWarning dist/test/agent-context-mcp.test.js && node --disable-warning=ExperimentalWarning dist/test/continuation-projection.test.js && node --disable-warning=ExperimentalWarning dist/test/protocol-smoke.test.js && node --disable-warning=ExperimentalWarning dist/test/site-fabric-agent-context-e2e.test.js && node --disable-warning=ExperimentalWarning dist/test/session-start-roster.test.js && node --disable-warning=ExperimentalWarning dist/test/session-start-migrations.test.js"
   },
   "dependencies": {
-    "@narada2/mcp-fabric-contracts": "workspace:*",
-    "@narada2/mcp-transport": "workspace:*"
+    "@narada-core/mcp-fabric-contracts": "workspace:*",
+    "@narada-core/mcp-transport": "workspace:*"
   },
   "files": [
     "dist/",
@@ -42,6 +42,6 @@
     "README.md"
   ],
   "devDependencies": {
-    "@narada2/mcp-e2e-harness": "workspace:*"
+    "@narada-core/mcp-e2e-harness": "workspace:*"
   }
 }

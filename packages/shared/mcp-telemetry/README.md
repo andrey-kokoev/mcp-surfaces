@@ -1,4 +1,4 @@
-# @narada2/mcp-telemetry
+# @narada-core/mcp-telemetry
 
 Shared optional telemetry helpers for MCP surfaces.
 
@@ -72,5 +72,5 @@ Use `telemetryErrorCodeFromUnknown` and `telemetryRefusalCodeFromResult` to redu
 ## Verification
 
 ```powershell
-pnpm --filter @narada2/mcp-telemetry test
+pnpm --filter @narada-core/mcp-telemetry test
 ```

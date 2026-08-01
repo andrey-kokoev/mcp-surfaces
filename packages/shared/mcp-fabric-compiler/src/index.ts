@@ -11,7 +11,7 @@ import {
   type SurfaceDescriptorV2,
   type SurfaceProjectionV2,
   type ToolContractV2,
-} from '@narada2/mcp-fabric-contracts';
+} from '@narada-core/mcp-fabric-contracts';
 import {
   MOONSHOT_SCHEMA_DIALECT,
   validateMoonshotToolInputSchema,

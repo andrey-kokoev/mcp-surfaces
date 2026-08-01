@@ -1,4 +1,4 @@
-import { defineNativeSurface, type DefinedSurface, type McpToolDefinition } from '@narada2/mcp-fabric-contracts';
+import { defineNativeSurface, type DefinedSurface, type McpToolDefinition } from '@narada-core/mcp-fabric-contracts';
 import { listTools } from './main.js';
 
 const READ_ONLY_TOOLS = ["cloudflare_carrier_guidance","cloudflare_product_read","cloudflare_session_status","cloudflare_health","cloudflare_doctor","cloudflare_carrier_health"] as const;
@@ -7,7 +7,7 @@ export function surfaceDefinition(): DefinedSurface {
   return defineNativeSurface({
     surface_id: 'cloudflare-carrier',
     surface_version: '0.1.0',
-    package: '@narada2/cloudflare-carrier-mcp',
+    package: '@narada-core/cloudflare-carrier-mcp',
     entrypoint: '{mcp_surfaces_root}/cloudflare-carrier-mcp/dist/src/main.js',
     tools: listTools() as McpToolDefinition[],
     read_only_tools: READ_ONLY_TOOLS,

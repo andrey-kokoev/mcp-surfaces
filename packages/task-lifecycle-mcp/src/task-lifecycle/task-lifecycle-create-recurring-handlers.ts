@@ -1,10 +1,10 @@
 import { existsSync } from 'node:fs';
 import { basename, dirname, isAbsolute, relative, resolve } from 'node:path';
-import { normalizeExecutionBinding, type ExecutionBinding } from '@narada2/execution-contract';
-import { normalizeTaskTags, requireTaskTagsArray } from '@narada2/task-governance-core/task-tags';
+import { normalizeExecutionBinding, type ExecutionBinding } from '@narada-core/execution-contract';
+import { normalizeTaskTags, requireTaskTagsArray } from '@narada-core/task-governance-core/task-tags';
 import {
   enqueueTaskExecutabilityRequest,
-} from '@narada2/task-governance-core/task-executability-service';
+} from '@narada-core/task-governance-core/task-executability-service';
 import {
   bindTaskExecution,
   ensureTaskExecutionTables,

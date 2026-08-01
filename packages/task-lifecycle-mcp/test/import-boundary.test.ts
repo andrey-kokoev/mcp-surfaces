@@ -6,11 +6,11 @@ import { fileURLToPath } from 'node:url';
 const packageRoot = fileURLToPath(new URL('..', import.meta.url));
 const srcRoot = join(packageRoot, 'src');
 const forbidden = [
-  '@narada2/task-governance/',
-  '@narada2/task-governance\'',
-  '@narada2/task-governance"',
-  '@narada2/task-lifecycle-kernel',
-  '@narada2/control-plane',
+  '@narada-core/task-governance/',
+  '@narada-core/task-governance\'',
+  '@narada-core/task-governance"',
+  '@narada-core/task-lifecycle-kernel',
+  '@narada-core/control-plane',
 ];
 
 for (const file of walk(srcRoot)) {

@@ -3,7 +3,7 @@ import { mkdirSync, mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { Readable } from 'node:stream';
-import { assertLiveToolsConform } from '@narada2/mcp-fabric-contracts';
+import { assertLiveToolsConform } from '@narada-core/mcp-fabric-contracts';
 import {
   handleTaskLifecycleMcpRequest,
   runTaskLifecycleMcpStdioServer,

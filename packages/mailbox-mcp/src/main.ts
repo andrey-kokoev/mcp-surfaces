@@ -2,15 +2,20 @@
 import { buildGuidanceResult } from './guidance.js';
 import { guidanceToolDefinition } from './guidance.js';
 import { resolve } from 'node:path';
-import { buildBoundedToolResult, outputShowAsync } from '@narada2/mcp-transport';
+import { buildBoundedToolResult, outputShowAsync } from '@narada-core/mcp-transport';
 import { messageMatchesQuery, readMailboxProjection, summarizeMessage } from './mailbox-store.js';
+import { MailboxDomainService } from './mailbox-domain.js';
 
 const SERVER_NAME = 'narada-mailbox-mcp';
 const SERVER_VERSION = '0.1.0';
 const PROTOCOL_VERSION = '2024-11-05';
 
 type MailboxRecord = Record<string, unknown>;
-type MailboxServerState = MailboxRecord & { siteRoot: string; serverName: string };
+type MailboxServerState = MailboxRecord & {
+  siteRoot: string;
+  serverName: string;
+  domainService: MailboxDomainService;
+};
 
 function asRecord(value: unknown): MailboxRecord {
   return value && typeof value === 'object' && !Array.isArray(value) ? value as MailboxRecord : {};
@@ -51,9 +56,13 @@ export async function runStdioServer(options: unknown): Promise<void> {
 
 export function createServerState(options: unknown = {}): MailboxServerState {
   const optionsRecord = asRecord(options);
+  const siteRoot = resolve(String(optionsRecord.siteRoot ?? process.cwd()));
   return {
-    siteRoot: resolve(String(optionsRecord.siteRoot ?? process.cwd())),
+    siteRoot,
     serverName: String(optionsRecord.serverName ?? SERVER_NAME),
+    domainService: optionsRecord.domainService instanceof MailboxDomainService
+      ? optionsRecord.domainService
+      : new MailboxDomainService(siteRoot),
   };
 }
 
@@ -94,15 +103,15 @@ async function dispatchMethod(method: string, params: MailboxRecord, state: Mail
 }
 
 function listPrompts() {
-  return [{ name: 'mailbox_read_workflow', title: 'Mailbox Read Workflow', description: 'Guidance for inspecting synced mailbox projections.', arguments: [] }];
+  return [{ name: 'mailbox_read_workflow', title: 'Mailbox Workflow', description: 'Guidance for finite mailbox synchronization, mechanical admission, and bounded projection reads.', arguments: [] }];
 }
 
 function promptGet(params: MailboxRecord) {
   const name = String(params.name ?? '');
   if (name !== 'mailbox_read_workflow') throw new Error(`unknown_prompt: ${name}`);
   return {
-    description: 'Guidance for inspecting synced mailbox projections.',
-    messages: [{ role: 'user', content: { type: 'text', text: 'Use mailbox_accounts_list to confirm available synced mailboxes, mailbox_messages_list or mailbox_search for bounded discovery, mailbox_message_show before acting on a specific message, and mailbox_thread_show for conversation context.' } }],
+    description: 'Guidance for finite mailbox synchronization, mechanical admission, and bounded projection reads.',
+    messages: [{ role: 'user', content: { type: 'text', text: 'Use mailbox_sync_generation only from a durable SOP action with its injected idempotency key. Consume first-observation outbox events durably, apply mailbox_message_admit to the cited fact, and use mailbox_message_show only for bounded human or agent inspection.' } }],
   };
 }
 
@@ -116,6 +125,39 @@ export function listTools(): unknown[] {
   return [
     guidanceToolDefinition(),
     tool('mailbox_doctor', 'Inspect site-local synced mailbox projection readiness.', {}),
+    tool('mailbox_sync_generation', 'Run one finite, idempotent cloud-to-local projection generation and atomically publish first-observation outbox events.', {
+      idempotency_key: { type: 'string', description: 'Stable SOP action occurrence key.' },
+      scope_id: { type: 'string', description: 'Configured mailbox scope id. Optional only when the config contains one scope.' },
+      config_path: { type: 'string', description: 'Site-relative sync config path. Defaults to config/config.json.' },
+    }, ['idempotency_key'], false),
+    tool('mailbox_message_admit', 'Apply the versioned mechanical admission policy to one durable first-observation fact.', {
+      idempotency_key: { type: 'string', description: 'Stable SOP action occurrence key.' },
+      fact_id: { type: 'string', description: 'Canonical discovered-message fact id from the mailbox outbox event.' },
+      scope_id: { type: 'string', description: 'Configured mailbox scope id. Optional only when the config contains one scope.' },
+      policy_version: { type: 'string', description: 'Optional expected policy fingerprint; mismatches fail closed.' },
+      config_path: { type: 'string', description: 'Site-relative sync config path. Defaults to config/config.json.' },
+    }, ['idempotency_key', 'fact_id'], false),
+    tool('mailbox_fact_show', 'Read one exact immutable discovered-message fact by fact id for revision-stable evidence.', {
+      fact_id: { type: 'string', description: 'Immutable fact id cited by a Work Lifecycle ticket source.' },
+      scope_id: { type: 'string', description: 'Configured mailbox scope id. Optional only when the config contains one scope.' },
+      config_path: { type: 'string', description: 'Site-relative sync config path. Defaults to config/config.json.' },
+    }, ['fact_id']),
+    tool('mailbox_generation_show', 'Show bounded metadata and receipts for one synchronization generation.', {
+      generation_id: { type: 'string' },
+    }, ['generation_id']),
+    tool('mailbox_outbox_consumer_register', 'Register a durable consumer and explicit event start watermark.', {
+      consumer_id: { type: 'string' },
+      start_at: { type: 'string', description: 'Inclusive ISO-8601 event watermark.' },
+    }, ['consumer_id', 'start_at'], false),
+    tool('mailbox_outbox_list', 'List unacknowledged mailbox domain events for a registered consumer.', {
+      consumer_id: { type: 'string' },
+      limit: { type: 'integer', minimum: 1, maximum: 100, default: 100 },
+    }, ['consumer_id']),
+    tool('mailbox_outbox_ack', 'Persist an exact consumer receipt for one mailbox outbox event.', {
+      consumer_id: { type: 'string' },
+      event_id: { type: 'string' },
+      receipt: { type: 'object', additionalProperties: true },
+    }, ['consumer_id', 'event_id', 'receipt'], false),
     tool('mailbox_accounts_list', 'List synced mailbox accounts discovered in the local projection.', {}),
     tool('mailbox_messages_list', 'List synced mailbox messages with bounded filters.', {
       mailbox_id: { type: 'string', description: 'Optional mailbox/account id filter.' },
@@ -164,6 +206,27 @@ async function callTool(params: MailboxRecord, state: MailboxServerState) {
       break;
     case 'mailbox_doctor':
       result = mailboxDoctor(state);
+      break;
+    case 'mailbox_sync_generation':
+      result = await state.domainService.syncGeneration(args);
+      break;
+    case 'mailbox_message_admit':
+      result = await state.domainService.admitMessage(args);
+      break;
+    case 'mailbox_fact_show':
+      result = await state.domainService.factShow(args);
+      break;
+    case 'mailbox_generation_show':
+      result = state.domainService.generationShow(args);
+      break;
+    case 'mailbox_outbox_consumer_register':
+      result = state.domainService.outboxConsumerRegister(args);
+      break;
+    case 'mailbox_outbox_list':
+      result = state.domainService.outboxList(args);
+      break;
+    case 'mailbox_outbox_ack':
+      result = state.domainService.outboxAck(args);
       break;
     case 'mailbox_accounts_list':
       result = mailboxAccountsList(state);
@@ -334,11 +397,11 @@ function stringOrNull(value: unknown): string | null {
   return typeof value === 'string' && value.trim() !== '' ? value : null;
 }
 
-function tool(name: string, description: string, properties: unknown, required: string[] = []): unknown {
+function tool(name: string, description: string, properties: unknown, required: string[] = [], readOnly = true): unknown {
   return {
     name,
     description,
-    annotations: toolAnnotations(name),
+    annotations: toolAnnotations(name, readOnly),
     inputSchema: {
       type: 'object',
       properties,
@@ -349,10 +412,10 @@ function tool(name: string, description: string, properties: unknown, required: 
   };
 }
 
-function toolAnnotations(name: string) {
+function toolAnnotations(name: string, readOnly = true) {
   return {
     title: name,
-    readOnlyHint: true,
+    readOnlyHint: readOnly,
     destructiveHint: false,
     idempotentHint: true,
     openWorldHint: false,

@@ -9,7 +9,7 @@ import {
   siteFabricChildEnv,
   spawnJsonlMcpServer,
   type JsonRecord,
-} from '@narada2/mcp-e2e-harness';
+} from '@narada-core/mcp-e2e-harness';
 
 const requests: Array<{ method: string; url: string; body: JsonRecord | null }> = [];
 const nars = createServer(async (request, response) => {

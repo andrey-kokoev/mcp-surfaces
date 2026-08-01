@@ -4,7 +4,7 @@ import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { Socket } from 'node:net';
 import { connect as tlsConnect, type TLSSocket } from 'node:tls';
-import { resolveNaradaSitePaths } from '@narada2/site-paths';
+import { resolveNaradaSitePaths } from '@narada-core/site-paths';
 
 export type JsonRecord = Record<string, unknown>;
 export type DeliveryConstructor = 'send' | 'enqueue' | 'steer';

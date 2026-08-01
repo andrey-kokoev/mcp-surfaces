@@ -1,4 +1,4 @@
-# @narada2/site-registry-mcp
+# @narada-core/site-registry-mcp
 
 User Site MCP surface for the canonical Narada Site Registry.
 

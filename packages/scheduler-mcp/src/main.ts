@@ -7,6 +7,14 @@ import { spawn, type ChildProcess } from 'node:child_process';
 import { existsSync, readFileSync, statSync } from 'node:fs';
 import { extname, relative, resolve, dirname } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+import {
+  callSchedulerActivationTool,
+  closeSchedulerActivationRuntime,
+  isSchedulerActivationMutation,
+  isSchedulerActivationTool,
+  listSchedulerActivationTools,
+  type SchedulerActivationRuntimeState,
+} from './activation-mcp.js';
 
 const SERVER_NAME = 'scheduler-mcp';
 const SERVER_VERSION = '0.1.0';
@@ -14,7 +22,7 @@ const PROTOCOL_VERSION = '2024-11-05';
 
 type JsonRecord = Record<string, unknown>;
 
-export type SchedulerState = {
+export type SchedulerState = SchedulerActivationRuntimeState & {
   allowedRoots: string[];
   implementationId: string;
 };
@@ -27,6 +35,14 @@ export type SchedulerRuntimeStatus = {
   source_entrypoint: string;
   source_mtime: string | null;
   runtime_mtime: string | null;
+  components: Array<{
+    name: string;
+    runtime_path: string;
+    source_path: string;
+    runtime_mtime: string | null;
+    source_mtime: string | null;
+    status: 'fresh' | 'stale' | 'unavailable';
+  }>;
   remediation: string | null;
 };
 
@@ -61,6 +77,11 @@ function isPathWithinRoot(root: string, candidate: string): boolean {
 
 const RUNTIME_ENTRYPOINT = fileURLToPath(import.meta.url);
 const SOURCE_ENTRYPOINT = resolve(dirname(RUNTIME_ENTRYPOINT), '../../src/main.ts');
+const SCHEDULER_RUNTIME_COMPONENTS = [
+  { name: 'main', runtime: RUNTIME_ENTRYPOINT, source: SOURCE_ENTRYPOINT },
+  { name: 'activation_mcp', runtime: resolve(dirname(RUNTIME_ENTRYPOINT), 'activation-mcp.js'), source: resolve(dirname(SOURCE_ENTRYPOINT), 'activation-mcp.ts') },
+  { name: 'activation_store', runtime: resolve(dirname(RUNTIME_ENTRYPOINT), 'activation-store.js'), source: resolve(dirname(SOURCE_ENTRYPOINT), 'activation-store.ts') },
+] as const;
 const FRESHNESS_SKEW_MS = 1000;
 
 function fileFingerprint(path: string): string {
@@ -69,29 +90,49 @@ function fileFingerprint(path: string): string {
 }
 
 export function schedulerRuntimeStatus(): SchedulerRuntimeStatus {
-  const runtimeExists = existsSync(RUNTIME_ENTRYPOINT);
-  const sourceExists = existsSync(SOURCE_ENTRYPOINT);
-  const runtimeMtime = runtimeExists ? statSync(RUNTIME_ENTRYPOINT).mtimeMs : null;
-  const sourceMtime = sourceExists ? statSync(SOURCE_ENTRYPOINT).mtimeMs : null;
+  const components = SCHEDULER_RUNTIME_COMPONENTS.map((component) => {
+    const runtimeExists = existsSync(component.runtime);
+    const sourceExists = existsSync(component.source);
+    const runtimeMtime = runtimeExists ? statSync(component.runtime).mtimeMs : null;
+    const sourceMtime = sourceExists ? statSync(component.source).mtimeMs : null;
+    const fresh = runtimeMtime !== null && sourceMtime !== null && sourceMtime <= runtimeMtime + FRESHNESS_SKEW_MS;
+    return {
+      name: component.name,
+      runtime_path: component.runtime,
+      source_path: component.source,
+      runtime_mtime: runtimeMtime === null ? null : new Date(runtimeMtime).toISOString(),
+      source_mtime: sourceMtime === null ? null : new Date(sourceMtime).toISOString(),
+      status: (fresh ? 'fresh' : runtimeExists && sourceExists ? 'stale' : 'unavailable') as 'fresh' | 'stale' | 'unavailable',
+    };
+  });
   const implementationId = createHash('sha256')
-    .update(`${SERVER_VERSION}\0${fileFingerprint(RUNTIME_ENTRYPOINT)}\0${fileFingerprint(SOURCE_ENTRYPOINT)}`)
+    .update(`${SERVER_VERSION}\0${SCHEDULER_RUNTIME_COMPONENTS.map((component) => `${component.name}\0${fileFingerprint(component.runtime)}\0${fileFingerprint(component.source)}`).join('\0')}`)
     .digest('hex');
-  const fresh = runtimeExists && sourceExists && (sourceMtime as number) <= (runtimeMtime as number) + FRESHNESS_SKEW_MS;
+  const status = components.some((component) => component.status === 'unavailable')
+    ? 'unavailable'
+    : components.some((component) => component.status === 'stale') ? 'stale' : 'fresh';
+  const main = components[0]!;
   return {
     schema: 'narada.scheduler_runtime_status.v1',
-    status: fresh ? 'fresh' : runtimeExists && sourceExists ? 'stale' : 'unavailable',
+    status,
     implementation_id: implementationId,
     runtime_entrypoint: RUNTIME_ENTRYPOINT,
     source_entrypoint: SOURCE_ENTRYPOINT,
-    source_mtime: sourceMtime === null ? null : new Date(sourceMtime).toISOString(),
-    runtime_mtime: runtimeMtime === null ? null : new Date(runtimeMtime).toISOString(),
-    remediation: fresh ? null : 'Rebuild the scheduler package and restart the scheduler MCP surface before mutating scheduled tasks.',
+    source_mtime: main.source_mtime,
+    runtime_mtime: main.runtime_mtime,
+    components,
+    remediation: status === 'fresh' ? null : 'Rebuild the scheduler package and restart the scheduler MCP surface before mutating scheduled tasks.',
   };
 }
 
 export function createServerState(options: JsonRecord = {}): SchedulerState {
   const allowedRoots = optionList(options.allowedRoot ?? options.allowedRoots).map((root) => resolve(root));
-  return { allowedRoots, implementationId: schedulerRuntimeStatus().implementation_id };
+  return {
+    allowedRoots,
+    siteRoot: allowedRoots[0] ?? null,
+    activationStore: null,
+    implementationId: schedulerRuntimeStatus().implementation_id,
+  };
 }
 
 function assertSchedulerMutationReady(args: JsonRecord, state: SchedulerState): void {
@@ -179,20 +220,24 @@ export async function handleRequest(request: JsonRecord, state: SchedulerState) 
 
 export async function runStdioServer(options: JsonRecord = {}): Promise<void> {
   const state = createServerState(options);
-  let buffer = '';
-  let sawFramedInput = false;
-  process.stdin.setEncoding('utf8');
-  for await (const chunk of process.stdin) {
-    buffer += chunk;
-    const drained = buffer.includes('Content-Length:')
-      ? drainJsonRpcFrames(buffer)
-      : drainJsonLines(buffer);
-    sawFramedInput ||= drained.framed;
-    buffer = drained.remaining;
-    for (const request of drained.requests) {
-      const response = await handleRequest(request, state);
-      if (response) writeJsonRpcResponse(response, { framed: sawFramedInput });
+  try {
+    let buffer = '';
+    let sawFramedInput = false;
+    process.stdin.setEncoding('utf8');
+    for await (const chunk of process.stdin) {
+      buffer += chunk;
+      const drained = buffer.includes('Content-Length:')
+        ? drainJsonRpcFrames(buffer)
+        : drainJsonLines(buffer);
+      sawFramedInput ||= drained.framed;
+      buffer = drained.remaining;
+      for (const request of drained.requests) {
+        const response = await handleRequest(request, state);
+        if (response) writeJsonRpcResponse(response, { framed: sawFramedInput });
+      }
     }
+  } finally {
+    closeSchedulerActivationRuntime(state);
   }
 }
 
@@ -245,7 +290,7 @@ export function listTools() {
         properties: {
           task_name: { type: 'string', description: 'Full task path, e.g. \\Narada\\MyTask.' },
         },
-        required: ['task_name', 'implementation_id'],
+        required: ['task_name'],
         additionalProperties: false,
       },
       annotations: { title: 'scheduler_task_show', readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
@@ -264,7 +309,8 @@ export function listTools() {
           schedule: { type: 'string', enum: ['daily', 'hourly', 'at_startup', 'at_logon', 'once'], description: 'Trigger schedule type.' },
           start_time: { type: 'string', description: 'HH:mm start time (for daily/hourly/once).' },
           interval_minutes: { type: 'number', description: 'Repeat interval in minutes (for hourly).' },
-          description: { type: 'string', description: 'Task description.' },
+          execution_time_limit_seconds: { type: 'integer', minimum: 1, maximum: 86400, description: 'Hard Task Scheduler wall-time limit.' },
+          multiple_instances: { type: 'string', enum: ['ignore_new', 'parallel', 'queue', 'stop_existing'], description: 'Task Scheduler overlap policy.' },
           implementation_id: { type: 'string', description: 'Current implementation_id returned by scheduler_runtime_status.' },
         },
         required: ['task_name', 'command', 'schedule', 'implementation_id'],
@@ -298,6 +344,8 @@ export function listTools() {
           command: { type: 'string', description: 'Executable path or command.' },
           arguments: { type: 'string', description: 'Command-line arguments.' },
           working_dir: { type: 'string', description: 'Start-in directory applied through the Task Scheduler action WorkingDirectory property; never emulated with a shell wrapper.' },
+          execution_time_limit_seconds: { type: 'integer', minimum: 1, maximum: 86400, description: 'Hard Task Scheduler wall-time limit.' },
+          multiple_instances: { type: 'string', enum: ['ignore_new', 'parallel', 'queue', 'stop_existing'], description: 'Task Scheduler overlap policy.' },
           dry_run: { type: 'boolean', description: 'Return the planned PowerShell action mutation and a non-authoritative schtasks preview without mutating.' },
           implementation_id: { type: 'string', description: 'Current implementation_id returned by scheduler_runtime_status.' },
         },
@@ -338,6 +386,21 @@ export function listTools() {
       outputSchema: { type: 'object', additionalProperties: true },
     },
     {
+      name: 'scheduler_task_stop',
+      description: 'Stop the currently running instance of a scheduled task without changing its registration.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          task_name: { type: 'string' },
+          implementation_id: { type: 'string', description: 'Current implementation_id returned by scheduler_runtime_status.' },
+        },
+        required: ['task_name', 'implementation_id'],
+        additionalProperties: false,
+      },
+      annotations: { title: 'scheduler_task_stop', readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: false },
+      outputSchema: { type: 'object', additionalProperties: true },
+    },
+    {
       name: 'scheduler_task_run',
       description: 'Run a scheduled task immediately.',
       inputSchema: {
@@ -367,6 +430,7 @@ export function listTools() {
       annotations: { title: 'scheduler_task_history', readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
       outputSchema: { type: 'object', additionalProperties: true },
     },
+    ...listSchedulerActivationTools(),
   ];
 }
 
@@ -374,6 +438,11 @@ async function callTool(params: JsonRecord, state: SchedulerState) {
   const name = String(params.name ?? '');
   const args = asRecord(params.arguments);
   let result: JsonRecord;
+  if (isSchedulerActivationTool(name)) {
+    if (isSchedulerActivationMutation(name)) assertSchedulerMutationReady(args, state);
+    result = callSchedulerActivationTool(name, args, state);
+    return { content: [{ type: 'text', text: renderResult(result) }], structuredContent: result };
+  }
   switch (name) {
     case 'scheduler_guidance': result = buildGuidanceResult(args); break;
     case 'scheduler_runtime_status': result = schedulerRuntimeStatus(); break;
@@ -384,6 +453,7 @@ async function callTool(params: JsonRecord, state: SchedulerState) {
     case 'scheduler_task_update_action': result = await schedulerTaskUpdateAction(args, state); break;
     case 'scheduler_task_enable': result = await schedulerTaskEnable(args, state); break;
     case 'scheduler_task_disable': result = await schedulerTaskDisable(args, state); break;
+    case 'scheduler_task_stop': result = await schedulerTaskStop(args, state); break;
     case 'scheduler_task_run': result = await schedulerTaskRun(args, state); break;
     case 'scheduler_task_history': result = await schedulerTaskHistory(args, state); break;
     default: throw diagnosticError('unknown_tool', `unknown_tool:${name}`, { tool_name: name });
@@ -427,16 +497,43 @@ export function buildScheduledTaskMutationScript(): string {
     '$execute = [Environment]::GetEnvironmentVariable("NARADA_SCHEDULER_EXECUTE")',
     '$arguments = [Environment]::GetEnvironmentVariable("NARADA_SCHEDULER_ARGUMENTS")',
     '$workingDirectory = [Environment]::GetEnvironmentVariable("NARADA_SCHEDULER_WORKING_DIR")',
-    '$taskName = [Environment]::GetEnvironmentVariable("NARADA_SCHEDULER_TASK")',
+    '$executionLimitSeconds = [Environment]::GetEnvironmentVariable("NARADA_SCHEDULER_EXECUTION_LIMIT_SECONDS")',
+    '$multipleInstances = [Environment]::GetEnvironmentVariable("NARADA_SCHEDULER_MULTIPLE_INSTANCES")',
+    '$taskName = [Environment]::GetEnvironmentVariable("NARADA_SCHEDULER_TASK_NAME")',
+    '$taskPath = [Environment]::GetEnvironmentVariable("NARADA_SCHEDULER_TASK_PATH")',
     'if ([string]::IsNullOrWhiteSpace($workingDirectory)) { if ([string]::IsNullOrWhiteSpace($arguments)) { $action = New-ScheduledTaskAction -Execute $execute } else { $action = New-ScheduledTaskAction -Execute $execute -Argument $arguments } } else { if ([string]::IsNullOrWhiteSpace($arguments)) { $action = New-ScheduledTaskAction -Execute $execute -WorkingDirectory $workingDirectory } else { $action = New-ScheduledTaskAction -Execute $execute -Argument $arguments -WorkingDirectory $workingDirectory } }',
-    '$settings = New-ScheduledTaskSettingsSet -Hidden',
-    'Set-ScheduledTask -TaskName $taskName -Action $action -Settings $settings | Out-Null',
+    '$settingsArguments = @{ Hidden = $true }',
+    'if (-not [string]::IsNullOrWhiteSpace($executionLimitSeconds)) { $settingsArguments.ExecutionTimeLimit = [TimeSpan]::FromSeconds([int]$executionLimitSeconds) }',
+    'if (-not [string]::IsNullOrWhiteSpace($multipleInstances)) { $settingsArguments.MultipleInstances = $multipleInstances }',
+    '$settings = New-ScheduledTaskSettingsSet @settingsArguments',
+    'Set-ScheduledTask -TaskName $taskName -TaskPath $taskPath -Action $action -Settings $settings | Out-Null',
   ].join(';');
 }
 
-async function setScheduledTaskAction(taskName: string, command: string, cmdArgs?: string | null, workingDir?: string | null, timeoutMs = SCHTASKS_TIMEOUT_MS): Promise<{ stdout: string; stderr: string; exitCode: number; timedOut?: boolean }> {
+export function splitScheduledTaskPath(value: string): { taskName: string; taskPath: string } {
+  const normalized = value.trim().replace(/\//g, '\\');
+  const full = normalized.startsWith('\\') ? normalized : `\\${normalized}`;
+  const separator = full.lastIndexOf('\\');
+  const taskName = full.slice(separator + 1);
+  if (!taskName) throw diagnosticError('scheduler_requires_task_name', 'scheduler_requires_task_name');
+  return {
+    taskName,
+    taskPath: full.slice(0, separator + 1) || '\\',
+  };
+}
+
+async function setScheduledTaskAction(
+  taskName: string,
+  command: string,
+  cmdArgs?: string | null,
+  workingDir?: string | null,
+  executionTimeLimitSeconds?: number | null,
+  multipleInstances?: string | null,
+  timeoutMs = SCHTASKS_TIMEOUT_MS,
+): Promise<{ stdout: string; stderr: string; exitCode: number; timedOut?: boolean }> {
   const script = buildScheduledTaskMutationScript();
   const encodedCommand = Buffer.from(script, 'utf16le').toString('base64');
+  const task = splitScheduledTaskPath(taskName);
   return new Promise((resolveExecution) => {
     const child = spawn('powershell.exe', [
       '-NoProfile',
@@ -449,10 +546,13 @@ async function setScheduledTaskAction(taskName: string, command: string, cmdArgs
       windowsHide: true,
       env: {
         ...process.env,
-        NARADA_SCHEDULER_TASK: taskName,
+        NARADA_SCHEDULER_TASK_NAME: task.taskName,
+        NARADA_SCHEDULER_TASK_PATH: task.taskPath,
         NARADA_SCHEDULER_EXECUTE: command,
         NARADA_SCHEDULER_ARGUMENTS: cmdArgs ?? '',
         NARADA_SCHEDULER_WORKING_DIR: workingDir ?? '',
+        NARADA_SCHEDULER_EXECUTION_LIMIT_SECONDS: executionTimeLimitSeconds === null || executionTimeLimitSeconds === undefined ? '' : String(executionTimeLimitSeconds),
+        NARADA_SCHEDULER_MULTIPLE_INSTANCES: multipleInstances ?? '',
       },
     });
     let stdout = '';
@@ -566,7 +666,13 @@ export function schedulerFailureDetails({ operation, exitCode, stdout = '', stde
       : combined.includes('invalid') || exitCode === 2147500037
         ? 'invalid_arguments_or_unsupported_scheduler_option'
         : 'scheduler_command_failed';
-  const operatorVerb = operation === 'update_action' ? 'Change' : operation === 'delete' ? 'Delete' : operation === 'enable' || operation === 'disable' ? 'Change' : 'Create';
+  const operatorVerb = operation === 'update_action'
+    ? 'Change'
+    : operation === 'delete'
+      ? 'Delete'
+      : operation === 'stop'
+        ? 'End'
+        : operation === 'enable' || operation === 'disable' ? 'Change' : 'Create';
   const operatorArgs = operation === 'update_action'
     ? ` /TR ${quoteCmd(command)}`
     : operation === 'enable'
@@ -578,7 +684,7 @@ export function schedulerFailureDetails({ operation, exitCode, stdout = '', stde
           : command
             ? ` /TR ${quoteCmd(command)} /F`
             : '';
-  const operatorCommand = operation !== 'update_action' && (command || ['delete', 'enable', 'disable'].includes(operation))
+  const operatorCommand = operation !== 'update_action' && (command || ['delete', 'enable', 'disable', 'stop'].includes(operation))
     ? `schtasks.exe /${operatorVerb} /TN ${quoteCmd(taskName)}${operatorArgs}`
     : null;
   return {
@@ -649,7 +755,73 @@ async function schedulerTaskShow(args: JsonRecord, _state: SchedulerState): Prom
   }
   const rows = parseCSV(stdout);
   if (rows.length === 0) throw diagnosticError('scheduler_task_not_found', `scheduler_task_not_found:${taskName}`);
-  return { task: rows[0], task_compact: compactScheduledTaskRows(rows)[0] ?? null };
+  const definition = await scheduledTaskDefinition(taskName);
+  return { task: rows[0], task_compact: compactScheduledTaskRows(rows)[0] ?? null, task_definition: definition };
+}
+
+async function scheduledTaskDefinition(taskName: string): Promise<JsonRecord> {
+  const task = splitScheduledTaskPath(taskName);
+  const script = [
+    '$ErrorActionPreference = "Stop"',
+    '$taskName = [Environment]::GetEnvironmentVariable("NARADA_SCHEDULER_TASK_NAME")',
+    '$taskPath = [Environment]::GetEnvironmentVariable("NARADA_SCHEDULER_TASK_PATH")',
+    '$task = Get-ScheduledTask -TaskName $taskName -TaskPath $taskPath',
+    '$action = @($task.Actions)[0]',
+    '$limitSeconds = [System.Xml.XmlConvert]::ToTimeSpan([string]$task.Settings.ExecutionTimeLimit).TotalSeconds',
+    '[ordered]@{ task_name = "$($task.TaskPath)$($task.TaskName)"; state = [string]$task.State; execute = [string]$action.Execute; arguments = [string]$action.Arguments; working_dir = [string]$action.WorkingDirectory; hidden = [bool]$task.Settings.Hidden; execution_time_limit_seconds = [int]$limitSeconds; multiple_instances = [string]$task.Settings.MultipleInstances } | ConvertTo-Json -Compress',
+  ].join(';');
+  const encodedCommand = Buffer.from(script, 'utf16le').toString('base64');
+  const result = await new Promise<{ stdout: string; stderr: string; exitCode: number; timedOut?: boolean }>((resolveExecution) => {
+    const child = spawn('powershell.exe', [
+      '-NoProfile',
+      '-NonInteractive',
+      '-ExecutionPolicy',
+      'Bypass',
+      '-EncodedCommand',
+      encodedCommand,
+    ], {
+      windowsHide: true,
+      env: {
+        ...process.env,
+        NARADA_SCHEDULER_TASK_NAME: task.taskName,
+        NARADA_SCHEDULER_TASK_PATH: task.taskPath,
+      },
+    });
+    let stdout = '';
+    let stderr = '';
+    let settled = false;
+    const finish = (value: { stdout: string; stderr: string; exitCode: number; timedOut?: boolean }) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      resolveExecution(value);
+    };
+    const timer = setTimeout(() => {
+      terminateProcessTree(child);
+      finish({ stdout, stderr, exitCode: -2, timedOut: true });
+    }, SCHTASKS_TIMEOUT_MS);
+    child.stdout.setEncoding('utf8');
+    child.stderr.setEncoding('utf8');
+    child.stdout.on('data', (chunk) => { stdout += chunk; });
+    child.stderr.on('data', (chunk) => { stderr += chunk; });
+    child.on('close', (code) => finish({ stdout, stderr, exitCode: code ?? -1 }));
+    child.on('error', (error) => finish({ stdout, stderr: `${stderr}\n${error.message}`, exitCode: -1 }));
+  });
+  if (result.exitCode !== 0) {
+    throw diagnosticError('scheduler_task_definition_query_failed', `scheduler_task_definition_query_failed:${taskName}`, schedulerFailureDetails({
+      operation: 'show',
+      exitCode: result.exitCode,
+      stdout: result.stdout,
+      stderr: result.stderr,
+      taskName,
+      timedOut: result.timedOut,
+    }));
+  }
+  const parsed = JSON.parse(result.stdout.trim()) as unknown;
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    throw diagnosticError('scheduler_task_definition_invalid', `scheduler_task_definition_invalid:${taskName}`);
+  }
+  return parsed as JsonRecord;
 }
 
 async function schedulerTaskCreate(args: JsonRecord, state: SchedulerState): Promise<JsonRecord> {
@@ -660,13 +832,24 @@ async function schedulerTaskCreate(args: JsonRecord, state: SchedulerState): Pro
   const workingDirInput = optionalString(args.working_dir);
   const workingDir = workingDirInput ? resolve(workingDirInput) : null;
   const schedule = requiredString(args.schedule, 'scheduler_requires_schedule');
+  const executionTimeLimitSeconds = args.execution_time_limit_seconds === undefined
+    ? null
+    : integer(args.execution_time_limit_seconds, 0, 1, 86_400);
+  const multipleInstances = schedulerMultipleInstances(args.multiple_instances);
   assertScheduledActionAllowed(command, cmdArgs, workingDir, state);
   const taskRun = cmdArgs ? `${command} ${cmdArgs}` : command;
   const schArgs = ['/create', '/tn', taskName, '/tr', taskRun, '/f'];
   schArgs.push(...buildCreateScheduleArgs(schedule, args));
   const { stdout, stderr, exitCode, timedOut } = await schtasks(schArgs);
   if (exitCode !== 0) throw diagnosticError('scheduler_create_failed', `scheduler_create_failed:${exitCode}`, schedulerFailureDetails({ operation: 'create', exitCode, stdout, stderr, taskName, command: taskRun, timedOut }));
-  const actionResult = await setScheduledTaskAction(taskName, command, cmdArgs, workingDir);
+  const actionResult = await setScheduledTaskAction(
+    taskName,
+    command,
+    cmdArgs,
+    workingDir,
+    executionTimeLimitSeconds,
+    multipleInstances,
+  );
   if (actionResult.exitCode !== 0) {
     throw diagnosticError('scheduler_create_action_failed', `scheduler_create_action_failed:${actionResult.exitCode}`, {
       ...schedulerFailureDetails({ operation: 'create_action', exitCode: actionResult.exitCode, stdout: actionResult.stdout, stderr: actionResult.stderr, taskName, command: taskRun, timedOut: actionResult.timedOut }),
@@ -682,6 +865,8 @@ async function schedulerTaskCreate(args: JsonRecord, state: SchedulerState): Pro
     working_dir: workingDir,
     working_dir_applied: Boolean(workingDir),
     task_hidden: true,
+    execution_time_limit_seconds: executionTimeLimitSeconds,
+    multiple_instances: multipleInstances,
     console_window_policy: 'direct_executable_no_shell_wrapper',
     mutation_method: 'schtasks_create_then_powershell_set_scheduled_task_action_and_hidden_settings',
   };
@@ -727,6 +912,10 @@ async function schedulerTaskUpdateAction(args: JsonRecord, state: SchedulerState
   const cmdArgs = optionalString(args.arguments);
   const workingDirInput = optionalString(args.working_dir);
   const workingDir = workingDirInput ? resolve(workingDirInput) : null;
+  const executionTimeLimitSeconds = args.execution_time_limit_seconds === undefined
+    ? null
+    : integer(args.execution_time_limit_seconds, 0, 1, 86_400);
+  const multipleInstances = schedulerMultipleInstances(args.multiple_instances);
   assertScheduledActionAllowed(command, cmdArgs, workingDir, state);
   const taskRun = buildTaskRunCommand(command, cmdArgs);
   const schArgs = ['/change', '/tn', taskName, '/tr', taskRun];
@@ -744,9 +933,18 @@ async function schedulerTaskUpdateAction(args: JsonRecord, state: SchedulerState
       working_dir: workingDir,
       working_dir_applied: false,
       working_dir_would_apply: Boolean(workingDir),
+      execution_time_limit_seconds: executionTimeLimitSeconds,
+      multiple_instances: multipleInstances,
     };
   }
-  const powershellResult = await setScheduledTaskAction(taskName, command, cmdArgs, workingDir);
+  const powershellResult = await setScheduledTaskAction(
+    taskName,
+    command,
+    cmdArgs,
+    workingDir,
+    executionTimeLimitSeconds,
+    multipleInstances,
+  );
   if (powershellResult.exitCode !== 0) {
     throw diagnosticError(
       'scheduler_update_action_failed',
@@ -775,6 +973,8 @@ async function schedulerTaskUpdateAction(args: JsonRecord, state: SchedulerState
     mutation_method: 'powershell_set_scheduled_task_action',
     working_dir: workingDir,
     working_dir_applied: Boolean(workingDir),
+    execution_time_limit_seconds: executionTimeLimitSeconds,
+    multiple_instances: multipleInstances,
   };
 }
 
@@ -792,6 +992,14 @@ async function schedulerTaskDisable(args: JsonRecord, state: SchedulerState): Pr
   const { stdout, stderr, exitCode, timedOut } = await schtasks(['/change', '/tn', taskName, '/disable']);
   if (exitCode !== 0) throw diagnosticError('scheduler_disable_failed', `scheduler_disable_failed:${exitCode}`, schedulerFailureDetails({ operation: 'disable', exitCode, stdout, stderr, taskName, timedOut }));
   return { status: 'disabled', task_name: taskName };
+}
+
+async function schedulerTaskStop(args: JsonRecord, state: SchedulerState): Promise<JsonRecord> {
+  assertSchedulerMutationReady(args, state);
+  const taskName = requiredString(args.task_name, 'scheduler_requires_task_name');
+  const { stdout, stderr, exitCode, timedOut } = await schtasks(['/end', '/tn', taskName]);
+  if (exitCode !== 0) throw diagnosticError('scheduler_stop_failed', `scheduler_stop_failed:${exitCode}`, schedulerFailureDetails({ operation: 'stop', exitCode, stdout, stderr, taskName, timedOut }));
+  return { status: 'stopped', task_name: taskName };
 }
 
 async function schedulerTaskRun(args: JsonRecord, state: SchedulerState): Promise<JsonRecord> {
@@ -862,6 +1070,20 @@ function optionalString(value: unknown): string | null {
 function integer(value: unknown, fallback: number, min: number, max: number): number {
   const parsed = Number(value ?? fallback);
   return Number.isFinite(parsed) ? Math.max(min, Math.min(max, Math.trunc(parsed))) : fallback;
+}
+
+function schedulerMultipleInstances(value: unknown): string | null {
+  if (value === undefined || value === null || value === '') return null;
+  const mapping: Record<string, string> = {
+    ignore_new: 'IgnoreNew',
+    parallel: 'Parallel',
+    queue: 'Queue',
+    stop_existing: 'StopExisting',
+  };
+  const normalized = String(value);
+  const mapped = mapping[normalized];
+  if (!mapped) throw diagnosticError('scheduler_multiple_instances_invalid', `scheduler_multiple_instances_invalid:${normalized}`);
+  return mapped;
 }
 
 function clamp(value: number, min: number, max: number): number {

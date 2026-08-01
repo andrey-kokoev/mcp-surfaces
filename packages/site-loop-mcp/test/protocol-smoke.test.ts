@@ -4,7 +4,7 @@ import { spawn } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { validateAffordanceDocument } from '@narada2/mcp-affordances';
+import { validateAffordanceDocument } from '@narada-core/mcp-affordances';
 
 const siteRoot = mkdtempSync(join(tmpdir(), 'site-loop-mcp-protocol-'));
 const serverPath = fileURLToPath(new URL('../src/site-loop-mcp-server.js', import.meta.url));

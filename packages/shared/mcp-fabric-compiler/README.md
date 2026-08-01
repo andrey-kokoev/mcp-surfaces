@@ -1,4 +1,4 @@
-# @narada2/mcp-fabric-compiler
+# @narada-core/mcp-fabric-compiler
 
 Pure MCP Fabric V2 compilation from package-owned surface descriptors and
 resolved bindings to one immutable manifest and deterministic Codex, Kimi, and

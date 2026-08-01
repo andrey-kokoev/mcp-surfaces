@@ -13,7 +13,7 @@ import {
   type ReconciliationPlanV2,
   type RuntimeObservationV2,
   type RuntimeServerObservationV2,
-} from '@narada2/mcp-fabric-contracts';
+} from '@narada-core/mcp-fabric-contracts';
 
 export type ReconciliationInput = {
   manifest: FabricManifestV2;

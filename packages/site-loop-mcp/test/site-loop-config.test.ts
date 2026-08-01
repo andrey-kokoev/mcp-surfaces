@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { prepareTaskLifecycleStore } from '@narada2/task-governance-core/task-lifecycle-store';
+import { prepareTaskLifecycleStore } from '@narada-core/task-governance-core/task-lifecycle-store';
 import { DEFAULT_SITE_LOOP_CONFIG, loadSiteLoopConfig, requireSiteLoopConfig, SITE_LOOP_CONFIG_SCHEMA, siteLoopConfigJsonSchema, validateSiteLoopConfigDocument } from '../src/site-loop/site-loop-config.js';
 import { loadSiteLoopOperatingPolicy, validateSiteLoopOperatingPolicy } from '../src/site-loop/operating-loop-policy.js';
 import { openSiteLoopStore } from '../src/site-loop/site-loop-store.js';
@@ -121,8 +121,8 @@ const modernTaskLifecycleRoot = mkdtempSync(join(tmpdir(), 'site-loop-modern-tas
 const modernTaskLifecyclePackageRoot = join(modernTaskLifecycleRoot, 'packages', 'task-lifecycle-mcp');
 mkdirSync(join(modernTaskLifecyclePackageRoot, 'dist', 'src', 'task-lifecycle'), { recursive: true });
 writeFileSync(join(modernTaskLifecyclePackageRoot, 'package.json'), JSON.stringify({
-  name: '@narada2/task-lifecycle-mcp',
-  dependencies: { '@narada2/task-governance-core': 'workspace:*' },
+  name: '@narada-core/task-lifecycle-mcp',
+  dependencies: { '@narada-core/task-governance-core': 'workspace:*' },
 }, null, 2), 'utf8');
 const modernSiteRoot = mkdtempSync(join(tmpdir(), 'site-loop-modern-site-'));
 mkdirSync(join(modernSiteRoot, '.ai', 'mcp'), { recursive: true });

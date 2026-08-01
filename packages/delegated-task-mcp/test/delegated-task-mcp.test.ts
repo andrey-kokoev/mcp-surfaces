@@ -443,7 +443,7 @@ try {
         scope: ['packages/delegated-task-mcp'],
         budget: { max_verification_attempts: 1, timeout_ms: 600000 },
         verification: {
-          focused_tests: [{ command: 'pnpm --filter @narada2/delegated-task-mcp test', status: 'passed' }],
+          focused_tests: [{ command: 'pnpm --filter @narada-core/delegated-task-mcp test', status: 'passed' }],
           verification_budget: { max_attempts: 1, max_commands: 1 },
         },
         acceptance: { residual_risk_policy: 'allow' },

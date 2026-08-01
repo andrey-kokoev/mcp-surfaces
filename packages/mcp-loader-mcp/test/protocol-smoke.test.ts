@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join, resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { classifyLoaderRuntimeFreshness, createServerState } from '../src/main.js';
-import { runMcpProtocolSmoke, spawnJsonlMcpServer } from '@narada2/mcp-e2e-harness';
+import { runMcpProtocolSmoke, spawnJsonlMcpServer } from '@narada-core/mcp-e2e-harness';
 
 const root = mkdtempSync(join(tmpdir(), 'mcp-loader-mcp-protocol-'));
 const serverPath = fileURLToPath(new URL('../src/main.js', import.meta.url));
@@ -57,6 +57,7 @@ try {
     'mcp_loader_runtime_status',
     'mcp_loader_policy_inspect',
     'mcp_loader_connection_inventory',
+    'mcp_loader_process_ownership',
     'mcp_loader_runtime_observation',
     'mcp_loader_list_site_surfaces',
     'mcp_loader_site_fabric_diagnostics',
@@ -89,6 +90,9 @@ try {
 
   const connectionInventoryTool = tools.find((t) => t.name === 'mcp_loader_connection_inventory');
   assert.equal(connectionInventoryTool?.annotations.readOnlyHint, true);
+
+  const processOwnershipTool = tools.find((t) => t.name === 'mcp_loader_process_ownership');
+  assert.equal(processOwnershipTool?.annotations.readOnlyHint, true);
 
   const runtimeStatusTool = tools.find((t) => t.name === 'mcp_loader_runtime_status');
   assert.equal(runtimeStatusTool?.annotations.readOnlyHint, true);

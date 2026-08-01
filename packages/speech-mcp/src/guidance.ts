@@ -1,4 +1,4 @@
-import { listCapabilityCatalog } from '@narada2/provider-registry';
+import { listCapabilityCatalog } from '@narada-core/provider-registry';
 import type { SpeechState } from './state.js';
 
 export type GuidanceRecord = Record<string, unknown>;

@@ -6,7 +6,7 @@ import {
   runMcpProtocolSmoke,
   spawnJsonlMcpServer,
   type JsonRecord,
-} from '@narada2/mcp-e2e-harness';
+} from '@narada-core/mcp-e2e-harness';
 
 // Fresh-process e2e for sfb_36762540-087: structured-command behind
 // mcp-runtime-proxy over a real MCP stdio transport. The tool's declared

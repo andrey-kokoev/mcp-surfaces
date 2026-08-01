@@ -1,5 +1,5 @@
 {
-  "name": "@narada2/catalog-observation-mcp",
+  "name": "@narada-core/catalog-observation-mcp",
   "version": "0.1.0",
   "license": "Apache-2.0",
   "type": "module",
@@ -28,7 +28,7 @@
     "test": "pnpm build && node dist/test/protocol-smoke.test.js && node dist/test/catalog-observation-mcp.test.js"
   },
   "dependencies": {
-    "@narada2/mcp-fabric-contracts": "workspace:*"
+    "@narada-core/mcp-fabric-contracts": "workspace:*"
   },
   "files": [
     "dist/"

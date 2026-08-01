@@ -15,7 +15,7 @@ import {
   writeE2eResultArtifact,
   type JsonlMcpClient,
   type JsonRecord,
-} from '@narada2/mcp-e2e-harness';
+} from '@narada-core/mcp-e2e-harness';
 
 const TEST_ID = 'worker-delegation-site-fabric-provider-e2e';
 const packageRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..');

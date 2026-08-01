@@ -1,4 +1,4 @@
-import { defineNativeSurface, type DefinedSurface, type McpToolDefinition } from '@narada2/mcp-fabric-contracts';
+import { defineNativeSurface, type DefinedSurface, type McpToolDefinition } from '@narada-core/mcp-fabric-contracts';
 import { listTools } from './main.js';
 
 const READ_ONLY_TOOLS = ["site_lifecycle_guidance","site_lifecycle_doctor","site_lifecycle_command_map","site_create_presets_list","site_create_plan","site_list","site_discover","site_show","site_doctor","site_lifecycle_kinds","site_lifecycle_preflight","site_relation_list","site_relation_validate","site_authority_preflight"] as const;
@@ -7,7 +7,7 @@ export function surfaceDefinition(): DefinedSurface {
   return defineNativeSurface({
     surface_id: 'site-lifecycle',
     surface_version: '0.1.0',
-    package: '@narada2/site-lifecycle-mcp',
+    package: '@narada-core/site-lifecycle-mcp',
     entrypoint: '{mcp_surfaces_root}/site-lifecycle-mcp/dist/src/main.js',
     tools: listTools() as McpToolDefinition[],
     read_only_tools: READ_ONLY_TOOLS,

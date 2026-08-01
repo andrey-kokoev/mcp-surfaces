@@ -4,7 +4,7 @@ This file is the normative target for a new MCP surface that delegates bounded w
 
 ## 1. Fixed Scope
 
-The package name MUST be `@narada2/worker-delegation-mcp`.
+The package name MUST be `@narada-core/worker-delegation-mcp`.
 
 The binary name MUST be `worker-delegation-mcp`.
 
@@ -494,7 +494,7 @@ No later step is complete until all earlier steps have tests.
 The target is implemented only when all criteria below are true:
 
 - The package exists at `packages/worker-delegation-mcp`.
-- The package name is `@narada2/worker-delegation-mcp`.
+- The package name is `@narada-core/worker-delegation-mcp`.
 - The package has TypeScript sources under `packages/worker-delegation-mcp/src`.
 - The package has tests under `packages/worker-delegation-mcp/test`.
 - The package builds with `tsc -b`.
@@ -520,7 +520,7 @@ The target is implemented only when all criteria below are true:
 - No worker adapter performs policy decisions.
 - Every run writes `resolved_worker_config.json`.
 - Every expected failure returns `narada.worker.error.v1`.
-- `pnpm --filter @narada2/worker-delegation-mcp test` passes.
+- `pnpm --filter @narada-core/worker-delegation-mcp test` passes.
 - `pnpm build` passes.
 
 ## 18. Naming Invariants

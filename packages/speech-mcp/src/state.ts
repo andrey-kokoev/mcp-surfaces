@@ -1,6 +1,6 @@
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
-import { loadProviderRegistrySync, type CapabilityPolicy, type ProviderRegistry } from '@narada2/provider-registry';
+import { loadProviderRegistrySync, type CapabilityPolicy, type ProviderRegistry } from '@narada-core/provider-registry';
 import { MAX_LISTEN_DURATION_SECONDS, MAX_TEXT_LENGTH } from './constants.js';
 import { diagnosticError } from './diagnostics.js';
 import { resolveListenAdapterPath } from './listen-adapter.js';

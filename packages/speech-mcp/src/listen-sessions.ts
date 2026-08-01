@@ -1,6 +1,6 @@
 import { spawn } from 'node:child_process';
 import { existsSync } from 'node:fs';
-import { listCapabilityCatalog, resolveCapabilitySelection, type ResolvedCapabilitySelection } from '@narada2/provider-registry';
+import { listCapabilityCatalog, resolveCapabilitySelection, type ResolvedCapabilitySelection } from '@narada-core/provider-registry';
 import { DEFAULT_LISTEN_DURATION_SECONDS } from './constants.js';
 import { diagnosticError } from './diagnostics.js';
 import { buildListenAdapterArgs } from './listen-adapter.js';

@@ -4,12 +4,12 @@ import {
   createServerState,
   delegatedTaskResult,
   delegatedTaskRun,
-} from '@narada2/delegated-task-mcp';
+} from '@narada-core/delegated-task-mcp';
 import {
   admitTaskExecutabilityAssessment,
   assembleDeclaredEnvironment,
   recordTaskExecutabilityFailure,
-} from '@narada2/task-governance-core/task-executability-service';
+} from '@narada-core/task-governance-core/task-executability-service';
 import {
   TASK_EXECUTABILITY_ASSESSMENT_SCHEMA as CANONICAL_TASK_EXECUTABILITY_ASSESSMENT_SCHEMA,
   TASK_EXECUTABILITY_EVALUATOR_PROVENANCE_SCHEMA,
@@ -20,12 +20,12 @@ import {
   type TaskExecutabilityFinding,
   type TaskExecutabilityFindingKind,
   type TaskExecutabilityFindingSeverity,
-} from '@narada2/task-governance-core/task-executability-contract';
+} from '@narada-core/task-governance-core/task-executability-contract';
 import {
   SqliteTaskLifecycleStore,
   type TaskExecutabilityRequestRow,
   type TaskSpecRow,
-} from '@narada2/task-governance-core/task-lifecycle-store';
+} from '@narada-core/task-governance-core/task-lifecycle-store';
 import {
   TaskExecutabilityOrchestrator,
   deterministicIdempotencyKey,
@@ -35,7 +35,7 @@ import {
   type DelegatedTaskResult,
   type TaskExecutabilityRequest,
   type TaskLifecyclePort,
-} from '@narada2/task-executability-orchestrator';
+} from '@narada-core/task-executability-orchestrator';
 
 export const TASK_EXECUTABILITY_SITE_LOOP_SCHEMA = 'narada.site_loop.task_executability_reconciliation.v1' as const;
 const WORKFLOW_TEMPLATE_ID = 'task_executability_assessment_v1';

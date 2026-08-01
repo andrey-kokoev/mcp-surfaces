@@ -1,4 +1,4 @@
-# @narada2/mcp-fabric-contracts
+# @narada-core/mcp-fabric-contracts
 
 Versioned, policy-neutral contracts for describing MCP surfaces, compiling Site
 fabric manifests, projecting carrier configuration, and reconciling observed

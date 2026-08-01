@@ -34,7 +34,7 @@ if ($IsolatedWorktree) {
         try {
             & pnpm install --offline --ignore-scripts *> $installLog
             if ($LASTEXITCODE -ne 0) { throw ('isolated pnpm install failed; see ' + $installLog) }
-            & pnpm --filter @narada2/mcp-e2e-harness build *> $installLog
+            & pnpm --filter @narada-core/mcp-e2e-harness build *> $installLog
             if ($LASTEXITCODE -ne 0) { throw ('isolated harness build failed; see ' + $installLog) }
         } finally {
             Pop-Location

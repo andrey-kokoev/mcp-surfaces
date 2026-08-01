@@ -11,7 +11,7 @@
   "executions": [
     {
       "test_id": "mcp-registrar.site-fabric.full-catalog-sweep",
-      "package": "@narada2/mcp-registrar",
+      "package": "@narada-core/mcp-registrar",
       "status": "passed",
       "authority": "A0",
       "execution_ref": "structured_command_execution:e_702ab82369e34c49af507f6d",
@@ -20,7 +20,7 @@
     },
     {
       "test_id": "site-lifecycle.site-fabric.real-cli",
-      "package": "@narada2/site-lifecycle-mcp",
+      "package": "@narada-core/site-lifecycle-mcp",
       "status": "passed",
       "authority": "A0",
       "execution_ref": "structured_command_execution:e_ffd7aba54c7c466a80231f95",
@@ -30,7 +30,7 @@
     },
     {
       "test_id": "site-registry.site-fabric.real-cli",
-      "package": "@narada2/site-registry-mcp",
+      "package": "@narada-core/site-registry-mcp",
       "status": "passed",
       "authority": "A0",
       "execution_ref": "structured_command_execution:e_d8c644c9076c473d94898474",
@@ -40,7 +40,7 @@
     },
     {
       "test_id": "nars-session.site-fabric.discovery-health-refusal",
-      "package": "@narada2/nars-session-mcp",
+      "package": "@narada-core/nars-session-mcp",
       "status": "passed",
       "authority": "A0",
       "execution_ref": "structured_command_execution:e_c35e4f14898d435c8df17216",
@@ -49,7 +49,7 @@
     },
     {
       "test_id": "runtime-introspection.site-fabric.child-analysis-readback",
-      "package": "@narada2/runtime-introspection-mcp",
+      "package": "@narada-core/runtime-introspection-mcp",
       "status": "passed",
       "authority": "A0",
       "execution_ref": "structured_command_execution:e_b7020c3e91134c59931f99fd",
@@ -58,7 +58,7 @@
     },
     {
       "test_id": "cloudflare-carrier.site-fabric.child-health-product-read",
-      "package": "@narada2/cloudflare-carrier-mcp",
+      "package": "@narada-core/cloudflare-carrier-mcp",
       "status": "passed",
       "authority": "A0",
       "external_authority": "not_run",
@@ -68,7 +68,7 @@
     },
     {
       "test_id": "site-coherence.site-fabric.local-cloudflare-comparison",
-      "package": "@narada2/site-coherence-mcp",
+      "package": "@narada-core/site-coherence-mcp",
       "status": "passed",
       "authority": "A0",
       "external_authority": "not_run",
@@ -78,7 +78,7 @@
     },
     {
       "test_id": "local-filesystem.site-fabric.governed-read-write",
-      "package": "@narada2/local-filesystem-mcp",
+      "package": "@narada-core/local-filesystem-mcp",
       "status": "passed",
       "authority": "A0",
       "execution_ref": "structured_command_execution:e_dbd41c727cea4e81b7c94c20",
@@ -87,7 +87,7 @@
     },
     {
       "test_id": "speech.site-fabric.remote-tts-transcription",
-      "package": "@narada2/speech-mcp",
+      "package": "@narada-core/speech-mcp",
       "status": "not_run",
       "authority": "A1",
       "reason_code": "controlled_remote_speech_authority_not_configured",
@@ -97,7 +97,7 @@
     },
     {
       "test_id": "worker-delegation.site-fabric.external-provider",
-      "package": "@narada2/worker-delegation-mcp",
+      "package": "@narada-core/worker-delegation-mcp",
       "status": "not_run",
       "authority": "A1",
       "reason_code": "controlled_external_provider_not_configured",
@@ -107,7 +107,7 @@
     },
     {
       "test_id": "graph-mail.site-fabric.external-mail-lifecycle",
-      "package": "@narada2/graph-mail-mcp",
+      "package": "@narada-core/graph-mail-mcp",
       "status": "not_run",
       "authority": "A1",
       "reason_code": "controlled_graph_authority_not_configured",
@@ -117,7 +117,7 @@
     },
     {
       "test_id": "calendar.site-fabric.external-calendar-lifecycle",
-      "package": "@narada2/calendar-mcp",
+      "package": "@narada-core/calendar-mcp",
       "status": "not_run",
       "authority": "A1",
       "reason_code": "controlled_calendar_authority_not_configured",

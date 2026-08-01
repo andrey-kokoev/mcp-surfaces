@@ -251,7 +251,7 @@ function siteLifecycleDoctor(state: ServerState): JsonRecord {
     cli_module_exists: existsSync(state.cliModulePath),
     command_count: COMMANDS.length,
     coverage: COMMANDS.map(commandSummary),
-    remediation: existsSync(state.cliModulePath) ? null : `Build the Narada CLI first, e.g. run pnpm --filter @narada2/cli build in ${state.naradaRoot}.`,
+    remediation: existsSync(state.cliModulePath) ? null : `Build the Narada CLI first, e.g. run pnpm --filter @narada-core/cli build in ${state.naradaRoot}.`,
   };
 }
 
@@ -298,7 +298,7 @@ async function loadCliModule(state: ServerState): Promise<JsonRecord> {
   if (!existsSync(state.cliModulePath)) {
     throw diagnosticError('narada_cli_module_missing', `narada_cli_module_missing:${state.cliModulePath}`, {
       cli_module_path: state.cliModulePath,
-      remediation: `Build the Narada CLI first, e.g. run pnpm --filter @narada2/cli build in ${state.naradaRoot}.`,
+      remediation: `Build the Narada CLI first, e.g. run pnpm --filter @narada-core/cli build in ${state.naradaRoot}.`,
     });
   }
   return import(pathToFileURL(state.cliModulePath).href) as Promise<JsonRecord>;

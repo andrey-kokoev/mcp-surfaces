@@ -4,32 +4,32 @@ Standalone MCP surface packages shared by Narada sites and carriers.
 
 ## Packages
 
-- `@narada2/mcp-transport`: MCP payload/output-ref helpers. See `packages/shared/mcp-transport/README.md`.
-- `@narada2/mcp-telemetry`: optional MCP telemetry helpers. See `packages/shared/mcp-telemetry/README.md`.
-- `@narada2/mcp-runtime-proxy`: carrier stdio proxy for MCP startup diagnostics. See `packages/shared/mcp-runtime-proxy/README.md`.
-- `@narada2/local-filesystem-mcp`: canonical local filesystem MCP surface exposing `fs_*` tools. See `packages/local-filesystem-mcp/README.md`.
-- `@narada2/structured-command-mcp`: policy-gated command execution surface using structured argv schemas. See `packages/structured-command-mcp/README.md`.
-- `@narada2/git-mcp`: governed Git inspection and publication MCP surface. See `packages/git-mcp/README.md`.
-- `@narada2/site-inbox-mcp`: governed inbox intake and triage MCP surface. See `packages/site-inbox-mcp/README.md`.
-- `@narada2/mailbox-mcp`: read-only MCP surface for site-local synced mailbox projections. See `packages/mailbox-mcp/README.md`.
-- `@narada2/graph-mail-mcp`: policy-gated Microsoft Graph mail surface for live reads and draft management. See `packages/graph-mail-mcp/README.md`.
-- `@narada2/calendar-mcp`: policy-gated Microsoft Graph calendar surface for live reads and guarded event management. See `packages/calendar-mcp/README.md`.
-- `@narada2/task-lifecycle-mcp`: task lifecycle MCP surface. See `packages/task-lifecycle-mcp/README.md`.
-- `@narada2/site-loop-mcp`: config-governed site loop MCP surface. See `packages/site-loop-mcp/README.md`.
-- `@narada2/agent-context-mcp`: agent context MCP surface. See `packages/agent-context-mcp/README.md`.
-- `@narada2/worker-delegation-mcp`: policy-gated worker delegation MCP surface. See `packages/worker-delegation-mcp/README.md`.
-- `@narada2/delegated-task-mcp`: outcome-oriented delegated task orchestration MCP surface. See `packages/delegated-task-mcp/README.md`.
-- `@narada2/sop-mcp`: versioned standard operating procedure runbook engine with SQLite-backed execution. See `packages/sop-mcp/README.md`.
-- `@narada2/scheduler-mcp`: Windows Task Scheduler MCP surface for governed task registration, inspection, and execution. See `packages/scheduler-mcp/README.md`.
-- `@narada2/site-lifecycle-mcp`: governed Local Site lifecycle inspection and mutation surface. See `packages/site-lifecycle-mcp/README.md`.
-- `@narada2/site-registry-mcp`: read-only User Site surface for canonical cross-site registry inspection and reconciliation planning. See `packages/site-registry-mcp/README.md`.
-- `@narada2/mcp-registrar`: MCP surface registrar for binding/unbinding surfaces across Narada sites and carriers. See `packages/mcp-registrar/README.md`.
-- `@narada2/surface-feedback-mcp`: cross-site MCP surface feedback intake and routing. See `packages/surface-feedback-mcp/README.md`.
-- `@narada2/speech-mcp`: host-level speech surface for TTS, bounded capture, and transcription. See `packages/speech-mcp/README.md`.
-- `@narada2/nars-session-mcp`: governed input and bounded readback for existing NARS sessions. See `docs/nars-session-mcp-target.md`.
-- `@narada2/quota-meter-mcp`: host-level quota-meter glide status and desktop overlay lifecycle management. See `packages/quota-meter-mcp/README.md`.
+- `@narada-core/mcp-transport`: MCP payload/output-ref helpers. See `packages/shared/mcp-transport/README.md`.
+- `@narada-core/mcp-telemetry`: optional MCP telemetry helpers. See `packages/shared/mcp-telemetry/README.md`.
+- `@narada-core/mcp-runtime-proxy`: carrier stdio proxy for MCP startup diagnostics. See `packages/shared/mcp-runtime-proxy/README.md`.
+- `@narada-core/local-filesystem-mcp`: canonical local filesystem MCP surface exposing `fs_*` tools. See `packages/local-filesystem-mcp/README.md`.
+- `@narada-core/structured-command-mcp`: policy-gated command execution surface using structured argv schemas. See `packages/structured-command-mcp/README.md`.
+- `@narada-core/git-mcp`: governed Git inspection and publication MCP surface. See `packages/git-mcp/README.md`.
+- `@narada-core/site-inbox-mcp`: governed inbox intake and triage MCP surface. See `packages/site-inbox-mcp/README.md`.
+- `@narada-core/mailbox-mcp`: read-only MCP surface for site-local synced mailbox projections. See `packages/mailbox-mcp/README.md`.
+- `@narada-core/graph-mail-mcp`: policy-gated Microsoft Graph mail surface for live reads and draft management. See `packages/graph-mail-mcp/README.md`.
+- `@narada-core/calendar-mcp`: policy-gated Microsoft Graph calendar surface for live reads and guarded event management. See `packages/calendar-mcp/README.md`.
+- `@narada-core/task-lifecycle-mcp`: task lifecycle MCP surface. See `packages/task-lifecycle-mcp/README.md`.
+- `@narada-core/site-loop-mcp`: config-governed site loop MCP surface. See `packages/site-loop-mcp/README.md`.
+- `@narada-core/agent-context-mcp`: agent context MCP surface. See `packages/agent-context-mcp/README.md`.
+- `@narada-core/worker-delegation-mcp`: policy-gated worker delegation MCP surface. See `packages/worker-delegation-mcp/README.md`.
+- `@narada-core/delegated-task-mcp`: outcome-oriented delegated task orchestration MCP surface. See `packages/delegated-task-mcp/README.md`.
+- `@narada-core/sop-mcp`: versioned standard operating procedure runbook engine with SQLite-backed execution. See `packages/sop-mcp/README.md`.
+- `@narada-core/scheduler-mcp`: Windows Task Scheduler MCP surface for governed task registration, inspection, and execution. See `packages/scheduler-mcp/README.md`.
+- `@narada-core/site-lifecycle-mcp`: governed Local Site lifecycle inspection and mutation surface. See `packages/site-lifecycle-mcp/README.md`.
+- `@narada-core/site-registry-mcp`: read-only User Site surface for canonical cross-site registry inspection and reconciliation planning. See `packages/site-registry-mcp/README.md`.
+- `@narada-core/mcp-registrar`: MCP surface registrar for binding/unbinding surfaces across Narada sites and carriers. See `packages/mcp-registrar/README.md`.
+- `@narada-core/surface-feedback-mcp`: cross-site MCP surface feedback intake and routing. See `packages/surface-feedback-mcp/README.md`.
+- `@narada-core/speech-mcp`: host-level speech surface for TTS, bounded capture, and transcription. See `packages/speech-mcp/README.md`.
+- `@narada-core/nars-session-mcp`: governed input and bounded readback for existing NARS sessions. See `docs/nars-session-mcp-target.md`.
+- `@narada-core/quota-meter-mcp`: host-level quota-meter glide status and desktop overlay lifecycle management. See `packages/quota-meter-mcp/README.md`.
 
-- @narada2/operator-console-overlay-mcp: host-level dedicated MCP surface for the Narada Operator Console Windows overlay. See packages/operator-console-overlay-mcp/README.md.
+- @narada-core/operator-console-overlay-mcp: host-level dedicated MCP surface for the Narada Operator Console Windows overlay. See packages/operator-console-overlay-mcp/README.md.
 
 ## Verify
 

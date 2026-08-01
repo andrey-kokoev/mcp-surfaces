@@ -39,7 +39,7 @@ type RuntimeDependencyGraph = {
 
 type BuildIdentityManifest = {
   schema: typeof BUILD_MANIFEST_SCHEMA;
-  package_name: '@narada2/worker-delegation-mcp';
+  package_name: '@narada-core/worker-delegation-mcp';
   identity_algorithm: typeof TREE_HASH_ALGORITHM;
   source_root: 'src';
   source_tree_sha256: string;
@@ -101,7 +101,7 @@ export function createWorkerImplementationIdentityReader(options: IdentityOption
     return {
       schema: 'narada.worker.implementation_identity.v4',
       surface_id: 'worker-delegation-mcp',
-      package_name: '@narada2/worker-delegation-mcp',
+      package_name: '@narada-core/worker-delegation-mcp',
       identity_algorithm: TREE_HASH_ALGORITHM,
       implementation_graph_scope: 'surface_artifact_plus_direct_runtime_dependencies',
       implementation_identity: materializedIdentity === null ? null : `sha256:${materializedIdentity}`,
@@ -206,7 +206,7 @@ export function writeWorkerImplementationBuildManifest(options: ManifestWriteOpt
   if (!sourceTreeSha256 || !artifactTreeSha256) throw new Error('worker_build_identity_tree_fingerprint_unavailable');
   const manifest: BuildIdentityManifest = {
     schema: BUILD_MANIFEST_SCHEMA,
-    package_name: '@narada2/worker-delegation-mcp',
+    package_name: '@narada-core/worker-delegation-mcp',
     identity_algorithm: TREE_HASH_ALGORITHM,
     source_root: 'src',
     source_tree_sha256: sourceTreeSha256,
@@ -263,7 +263,7 @@ function resolveStaleServerRisk(input: {
   if (buildManifest.value.artifact_tree_sha256 !== materializedArtifact.sha256) {
     return {
       status: 'loaded_artifact_not_declared_build',
-      remediation: 'Rebuild @narada2/worker-delegation-mcp and restart the MCP server; the loaded artifact does not match its declared build manifest.',
+      remediation: 'Rebuild @narada-core/worker-delegation-mcp and restart the MCP server; the loaded artifact does not match its declared build manifest.',
       evidence: { expected_artifact_tree_sha256: buildManifest.value.artifact_tree_sha256, materialized_artifact_tree_sha256: materializedArtifact.sha256 },
     };
   }
@@ -271,14 +271,14 @@ function resolveStaleServerRisk(input: {
   if (source.status === 'ok' && source.sha256 !== buildManifest.value.source_tree_sha256) {
     return {
       status: 'source_changed_since_build',
-      remediation: 'Rebuild @narada2/worker-delegation-mcp and restart the MCP server so the loaded compiled artifact matches current source.',
+      remediation: 'Rebuild @narada-core/worker-delegation-mcp and restart the MCP server so the loaded compiled artifact matches current source.',
       evidence: { expected_source_tree_sha256: buildManifest.value.source_tree_sha256, observed_source_tree_sha256: source.sha256 },
     };
   }
   if (dependencyDrift.length > 0) {
     return {
       status: 'runtime_dependency_changed_since_build',
-      remediation: 'Rebuild @narada2/worker-delegation-mcp and restart the MCP server so its direct runtime dependency graph matches the declared build.',
+      remediation: 'Rebuild @narada-core/worker-delegation-mcp and restart the MCP server so its direct runtime dependency graph matches the declared build.',
       evidence: dependencyDrift,
     };
   }
@@ -288,7 +288,7 @@ function resolveStaleServerRisk(input: {
 function unavailableIdentity(scope: string, evidence: Record<string, unknown>): Record<string, unknown> {
   return {
     status: 'identity_unavailable',
-    remediation: 'Restore the unreadable identity input, rebuild @narada2/worker-delegation-mcp, then restart or rematerialize the MCP server.',
+    remediation: 'Restore the unreadable identity input, rebuild @narada-core/worker-delegation-mcp, then restart or rematerialize the MCP server.',
     evidence: { scope, ...evidence },
   };
 }
@@ -400,14 +400,14 @@ function readBuildManifest(path: string): BuildManifestRead {
   try {
     const value = readPackageJson(path);
     const dependencies = normalizeRuntimeDependencyList(value.runtime_dependencies);
-    if (value.schema !== BUILD_MANIFEST_SCHEMA || value.package_name !== '@narada2/worker-delegation-mcp' || value.identity_algorithm !== TREE_HASH_ALGORITHM || value.source_root !== 'src' || value.artifact_root !== 'dist/src' || !sha256(value.source_tree_sha256) || !sha256(value.artifact_tree_sha256) || !nonNegativeInteger(value.source_file_count) || !nonNegativeInteger(value.artifact_file_count) || dependencies === null || !sha256(value.implementation_graph_sha256)) {
+    if (value.schema !== BUILD_MANIFEST_SCHEMA || value.package_name !== '@narada-core/worker-delegation-mcp' || value.identity_algorithm !== TREE_HASH_ALGORITHM || value.source_root !== 'src' || value.artifact_root !== 'dist/src' || !sha256(value.source_tree_sha256) || !sha256(value.artifact_tree_sha256) || !nonNegativeInteger(value.source_file_count) || !nonNegativeInteger(value.artifact_file_count) || dependencies === null || !sha256(value.implementation_graph_sha256)) {
       return { status: 'invalid', value: null, error_code: 'build_manifest_shape_invalid' };
     }
     return {
       status: 'ok',
       value: {
         schema: BUILD_MANIFEST_SCHEMA,
-        package_name: '@narada2/worker-delegation-mcp',
+        package_name: '@narada-core/worker-delegation-mcp',
         identity_algorithm: TREE_HASH_ALGORITHM,
         source_root: 'src',
         source_tree_sha256: value.source_tree_sha256,

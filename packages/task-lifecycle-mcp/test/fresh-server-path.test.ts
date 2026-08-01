@@ -19,7 +19,7 @@ try {
     writeFileSync(path, 'process.stdin.resume();\n', 'utf8');
   }
   mkdirSync(packageRoot, { recursive: true });
-  writeFileSync(join(packageRoot, 'package.json'), JSON.stringify({ name: '@narada2/task-lifecycle-mcp' }), 'utf8');
+  writeFileSync(join(packageRoot, 'package.json'), JSON.stringify({ name: '@narada-core/task-lifecycle-mcp' }), 'utf8');
 
   const relativeAdmission = resolveFreshServerPath({ siteRoot, serverPath: 'tools/server.mjs', runtimeModulePath, env: {} });
   assert.equal(relativeAdmission.status, 'admitted');

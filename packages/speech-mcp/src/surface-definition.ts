@@ -1,4 +1,4 @@
-import { defineNativeSurface, type DefinedSurface, type McpToolDefinition } from '@narada2/mcp-fabric-contracts';
+import { defineNativeSurface, type DefinedSurface, type McpToolDefinition } from '@narada-core/mcp-fabric-contracts';
 import { listTools } from './tool-list.js';
 
 const READ_ONLY_TOOLS = ['speech_guidance', 'speech_voices', 'speech_listen_status'] as const;
@@ -7,7 +7,7 @@ export function surfaceDefinition(): DefinedSurface {
   return defineNativeSurface({
     surface_id: 'speech',
     surface_version: '0.1.0',
-    package: '@narada2/speech-mcp',
+    package: '@narada-core/speech-mcp',
     entrypoint: '{mcp_surfaces_root}/speech-mcp/dist/src/main.js',
     tools: listTools() as McpToolDefinition[],
     read_only_tools: READ_ONLY_TOOLS,

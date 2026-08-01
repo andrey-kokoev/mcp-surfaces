@@ -1,0 +1,322 @@
+#!/usr/bin/env node
+import { pathToFileURL } from 'node:url';
+import {
+  SiteFabricClient,
+  isRecord,
+  type JsonRecord,
+  type SiteFabricToolCallOptions,
+} from '@narada-core/mcp-runtime-client';
+
+export type DomainOutboxProfile = 'mailbox' | 'work-lifecycle';
+
+export interface SchedulerDomainFabricCaller {
+  call(
+    surfaceId: string,
+    toolName: string,
+    args?: JsonRecord,
+    options?: SiteFabricToolCallOptions,
+  ): Promise<JsonRecord>;
+}
+
+export interface SchedulerDomainOutboxOptions {
+  siteRoot: string;
+  profile: DomainOutboxProfile;
+  consumerId: string;
+  outboxStartAt?: string;
+  topics?: string[];
+  sourceSurfaceId?: string;
+  schedulerSurfaceId?: string;
+  maxEvents?: number;
+  requestTimeoutMs?: number;
+  loaderEntrypoint?: string;
+}
+
+export interface SchedulerDomainOutboxReport extends JsonRecord {
+  schema: 'narada.scheduler.domain_outbox_dispatch_pass.v1';
+  status: 'completed' | 'completed_with_errors';
+  profile: DomainOutboxProfile;
+  events_seen: number;
+  events_admitted: number;
+  events_acknowledged: number;
+  errors: JsonRecord[];
+}
+
+export async function runSchedulerDomainOutboxDispatcher(
+  input: SchedulerDomainOutboxOptions,
+  providedFabric?: SchedulerDomainFabricCaller,
+): Promise<SchedulerDomainOutboxReport> {
+  const options = normalizeOptions(input);
+  const ownedFabric = providedFabric ? null : await SiteFabricClient.open({
+    siteRoot: options.siteRoot,
+    loaderEntrypoint: options.loaderEntrypoint,
+    allowedSurfaceIds: [options.schedulerSurfaceId, options.sourceSurfaceId],
+    requestTimeoutMs: options.requestTimeoutMs,
+  });
+  const fabric = providedFabric ?? ownedFabric!;
+  const report: SchedulerDomainOutboxReport = {
+    schema: 'narada.scheduler.domain_outbox_dispatch_pass.v1',
+    status: 'completed',
+    profile: options.profile,
+    events_seen: 0,
+    events_admitted: 0,
+    events_acknowledged: 0,
+    errors: [],
+  };
+  try {
+    const runtime = await fabric.call(options.schedulerSurfaceId, 'scheduler_runtime_status', {});
+    const implementationId = requiredString(runtime.implementation_id, 'scheduler_implementation_id_missing');
+    if (runtime.status !== 'fresh') throw new Error(`scheduler_runtime_not_fresh:${String(runtime.status)}`);
+
+    await registerConsumer(fabric, options);
+    const listed = await listEvents(fabric, options);
+    for (const raw of listed) {
+      report.events_seen += 1;
+      try {
+        const event = parseDomainEvent(raw);
+        await fabric.call(options.schedulerSurfaceId, 'scheduler_event_admit', {
+          event_id: event.event_id,
+          topic: event.topic,
+          partition_key: event.partition_key,
+          aggregate_id: event.aggregate_id,
+          aggregate_revision: event.aggregate_revision,
+          schema_version: event.schema_version,
+          causation_id: event.causation_id,
+          idempotency_key: event.idempotency_key,
+          payload: event.payload,
+          occurred_at: event.occurred_at,
+          implementation_id: implementationId,
+        });
+        report.events_admitted += 1;
+        await acknowledgeEvent(fabric, options, event);
+        report.events_acknowledged += 1;
+      } catch (error) {
+        report.errors.push({
+          stage: 'domain_outbox_event',
+          event_id: optionalString(raw.event_id),
+          error: boundedError(error),
+        });
+      }
+    }
+  } finally {
+    if (ownedFabric) {
+      try {
+        await ownedFabric.close();
+      } catch (error) {
+        report.errors.push({ stage: 'site_fabric_close', error: boundedError(error) });
+      }
+    }
+  }
+  report.status = report.errors.length === 0 ? 'completed' : 'completed_with_errors';
+  return report;
+}
+
+interface NormalizedOptions {
+  siteRoot: string;
+  profile: DomainOutboxProfile;
+  consumerId: string;
+  outboxStartAt: string | null;
+  topics: string[];
+  sourceSurfaceId: string;
+  schedulerSurfaceId: string;
+  maxEvents: number;
+  requestTimeoutMs: number;
+  loaderEntrypoint?: string;
+}
+
+function normalizeOptions(input: SchedulerDomainOutboxOptions): NormalizedOptions {
+  const profile = input.profile;
+  if (profile !== 'mailbox' && profile !== 'work-lifecycle') throw new Error(`domain_outbox_profile_invalid:${String(profile)}`);
+  const startAt = input.outboxStartAt ? normalizeTimestamp(input.outboxStartAt, 'outboxStartAt') : null;
+  const topics = [...new Set((input.topics ?? []).map((topic) => requiredString(topic, 'domain_outbox_topic_invalid')))];
+  if (profile === 'mailbox' && startAt === null) throw new Error('mailbox_outbox_start_at_required');
+  if (profile === 'work-lifecycle' && topics.length === 0) throw new Error('work_lifecycle_outbox_topics_required');
+  return {
+    siteRoot: requiredString(input.siteRoot, 'siteRoot_required'),
+    profile,
+    consumerId: requiredString(input.consumerId, 'consumerId_required'),
+    outboxStartAt: startAt,
+    topics,
+    sourceSurfaceId: optionalString(input.sourceSurfaceId) ?? profile,
+    schedulerSurfaceId: optionalString(input.schedulerSurfaceId) ?? 'scheduler',
+    maxEvents: boundedInteger(input.maxEvents, 100, 1, 100, 'maxEvents'),
+    requestTimeoutMs: boundedInteger(input.requestTimeoutMs, 30_000, 1_000, 300_000, 'requestTimeoutMs'),
+    ...(input.loaderEntrypoint ? { loaderEntrypoint: input.loaderEntrypoint } : {}),
+  };
+}
+
+async function registerConsumer(fabric: SchedulerDomainFabricCaller, options: NormalizedOptions): Promise<void> {
+  if (options.profile === 'mailbox') {
+    await fabric.call(options.sourceSurfaceId, 'mailbox_outbox_consumer_register', {
+      consumer_id: options.consumerId,
+      start_at: options.outboxStartAt,
+    });
+    return;
+  }
+  for (const topic of options.topics) {
+    await fabric.call(options.sourceSurfaceId, 'work_outbox_consumer_register', {
+      consumer_id: options.consumerId,
+      topic,
+    });
+  }
+}
+
+async function listEvents(fabric: SchedulerDomainFabricCaller, options: NormalizedOptions): Promise<JsonRecord[]> {
+  if (options.profile === 'mailbox') {
+    const result = await fabric.call(options.sourceSurfaceId, 'mailbox_outbox_list', {
+      consumer_id: options.consumerId,
+      limit: options.maxEvents,
+    });
+    return recordArray(result.items, 'mailbox_outbox_items_invalid');
+  }
+  const result = await fabric.call(options.sourceSurfaceId, 'work_outbox_list', {
+    consumer_id: options.consumerId,
+    topics: options.topics,
+    limit: options.maxEvents,
+  });
+  return recordArray(result.events, 'work_outbox_events_invalid');
+}
+
+async function acknowledgeEvent(
+  fabric: SchedulerDomainFabricCaller,
+  options: NormalizedOptions,
+  event: DomainEvent,
+): Promise<void> {
+  const args = {
+    consumer_id: options.consumerId,
+    event_id: event.event_id,
+    receipt: {
+      schema: 'narada.scheduler.domain_outbox_receipt.v1',
+      scheduler_event_id: event.event_id,
+      source_profile: options.profile,
+    },
+  };
+  await fabric.call(
+    options.sourceSurfaceId,
+    options.profile === 'mailbox' ? 'mailbox_outbox_ack' : 'work_outbox_ack',
+    args,
+  );
+}
+
+interface DomainEvent {
+  event_id: string;
+  topic: string;
+  partition_key: string;
+  aggregate_id: string;
+  aggregate_revision: number;
+  schema_version: number;
+  causation_id: string;
+  idempotency_key: string;
+  payload: JsonRecord;
+  occurred_at: string;
+}
+
+function parseDomainEvent(value: JsonRecord): DomainEvent {
+  return {
+    event_id: requiredString(value.event_id, 'domain_event_id_missing'),
+    topic: requiredString(value.topic, 'domain_event_topic_missing'),
+    partition_key: requiredString(value.partition_key, 'domain_event_partition_key_missing'),
+    aggregate_id: requiredString(value.aggregate_id, 'domain_event_aggregate_id_missing'),
+    aggregate_revision: requiredInteger(value.aggregate_revision, 'domain_event_aggregate_revision_invalid'),
+    schema_version: requiredInteger(value.schema_version, 'domain_event_schema_version_invalid'),
+    causation_id: requiredString(value.causation_id, 'domain_event_causation_id_missing'),
+    idempotency_key: requiredString(value.idempotency_key, 'domain_event_idempotency_key_missing'),
+    payload: requireRecord(value.payload, 'domain_event_payload_invalid'),
+    occurred_at: normalizeTimestamp(value.occurred_at ?? value.created_at, 'domain_event_occurred_at'),
+  };
+}
+
+function recordArray(value: unknown, code: string): JsonRecord[] {
+  if (!Array.isArray(value) || value.some((entry) => !isRecord(entry))) throw new Error(code);
+  return value as JsonRecord[];
+}
+
+function requireRecord(value: unknown, code: string): JsonRecord {
+  if (!isRecord(value)) throw new Error(code);
+  return value;
+}
+
+function requiredString(value: unknown, code: string): string {
+  const normalized = typeof value === 'string' ? value.trim() : '';
+  if (!normalized) throw new Error(code);
+  return normalized;
+}
+
+function optionalString(value: unknown): string | null {
+  const normalized = typeof value === 'string' ? value.trim() : '';
+  return normalized || null;
+}
+
+function requiredInteger(value: unknown, code: string): number {
+  const number = Number(value);
+  if (!Number.isSafeInteger(number) || number < 0) throw new Error(code);
+  return number;
+}
+
+function boundedInteger(value: number | undefined, fallback: number, min: number, max: number, name: string): number {
+  const resolved = value ?? fallback;
+  if (!Number.isSafeInteger(resolved) || resolved < min || resolved > max) throw new Error(`${name}_invalid`);
+  return resolved;
+}
+
+function normalizeTimestamp(value: unknown, name: string): string {
+  const text = requiredString(value, `${name}_required`);
+  const timestamp = new Date(text);
+  if (Number.isNaN(timestamp.getTime())) throw new Error(`${name}_invalid`);
+  return timestamp.toISOString();
+}
+
+function boundedError(error: unknown): string {
+  const text = error instanceof Error ? error.message : String(error);
+  return text.length <= 2_048 ? text : text.slice(0, 2_048);
+}
+
+function parseCliArgs(argv: string[]): SchedulerDomainOutboxOptions {
+  const values = parseFlagValues(argv, new Set([
+    '--site-root', '--profile', '--consumer-id', '--outbox-start-at', '--topics',
+    '--source-surface-id', '--scheduler-surface-id', '--max-events',
+    '--request-timeout-ms', '--loader-entrypoint',
+  ]));
+  return {
+    siteRoot: requiredString(values.get('--site-root'), 'site_root_required'),
+    profile: requiredString(values.get('--profile'), 'profile_required') as DomainOutboxProfile,
+    consumerId: requiredString(values.get('--consumer-id'), 'consumer_id_required'),
+    ...(values.has('--outbox-start-at') ? { outboxStartAt: values.get('--outbox-start-at') } : {}),
+    ...(values.has('--topics') ? { topics: values.get('--topics')!.split(',').map((topic) => topic.trim()).filter(Boolean) } : {}),
+    ...(values.has('--source-surface-id') ? { sourceSurfaceId: values.get('--source-surface-id') } : {}),
+    ...(values.has('--scheduler-surface-id') ? { schedulerSurfaceId: values.get('--scheduler-surface-id') } : {}),
+    ...(values.has('--max-events') ? { maxEvents: Number(values.get('--max-events')) } : {}),
+    ...(values.has('--request-timeout-ms') ? { requestTimeoutMs: Number(values.get('--request-timeout-ms')) } : {}),
+    ...(values.has('--loader-entrypoint') ? { loaderEntrypoint: values.get('--loader-entrypoint') } : {}),
+  };
+}
+
+function parseFlagValues(argv: string[], known: ReadonlySet<string>): Map<string, string> {
+  const values = new Map<string, string>();
+  for (let index = 0; index < argv.length; index += 1) {
+    const flag = argv[index]!;
+    if (!known.has(flag)) throw new Error(`unknown_argument:${flag}`);
+    const value = argv[index + 1];
+    if (!value || value.startsWith('--')) throw new Error(`missing_argument_value:${flag}`);
+    if (values.has(flag)) throw new Error(`duplicate_argument:${flag}`);
+    values.set(flag, value);
+    index += 1;
+  }
+  return values;
+}
+
+function isEntrypoint(): boolean {
+  const invoked = process.argv[1];
+  return Boolean(invoked) && import.meta.url === pathToFileURL(invoked).href;
+}
+
+if (isEntrypoint()) {
+  runSchedulerDomainOutboxDispatcher(parseCliArgs(process.argv.slice(2)))
+    .then((report) => {
+      process.stdout.write(`${JSON.stringify(report)}\n`);
+      if (report.status !== 'completed') process.exitCode = 1;
+    })
+    .catch((error) => {
+      process.stderr.write(`${boundedError(error)}\n`);
+      process.exitCode = 1;
+    });
+}

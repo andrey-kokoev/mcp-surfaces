@@ -1,5 +1,5 @@
 {
-  "name": "@narada2/mcp-loader-mcp",
+  "name": "@narada-core/mcp-loader-mcp",
   "version": "0.1.0",
   "license": "Apache-2.0",
   "type": "module",
@@ -21,14 +21,14 @@
   "scripts": {
     "build": "tsc -b",
     "typecheck": "tsc -b --pretty false",
-    "test": "pnpm --filter @narada2/mcp-e2e-harness build && pnpm build && node dist/test/protocol-smoke.test.js && node dist/test/mcp-loader-mcp.test.js"
+    "test": "pnpm --filter @narada-core/mcp-e2e-harness build && pnpm build && node dist/test/protocol-smoke.test.js && node dist/test/mcp-loader-mcp.test.js"
   },
   "dependencies": {
-    "@narada2/mcp-fabric-contracts": "workspace:*",
-    "@narada2/mcp-transport": "workspace:*"
+    "@narada-core/mcp-fabric-contracts": "workspace:*",
+    "@narada-core/mcp-transport": "workspace:*"
   },
   "devDependencies": {
-    "@narada2/mcp-e2e-harness": "workspace:*"
+    "@narada-core/mcp-e2e-harness": "workspace:*"
   },
   "files": [
     "dist/"

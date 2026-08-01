@@ -6,8 +6,14 @@ import { createHash, randomUUID } from 'node:crypto';
 import { basename, dirname, join, resolve } from 'node:path';
 import { assertAttachmentUploadUrlAllowed, buildGraphUrl, graphMailboxPath, graphRequest, graphTop, messagePatchFromArgs, recipients, requiredString } from './graph-client.js';
 import { decideDraftSend, decideMailboxOrganizationWrite, loadGraphMailPolicy, recordGraphMailAudit } from './policy.js';
-import { buildGraphMailTelemetryDeclaration, emitTelemetryEvent, telemetryErrorCodeFromUnknown, telemetryRefusalCodeFromResult, type TelemetryDeclaration, type TelemetryEventKind } from '@narada2/mcp-telemetry';
-import { buildBoundedToolResult, outputShowAsync } from '@narada2/mcp-transport';
+import { buildGraphMailTelemetryDeclaration, emitTelemetryEvent, telemetryErrorCodeFromUnknown, telemetryRefusalCodeFromResult, type TelemetryDeclaration, type TelemetryEventKind } from '@narada-core/mcp-telemetry';
+import { buildBoundedToolResult, outputShowAsync } from '@narada-core/mcp-transport';
+import {
+  TicketDraftOperationStore,
+  sha256Canonical,
+  stableReceiptId,
+  type TicketDraftOperationRow,
+} from './ticket-draft-store.js';
 
 const SERVER_NAME = 'narada-graph-mail-mcp';
 const SERVER_VERSION = '0.1.0';
@@ -15,6 +21,7 @@ const PROTOCOL_VERSION = '2024-11-05';
 const ATTACHMENT_UPLOAD_CHUNK_GRANULARITY = 320 * 1024;
 const DEFAULT_ATTACHMENT_UPLOAD_CHUNK_SIZE = 10 * ATTACHMENT_UPLOAD_CHUNK_GRANULARITY;
 const SURFACE_ID = 'graph-mail';
+const TICKET_DRAFT_OPERATION_PROPERTY_ID = 'String {d700a6f2-79ad-4f44-9df7-3e9b622f09f8} Name NaradaTicketDraftOperation';
 const GRAPH_MAIL_TELEMETRY_TOOL_NAMES = new Set([
   'graph_mail_doctor',
   'graph_mail_auth_device_code_start',
@@ -38,6 +45,7 @@ const GRAPH_MAIL_TELEMETRY_TOOL_NAMES = new Set([
   'graph_mail_reply_all_draft_create',
   'graph_mail_forward_draft_create',
   'graph_mail_reply_all_to_last_in_thread_draft_create',
+  'graph_mail_ticket_draft_upsert',
   'graph_mail_draft_update',
   'graph_mail_draft_discard',
   'graph_mail_draft_send',
@@ -55,6 +63,10 @@ type GraphMailServerState = GraphMailRecord & {
   tokenEndpoint: string | null;
   tokenCache: { accessToken: string; expiresAtMs: number } | null;
   fetchImpl: typeof fetch;
+  ticketDraftFaultInjector?: (
+    point: 'after_graph_commit_before_receipt',
+    operationKey: string,
+  ) => void | Promise<void>;
 };
 type DeviceCodeFlowState = {
   schema: 'narada.graph_mail_mcp.device_code_flow.v1';
@@ -138,6 +150,9 @@ export function createServerState(options: unknown = {}): GraphMailServerState {
     tokenEndpoint: stringOption(optionsRecord.tokenEndpoint) ?? env.GRAPH_TOKEN_ENDPOINT ?? null,
     tokenCache: null,
     fetchImpl: typeof optionsRecord.fetchImpl === 'function' ? optionsRecord.fetchImpl as typeof fetch : fetch,
+    ...(typeof optionsRecord.ticketDraftFaultInjector === 'function'
+      ? { ticketDraftFaultInjector: optionsRecord.ticketDraftFaultInjector as GraphMailServerState['ticketDraftFaultInjector'] }
+      : {}),
   };
 }
 
@@ -306,6 +321,29 @@ export function listTools(): unknown[] {
     tool('graph_mail_reply_all_draft_create', 'Create a reply-all draft for an existing message.', replyDraftProperties(), ['message_id']),
     tool('graph_mail_forward_draft_create', 'Create a forward draft for an existing message.', forwardDraftProperties(), ['message_id']),
     tool('graph_mail_reply_all_to_last_in_thread_draft_create', 'Create a reply-all draft addressed to the last message in a conversation thread.', replyAllToThreadProperties(), ['conversation_id']),
+    tool('graph_mail_ticket_draft_upsert', 'Idempotently create or recover the exact unsent reply draft authorized by a Work Lifecycle effect claim. This tool cannot send.', {
+      ticket_id: { type: 'string', description: 'Canonical Work Lifecycle ticket id.' },
+      effect_claim_id: { type: 'string', description: 'Revision-bound Work Lifecycle effect claim id.' },
+      draft_operation_key: { type: 'string', description: 'Stable Work Lifecycle Graph draft operation key.' },
+      draft_request_digest: { type: 'string', pattern: '^[a-f0-9]{64}$', description: 'SHA-256 of the exact admitted draft request.' },
+      draft_source_id: { type: 'string', description: 'Ticket mailbox source id admitted by Work Lifecycle.' },
+      mailbox_id: { type: 'string', description: 'Allowed mailbox identity resolved by Work Lifecycle.' },
+      source_message_id: { type: 'string', description: 'Immutable source message id resolved by Work Lifecycle.' },
+      reply_mode: { type: 'string', enum: ['reply', 'reply_all'] },
+      body_text: { type: 'string', description: 'Plain-text unsent response body; mutually exclusive with body_html.' },
+      body_html: { type: 'string', description: 'HTML unsent response body; mutually exclusive with body_text.' },
+      idempotency_key: { type: 'string', description: 'Stable SOP action occurrence key.' },
+    }, [
+      'ticket_id',
+      'effect_claim_id',
+      'draft_operation_key',
+      'draft_request_digest',
+      'draft_source_id',
+      'mailbox_id',
+      'source_message_id',
+      'reply_mode',
+      'idempotency_key',
+    ]),
     tool('graph_mail_draft_update', 'Update an existing draft message.', {
       draft_id: { type: 'string', description: 'Draft message id.' },
       ...draftMessageProperties(),
@@ -602,6 +640,9 @@ async function callTool(params: GraphMailRecord, state: GraphMailServerState) {
         break;
       case 'graph_mail_reply_all_to_last_in_thread_draft_create':
         result = await graphMailReplyAllToLastInThreadDraftCreate(args, state);
+        break;
+      case 'graph_mail_ticket_draft_upsert':
+        result = await graphMailTicketDraftUpsert(args, state);
         break;
       case 'graph_mail_draft_update':
         result = await graphMailDraftUpdate(args, state);
@@ -1072,6 +1113,267 @@ async function graphMailReplyAllToLastInThreadDraftCreate(args: GraphMailRecord,
   return { schema: 'narada.graph_mail_mcp.draft.v1', status: 'created', source_message_id: messageId, draft: graph };
 }
 
+async function graphMailTicketDraftUpsert(
+  args: GraphMailRecord,
+  state: GraphMailServerState,
+): Promise<GraphMailRecord> {
+  const bodyText = stringOption(args.body_text);
+  const bodyHtml = stringOption(args.body_html);
+  if ((bodyText ? 1 : 0) + (bodyHtml ? 1 : 0) !== 1) {
+    throw new Error('graph_ticket_draft_exactly_one_body_required');
+  }
+  const replyModeValue = requiredString(args, 'reply_mode');
+  if (replyModeValue !== 'reply' && replyModeValue !== 'reply_all') {
+    throw new Error('graph_ticket_draft_reply_mode_invalid');
+  }
+  const replyMode: 'reply' | 'reply_all' = replyModeValue;
+  const draftOperationKey = requiredString(args, 'draft_operation_key');
+  if (!/^[A-Za-z0-9._:-]{1,256}$/.test(draftOperationKey)) {
+    throw new Error('graph_ticket_draft_operation_key_invalid');
+  }
+  const admittedDigest = requiredString(args, 'draft_request_digest').toLowerCase();
+  if (!/^[a-f0-9]{64}$/.test(admittedDigest)) {
+    throw new Error('graph_ticket_draft_request_digest_invalid');
+  }
+  const normalized = {
+    ticket_id: requiredString(args, 'ticket_id'),
+    effect_claim_id: requiredString(args, 'effect_claim_id'),
+    draft_operation_key: draftOperationKey,
+    draft_request_digest: admittedDigest,
+    draft_source_id: requiredString(args, 'draft_source_id'),
+    mailbox_id: requiredString(args, 'mailbox_id'),
+    source_message_id: requiredString(args, 'source_message_id'),
+    reply_mode: replyMode,
+    ...(bodyText ? { body_text: bodyText } : {}),
+    ...(bodyHtml ? { body_html: bodyHtml } : {}),
+    idempotency_key: requiredString(args, 'idempotency_key'),
+  };
+  const draftRequest = {
+    source_id: normalized.draft_source_id,
+    mailbox_id: normalized.mailbox_id,
+    source_message_id: normalized.source_message_id,
+    reply_mode: normalized.reply_mode,
+    ...(bodyText ? { body_text: bodyText } : {}),
+    ...(bodyHtml ? { body_html: bodyHtml } : {}),
+  };
+  const actualDigest = sha256Canonical(draftRequest);
+  if (actualDigest !== admittedDigest) {
+    throw new Error(`graph_ticket_draft_request_digest_mismatch:${admittedDigest}:${actualDigest}`);
+  }
+  const requestDigest = sha256Canonical(normalized);
+  const store = new TicketDraftOperationStore(state.siteRoot);
+  try {
+    store.beginImmediate();
+    let operation = store.find(draftOperationKey);
+    if (operation) {
+      assertTicketDraftOperationMatches(operation, normalized, requestDigest);
+      if (operation.status === 'completed') {
+        store.commit();
+        return ticketDraftDomainOperation(operation, true);
+      }
+    } else {
+      operation = store.insertPending({
+        operation_key: draftOperationKey,
+        action_idempotency_key: normalized.idempotency_key,
+        request_digest: requestDigest,
+        draft_request_digest: admittedDigest,
+        ticket_id: normalized.ticket_id,
+        effect_claim_id: normalized.effect_claim_id,
+        mailbox_id: normalized.mailbox_id,
+        source_message_id: normalized.source_message_id,
+        reply_mode: normalized.reply_mode,
+        now: new Date().toISOString(),
+      });
+    }
+
+    const { policy, accessToken, fetchImpl } = await clientParts(state);
+    let draft = await findTicketDraftByOperation(
+      normalized.mailbox_id,
+      draftOperationKey,
+      { policy, accessToken, fetchImpl },
+    );
+    let recovered = true;
+    if (!draft) {
+      recovered = false;
+      const message = messagePatchFromArgs(normalized);
+      message.singleValueExtendedProperties = [{
+        id: TICKET_DRAFT_OPERATION_PROPERTY_ID,
+        value: draftOperationKey,
+      }];
+      const action = normalized.reply_mode === 'reply' ? 'createReply' : 'createReplyAll';
+      const path = graphMailboxPath(
+        normalized.mailbox_id,
+        `messages/${encodeURIComponent(normalized.source_message_id)}/${action}`,
+        policy,
+      );
+      recordGraphMailAudit(state.siteRoot, {
+        event_kind: 'ticket_draft_create_requested',
+        ticket_id: normalized.ticket_id,
+        effect_claim_id: normalized.effect_claim_id,
+        draft_operation_key: draftOperationKey,
+        mailbox_id: normalized.mailbox_id,
+        source_message_id: normalized.source_message_id,
+        reply_mode: normalized.reply_mode,
+        draft_request_digest: admittedDigest,
+      });
+      draft = asRecord(await graphRequest(
+        { policy, accessToken, fetchImpl },
+        { method: 'POST', path, body: { message } },
+      ));
+      const draftId = stringOption(draft.id);
+      if (!draftId || draft.isDraft === false) throw new Error('graph_ticket_draft_create_result_invalid');
+      recordGraphMailAudit(state.siteRoot, {
+        event_kind: 'ticket_draft_create_completed',
+        ticket_id: normalized.ticket_id,
+        effect_claim_id: normalized.effect_claim_id,
+        draft_operation_key: draftOperationKey,
+        draft_id: draftId,
+      });
+      await state.ticketDraftFaultInjector?.(
+        'after_graph_commit_before_receipt',
+        draftOperationKey,
+      );
+    }
+
+    const draftId = requiredDraftId(draft);
+    const completed = store.complete(draftOperationKey, {
+      draft_id: draftId,
+      receipt_id: stableReceiptId(draftOperationKey, draftId),
+      draft_ref: ticketDraftRef(normalized, draft),
+      now: new Date().toISOString(),
+    });
+    store.commit();
+    return ticketDraftDomainOperation(completed, recovered);
+  } catch (error) {
+    store.rollback();
+    throw error;
+  } finally {
+    store.close();
+  }
+}
+
+function assertTicketDraftOperationMatches(
+  operation: TicketDraftOperationRow,
+  input: {
+    ticket_id: string;
+    effect_claim_id: string;
+    draft_request_digest: string;
+    mailbox_id: string;
+    source_message_id: string;
+    reply_mode: 'reply' | 'reply_all';
+    idempotency_key: string;
+  },
+  requestDigest: string,
+): void {
+  if (
+    operation.request_digest !== requestDigest
+    || operation.action_idempotency_key !== input.idempotency_key
+    || operation.draft_request_digest !== input.draft_request_digest
+    || operation.ticket_id !== input.ticket_id
+    || operation.effect_claim_id !== input.effect_claim_id
+    || operation.mailbox_id !== input.mailbox_id
+    || operation.source_message_id !== input.source_message_id
+    || operation.reply_mode !== input.reply_mode
+  ) throw new Error(`graph_ticket_draft_idempotency_conflict:${operation.operation_key}`);
+}
+
+async function findTicketDraftByOperation(
+  mailboxId: string,
+  operationKey: string,
+  client: Awaited<ReturnType<typeof clientParts>>,
+): Promise<GraphMailRecord | null> {
+  const propertyId = odataString(TICKET_DRAFT_OPERATION_PROPERTY_ID);
+  const propertyValue = odataString(operationKey);
+  const path = graphMailboxPath(mailboxId, 'messages', client.policy);
+  const result = asRecord(await graphRequest(client, {
+    path,
+    query: {
+      '$filter': `isDraft eq true and singleValueExtendedProperties/Any(ep: ep/id eq '${propertyId}' and ep/value eq '${propertyValue}')`,
+      '$expand': `singleValueExtendedProperties($filter=id eq '${propertyId}')`,
+      '$select': 'id,conversationId,subject,isDraft,createdDateTime,lastModifiedDateTime',
+      '$top': 2,
+    },
+  }));
+  const drafts = Array.isArray(result.value)
+    ? result.value.map(asRecord).filter((draft) => stringOption(draft.id) && draft.isDraft !== false)
+    : [];
+  if (drafts.length > 1) {
+    throw new Error(`graph_ticket_draft_remote_identity_ambiguous:${operationKey}`);
+  }
+  return drafts[0] ?? null;
+}
+
+function ticketDraftRef(
+  input: {
+    ticket_id: string;
+    effect_claim_id: string;
+    draft_operation_key: string;
+    draft_request_digest: string;
+    mailbox_id: string;
+    source_message_id: string;
+    reply_mode: 'reply' | 'reply_all';
+  },
+  draft: GraphMailRecord,
+): GraphMailRecord {
+  return {
+    schema: 'narada.graph_mail.ticket_draft_ref.v1',
+    ticket_id: input.ticket_id,
+    effect_claim_id: input.effect_claim_id,
+    draft_operation_key: input.draft_operation_key,
+    draft_request_digest: input.draft_request_digest,
+    mailbox_id: input.mailbox_id,
+    source_message_id: input.source_message_id,
+    reply_mode: input.reply_mode,
+    draft_id: requiredDraftId(draft),
+    ...(stringOption(draft.conversationId)
+      ? { conversation_id: stringOption(draft.conversationId) }
+      : {}),
+    ...(stringOption(draft['@odata.etag'])
+      ? { etag: stringOption(draft['@odata.etag']) }
+      : {}),
+  };
+}
+
+function ticketDraftDomainOperation(
+  operation: TicketDraftOperationRow,
+  replayedOrRecovered: boolean,
+): GraphMailRecord {
+  if (
+    operation.status !== 'completed'
+    || !operation.draft_id
+    || !operation.receipt_id
+    || !operation.draft_ref
+  ) throw new Error('graph_ticket_draft_operation_incomplete');
+  return {
+    schema: 'narada.domain_operation.v1',
+    operation_ref: `graph-mail-ticket-draft:${operation.operation_key}`,
+    outcome: 'completed',
+    result: {
+      schema: 'narada.graph_mail.ticket_draft_receipt.v1',
+      ticket_id: operation.ticket_id,
+      effect_claim_id: operation.effect_claim_id,
+      draft_operation_key: operation.operation_key,
+      draft_request_digest: operation.draft_request_digest,
+      receipt_id: operation.receipt_id,
+      draft_id: operation.draft_id,
+      draft_ref: operation.draft_ref,
+      idempotency_replayed_or_recovered: replayedOrRecovered,
+      completed_at: operation.completed_at,
+    },
+  };
+}
+
+function requiredDraftId(draft: GraphMailRecord): string {
+  const draftId = stringOption(draft.id);
+  if (!draftId) throw new Error('graph_ticket_draft_id_missing');
+  if (draft.isDraft === false) throw new Error('graph_ticket_draft_not_unsent');
+  return draftId;
+}
+
+function odataString(value: string): string {
+  return value.replace(/'/g, "''");
+}
+
 function derivedDraftBody(args: GraphMailRecord, action: 'createReply' | 'createReplyAll' | 'createForward'): GraphMailRecord {
   const message = messagePatchFromArgs(args);
   if (action === 'createForward' && Array.isArray(args.to_recipients)) message.toRecipients = recipients(args.to_recipients);
@@ -1375,6 +1677,7 @@ const GRAPH_MAIL_MUTATING_TOOLS = new Set([
   'graph_mail_reply_all_draft_create',
   'graph_mail_forward_draft_create',
   'graph_mail_reply_all_to_last_in_thread_draft_create',
+  'graph_mail_ticket_draft_upsert',
   'graph_mail_draft_update',
   'graph_mail_draft_discard',
   'graph_mail_draft_send',
@@ -1398,6 +1701,7 @@ const GRAPH_MAIL_IDEMPOTENT_TOOLS = new Set([
   'graph_mail_folder_list',
   'graph_mail_attachment_list',
   'graph_mail_attachment_get',
+  'graph_mail_ticket_draft_upsert',
 ]);
 
 function tool(name: string, description: string, properties: unknown, required: string[] = []): unknown {

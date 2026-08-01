@@ -2,13 +2,23 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { buildCreateScheduleArgs, buildScheduledTaskMutationScript, buildTaskRunCommand, compactScheduledTaskRows, createServerState, handleRequest, schedulerRuntimeStatus, scheduledActionPolicyReasons, schedulerFailureDetails } from '../src/main.js';
+import { buildCreateScheduleArgs, buildScheduledTaskMutationScript, buildTaskRunCommand, compactScheduledTaskRows, createServerState, handleRequest, schedulerRuntimeStatus, scheduledActionPolicyReasons, schedulerFailureDetails, splitScheduledTaskPath } from '../src/main.js';
 
 const state = createServerState({});
 const runtimeStatus = schedulerRuntimeStatus();
 assert.equal(runtimeStatus.status, 'fresh');
 assert.equal(state.implementationId, runtimeStatus.implementation_id);
-assert.match(buildScheduledTaskMutationScript(), /New-ScheduledTaskSettingsSet -Hidden/);
+assert.match(buildScheduledTaskMutationScript(), /ExecutionTimeLimit/);
+assert.match(buildScheduledTaskMutationScript(), /MultipleInstances/);
+assert.match(buildScheduledTaskMutationScript(), /-TaskPath \$taskPath/);
+assert.deepEqual(splitScheduledTaskPath('\\Narada\\SonarOperatingProgramDispatch'), {
+  taskName: 'SonarOperatingProgramDispatch',
+  taskPath: '\\Narada\\',
+});
+assert.deepEqual(splitScheduledTaskPath('\\Narada-Sonar-Daemon'), {
+  taskName: 'Narada-Sonar-Daemon',
+  taskPath: '\\',
+});
 
 const canonicalWrapperRoot = mkdtempSync(join(tmpdir(), 'scheduler-mcp-wrapper-'));
 try {
@@ -93,6 +103,8 @@ const dryRunUpdate = await callTool('scheduler_task_update_action', {
   implementation_id: runtimeStatus.implementation_id,
   arguments: '-NoProfile -File D:\\code\\narada.sonar\\scripts\\supervisor.ps1 start',
   working_dir: 'D:\\code\\narada.sonar',
+  execution_time_limit_seconds: 180,
+  multiple_instances: 'ignore_new',
   dry_run: true,
 });
 const dryRunUpdateData = view(dryRunUpdate);
@@ -107,5 +119,7 @@ assert.deepEqual(dryRunUpdateData.schtasks_preview_args.slice(0, 4), ['/change',
 assert.equal(dryRunUpdateData.working_dir, 'D:\\code\\narada.sonar');
 assert.equal(dryRunUpdateData.working_dir_applied, false);
 assert.equal(dryRunUpdateData.working_dir_would_apply, true);
+assert.equal(dryRunUpdateData.execution_time_limit_seconds, 180);
+assert.equal(dryRunUpdateData.multiple_instances, 'IgnoreNew');
 
 console.log('scheduler-mcp behavior ok');

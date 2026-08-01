@@ -4,15 +4,15 @@ This repository mixes reusable substrate surfaces with Narada-specific control-p
 
 ## Generic Or Reusable
 
-- `@narada2/mcp-transport`
-- `@narada2/mcp-telemetry`
-- `@narada2/mcp-affordances`
-- `@narada2/mcp-runtime-proxy`
-- `@narada2/mcp-fabric-contracts`
-- `@narada2/mcp-fabric-compiler`
-- `@narada2/local-filesystem-mcp`
-- `@narada2/structured-command-mcp`
-- `@narada2/git-mcp`
+- `@narada-core/mcp-transport`
+- `@narada-core/mcp-telemetry`
+- `@narada-core/mcp-affordances`
+- `@narada-core/mcp-runtime-proxy`
+- `@narada-core/mcp-fabric-contracts`
+- `@narada-core/mcp-fabric-compiler`
+- `@narada-core/local-filesystem-mcp`
+- `@narada-core/structured-command-mcp`
+- `@narada-core/git-mcp`
 
 `mcp-fabric-contracts` is generic because it defines transport-neutral document
 contracts and deterministic digests. Narada-specific discovery, authority,
@@ -23,42 +23,42 @@ The V2 runtime observation and reconciliation contracts are also transport-neutr
 
 ## Narada-Specific
 
-- `@narada2/site-inbox-mcp`
-- `@narada2/mailbox-mcp`
-- `@narada2/graph-mail-mcp`
-- `@narada2/calendar-mcp`
-- `@narada2/task-lifecycle-mcp`
-- `@narada2/site-loop-mcp`
-- `@narada2/agent-context-mcp`
-- `@narada2/worker-delegation-mcp`
-- `@narada2/delegated-task-mcp`
-- `@narada2/sop-mcp`
-- `@narada2/scheduler-mcp`
-- `@narada2/mcp-registrar`
-- `@narada2/mcp-loader-mcp`
-- `@narada2/runtime-introspection-mcp`
-- `@narada2/speech-mcp`
-- `@narada2/cloudflare-carrier-mcp`
-- `@narada2/site-coherence-mcp`
-- `@narada2/site-lifecycle-mcp`
-- `@narada2/site-registry-mcp`
-- `@narada2/operator-routing-mcp`
-- `@narada2/artifacts-mcp`
-- `@narada2/nars-session-mcp`
-- `@narada2/quota-meter-mcp`
-- `@narada2/surface-feedback-mcp`
-- `@narada2/launcher-mcp`
+- `@narada-core/site-inbox-mcp`
+- `@narada-core/mailbox-mcp`
+- `@narada-core/graph-mail-mcp`
+- `@narada-core/calendar-mcp`
+- `@narada-core/task-lifecycle-mcp`
+- `@narada-core/site-loop-mcp`
+- `@narada-core/agent-context-mcp`
+- `@narada-core/worker-delegation-mcp`
+- `@narada-core/delegated-task-mcp`
+- `@narada-core/sop-mcp`
+- `@narada-core/scheduler-mcp`
+- `@narada-core/mcp-registrar`
+- `@narada-core/mcp-loader-mcp`
+- `@narada-core/runtime-introspection-mcp`
+- `@narada-core/speech-mcp`
+- `@narada-core/cloudflare-carrier-mcp`
+- `@narada-core/site-coherence-mcp`
+- `@narada-core/site-lifecycle-mcp`
+- `@narada-core/site-registry-mcp`
+- `@narada-core/operator-routing-mcp`
+- `@narada-core/artifacts-mcp`
+- `@narada-core/nars-session-mcp`
+- `@narada-core/quota-meter-mcp`
+- `@narada-core/surface-feedback-mcp`
+- `@narada-core/launcher-mcp`
 
-- @narada2/operator-console-overlay-mcp
+- @narada-core/operator-console-overlay-mcp
 
 ## Ambiguous Infrastructure
 
 These are Narada-owned infrastructure surfaces that can feel generic because they support other surfaces, but they still belong to the Narada control plane:
 
-- `@narada2/mcp-registrar`
-- `@narada2/mcp-loader-mcp`
-- `@narada2/runtime-introspection-mcp`
-- `@narada2/launcher-mcp`
+- `@narada-core/mcp-registrar`
+- `@narada-core/mcp-loader-mcp`
+- `@narada-core/runtime-introspection-mcp`
+- `@narada-core/launcher-mcp`
 
 ## How To Use This Split
 
@@ -66,7 +66,7 @@ These are Narada-owned infrastructure surfaces that can feel generic because the
 - Treat Narada-specific surfaces as control-plane or site-owned surfaces unless a package doc explicitly says they are portable.
 - When in doubt, follow the package README and the injection-scope doctrine in `docs/mcp-injection-scopes.md`.
 
-`@narada2/mcp-transport` is generic substrate with a single bound site scope. It
+`@narada-core/mcp-transport` is generic substrate with a single bound site scope. It
 must not provide ambient cross-site filesystem reads. Cross-site transfer belongs
 to an explicitly authorized User Site or artifact/export surface; see the
 transport contract in `docs/mcp-surfaces-target-shape.md`.

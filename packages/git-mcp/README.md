@@ -1,4 +1,4 @@
-# @narada2/git-mcp
+# @narada-core/git-mcp
 
 Structured, policy-gated Git MCP surface.
 
@@ -92,7 +92,7 @@ Git tools return bounded output directly in their own result payloads. For `git_
 ## Run
 
 ```powershell
-pnpm --filter @narada2/git-mcp build
+pnpm --filter @narada-core/git-mcp build
 node packages/git-mcp/dist/src/main.js --allowed-root D:/code/example --mode read
 ```
 
@@ -105,5 +105,5 @@ node packages/git-mcp/dist/src/main.js --allowed-root D:/code/example --mode wri
 ## Verification
 
 ```powershell
-pnpm --filter @narada2/git-mcp test
+pnpm --filter @narada-core/git-mcp test
 ```

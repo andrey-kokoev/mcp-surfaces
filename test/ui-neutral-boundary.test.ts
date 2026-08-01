@@ -6,9 +6,9 @@ import { fileURLToPath } from 'node:url';
 const repositoryRoot = fileURLToPath(new URL('../', import.meta.url));
 const packagesRoot = join(repositoryRoot, 'packages');
 const forbiddenRendererPackages = [
-  '@narada2/agent-web-ui',
-  '@narada2/ui',
-  '@narada2/ui-vue',
+  '@narada-core/agent-web-ui',
+  '@narada-core/ui',
+  '@narada-core/ui-vue',
   '@tailwindcss/vite',
   'react',
   'react-dom',

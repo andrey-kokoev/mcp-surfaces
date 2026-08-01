@@ -11,7 +11,7 @@ import {
   structured,
   type JsonlMcpClient,
   type JsonRecord,
-} from '@narada2/mcp-e2e-harness';
+} from '@narada-core/mcp-e2e-harness';
 import {
   diagnosticError,
   observeChild,

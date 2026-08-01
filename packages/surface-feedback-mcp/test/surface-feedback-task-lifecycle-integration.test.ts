@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { mkdirSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { prepareTaskLifecycleMcpSite } from '@narada-core/task-lifecycle-mcp/task-lifecycle-mcp-server';
 import { closeServerState, createServerState, handleRequest } from '../src/main.js';
 
 const parent = mkdtempSync(join(tmpdir(), 'surface-feedback-isolation-'));
@@ -21,6 +22,7 @@ try {
     const siteRoot = join(parent, siteId);
     mkdirSync(join(siteRoot, '.ai', 'do-not-open', 'tasks'), { recursive: true });
     mkdirSync(join(siteRoot, '.narada'), { recursive: true });
+    prepareTaskLifecycleMcpSite(siteRoot);
     states.push(createServerState({
       feedbackRoot: siteRoot,
       canonicalFeedbackRoot: siteRoot,

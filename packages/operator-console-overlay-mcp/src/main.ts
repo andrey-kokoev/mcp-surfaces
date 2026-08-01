@@ -53,7 +53,7 @@ async function materializeOverlayEntrypoint(state: OperatorConsoleOverlayState, 
   const exitCode = await new Promise<number>((resolveResult, rejectResult) => {
     let settled = false;
     let timer: NodeJS.Timeout | undefined;
-    const child = spawn(pnpm, ['--filter', '@narada2/operator-console-overlay', 'build'], {
+    const child = spawn(pnpm, ['--filter', '@narada-core/operator-console-overlay', 'build'], {
       cwd: state.naradaRoot,
       env: state.env,
       windowsHide: true,

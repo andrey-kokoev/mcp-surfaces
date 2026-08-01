@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { mkdirSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
+import { prepareTaskLifecycleMcpSite } from '@narada-core/task-lifecycle-mcp/task-lifecycle-mcp-server';
 import {
   createTemporaryE2eRoot,
   removeTemporaryE2eRoot,
@@ -8,10 +9,11 @@ import {
   siteFabricChildEnv,
   spawnJsonlMcpServer,
   type JsonRecord,
-} from '@narada2/mcp-e2e-harness';
+} from '@narada-core/mcp-e2e-harness';
 
 const siteRoot = createTemporaryE2eRoot('surface-feedback-site-fabric-e2e');
 mkdirSync(`${siteRoot}/.ai`, { recursive: true });
+prepareTaskLifecycleMcpSite(siteRoot);
 const serverPath = fileURLToPath(new URL('../src/main.js', import.meta.url));
 const server = spawnJsonlMcpServer(process.execPath, [
   serverPath,

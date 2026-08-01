@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { pathToFileURL } from 'node:url';
-import { resolveToolPayloadArgs } from '@narada2/mcp-transport';
+import { resolveToolPayloadArgs } from '@narada-core/mcp-transport';
 import { buildGuidanceResult, guidanceToolDefinition } from './guidance.js';
 import { createSessionClient, NarsSessionMcpError, type JsonRecord } from './session-client.js';
 

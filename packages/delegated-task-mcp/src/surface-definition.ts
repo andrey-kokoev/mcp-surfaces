@@ -1,4 +1,4 @@
-import { defineNativeSurface, type DefinedSurface, type McpToolDefinition } from '@narada2/mcp-fabric-contracts';
+import { defineNativeSurface, type DefinedSurface, type McpToolDefinition } from '@narada-core/mcp-fabric-contracts';
 import { listTools } from './main.js';
 
 const READ_ONLY_TOOLS = ["delegated_task_guidance","delegated_task_policy_inspect","delegated_task_template_catalog","delegated_task_validate","delegated_task_status","delegated_task_summary","delegated_task_result","delegated_task_wait","delegated_task_events","delegated_tasks_list"] as const;
@@ -7,7 +7,7 @@ export function surfaceDefinition(): DefinedSurface {
   return defineNativeSurface({
     surface_id: 'delegated-task',
     surface_version: '0.1.0',
-    package: '@narada2/delegated-task-mcp',
+    package: '@narada-core/delegated-task-mcp',
     entrypoint: '{mcp_surfaces_root}/delegated-task-mcp/dist/src/main.js',
     tools: listTools() as McpToolDefinition[],
     read_only_tools: READ_ONLY_TOOLS,

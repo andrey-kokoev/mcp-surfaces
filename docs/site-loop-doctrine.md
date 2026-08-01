@@ -11,7 +11,7 @@ typed adapters, or governed tool boundaries.
 
 ## Implemented Shape
 
-`@narada2/site-loop-mcp` owns:
+`@narada-core/site-loop-mcp` owns:
 
 - validation of `.narada/capabilities/site-loop-config.json`
 - allowlisted documentation and test selector exposure

@@ -17,8 +17,8 @@ import {
   tomlPath,
   type JsonlMcpClient,
   type JsonRecord,
-} from '@narada2/mcp-e2e-harness';
-import { prepareTaskLifecycleMcpSite } from '@narada2/task-lifecycle-mcp/task-lifecycle-mcp-server';
+} from '@narada-core/mcp-e2e-harness';
+import { prepareTaskLifecycleMcpSite } from '@narada-core/task-lifecycle-mcp/task-lifecycle-mcp-server';
 
 type AnyRecord = Record<string, any>;
 type JsonLine = AnyRecord;

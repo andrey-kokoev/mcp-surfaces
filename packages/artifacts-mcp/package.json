@@ -1,5 +1,5 @@
 {
-  "name": "@narada2/artifacts-mcp",
+  "name": "@narada-core/artifacts-mcp",
   "version": "0.1.0",
   "license": "Apache-2.0",
   "type": "module",
@@ -28,9 +28,9 @@
     "README.md"
   ],
   "dependencies": {
-    "@narada2/mcp-fabric-contracts": "workspace:*"
+    "@narada-core/mcp-fabric-contracts": "workspace:*"
   },
   "devDependencies": {
-    "@narada2/mcp-e2e-harness": "workspace:*"
+    "@narada-core/mcp-e2e-harness": "workspace:*"
   }
 }

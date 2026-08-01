@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readdirSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, readdirSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { buildWorkspaceArtifactManifest } from '../packages/shared/mcp-runtime-proxy/src/workspace-artifact-manifest.ts';
@@ -25,6 +25,14 @@ if (missingExports.length > 0) {
 if (unverifiedDependencies.length > 0) {
   throw new Error(`workspace_dependency_unverified:${unverifiedDependencies.join(',')}`);
 }
+const retiredNamespaceArtifacts = findFilesNamedDist(packageRoots)
+  .filter((path) => /\.(?:js|cjs|mjs|d\.ts)$/.test(path))
+  .filter((path) => readFileSync(path, 'utf8').includes('@narada2/'));
+if (retiredNamespaceArtifacts.length > 0) {
+  throw new Error(`workspace_retired_namespace_artifact:${retiredNamespaceArtifacts
+    .map((path) => path.replace(/\\/g, '/'))
+    .join(',')}`);
+}
 console.log(JSON.stringify({
   schema: manifest.schema,
   workspace_root: manifest.workspace_root,
@@ -39,4 +47,22 @@ function directPackageRoots(directory: string): string[] {
   return readdirSync(directory, { withFileTypes: true })
     .filter((entry) => entry.isDirectory() && existsSync(join(directory, entry.name, 'package.json')))
     .map((entry) => join(directory, entry.name));
+}
+
+function findFilesNamedDist(roots: string[]): string[] {
+  const files: string[] = [];
+  for (const root of roots) {
+    const dist = join(root, 'dist');
+    if (!existsSync(dist)) continue;
+    visit(dist, files);
+  }
+  return files;
+}
+
+function visit(directory: string, files: string[]): void {
+  for (const entry of readdirSync(directory, { withFileTypes: true })) {
+    const path = join(directory, entry.name);
+    if (entry.isDirectory()) visit(path, files);
+    else if (entry.isFile()) files.push(path);
+  }
 }

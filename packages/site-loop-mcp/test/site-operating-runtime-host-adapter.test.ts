@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { prepareTaskLifecycleStore } from '@narada2/task-governance-core/task-lifecycle-store';
+import { prepareTaskLifecycleStore } from '@narada-core/task-governance-core/task-lifecycle-store';
 import { openSiteLoopStore } from '../src/site-loop/site-loop-store.js';
 import {
   openSiteOperatingRuntimeHost,

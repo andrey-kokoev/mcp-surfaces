@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { asRecord, createTemporaryE2eRoot, createTestProcessScope, removeTemporaryE2eRoot, spawnJsonlMcpServer, type TestProcessScope } from '@narada2/mcp-e2e-harness';
+import { asRecord, createTemporaryE2eRoot, createTestProcessScope, removeTemporaryE2eRoot, spawnJsonlMcpServer, type TestProcessScope } from '@narada-core/mcp-e2e-harness';
 import { MOONSHOT_SCHEMA_DIALECT, validateMoonshotToolInputSchema, type MoonshotSchemaFinding } from '../src/moonshot-schema.js';
 import { materializeKimiCarrierConfig, type KimiMcpServerConfig } from './kimi-carrier-test-support.js';
 

@@ -1,0 +1,32 @@
+{
+  "name": "@narada-core/work-lifecycle-mcp",
+  "version": "0.1.0",
+  "license": "Apache-2.0",
+  "type": "module",
+  "description": "Unified ticket and task lifecycle MCP authority over one Site-scoped database.",
+  "bin": {
+    "work-lifecycle-mcp": "./dist/src/main.js"
+  },
+  "types": "./dist/src/main.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/src/main.d.ts",
+      "default": "./dist/src/main.js"
+    },
+    "./surface-definition": {
+      "types": "./dist/src/surface-definition.d.ts",
+      "default": "./dist/src/surface-definition.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc -b",
+    "typecheck": "tsc -b --pretty false",
+    "test": "pnpm build && node --disable-warning=ExperimentalWarning --test dist/test/work-lifecycle-mcp.test.js"
+  },
+  "dependencies": {
+    "@narada-core/mcp-fabric-contracts": "workspace:*",
+    "@narada-core/task-lifecycle-mcp": "workspace:*",
+    "@narada-core/work-lifecycle-core": "workspace:*"
+  },
+  "files": ["dist/", "README.md"]
+}

@@ -1,8 +1,8 @@
-# @narada2/delegated-task-mcp
+# @narada-core/delegated-task-mcp
 
 Outcome-oriented delegated task orchestration MCP surface.
 
-Use this package when a caller wants to delegate a task outcome rather than manually manage individual worker runs. Low-level worker process/session control remains owned by `@narada2/worker-delegation-mcp`.
+Use this package when a caller wants to delegate a task outcome rather than manually manage individual worker runs. Low-level worker process/session control remains owned by `@narada-core/worker-delegation-mcp`.
 
 ## Boundary
 
@@ -142,7 +142,7 @@ Do not submit the worker envelope directly to Task Lifecycle admission. The Site
 ## Verification
 
 ```powershell
-pnpm --filter @narada2/delegated-task-mcp test
-pnpm --filter @narada2/delegated-task-mcp test:live
-pnpm --filter @narada2/delegated-task-mcp test:e2e:site-fabric
+pnpm --filter @narada-core/delegated-task-mcp test
+pnpm --filter @narada-core/delegated-task-mcp test:live
+pnpm --filter @narada-core/delegated-task-mcp test:e2e:site-fabric
 ```

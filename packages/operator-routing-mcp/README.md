@@ -1,4 +1,4 @@
-# @narada2/operator-routing-mcp
+# @narada-core/operator-routing-mcp
 
 User Site operator routing MCP surface for transcript-to-target routing decisions, durable routing records, and site-inbox fallback draft packaging.
 

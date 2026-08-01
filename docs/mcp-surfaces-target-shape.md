@@ -96,7 +96,7 @@ forcing all surfaces into one domain schema.
 
 ## Shared Transport Contract
 
-`@narada2/mcp-transport` is a reusable substrate, but each instance is bound to
+`@narada-core/mcp-transport` is a reusable substrate, but each instance is bound to
 one site authority scope. The transport package may materialize and read payload
 or output references for that bound scope; it must not turn local filesystem
 reachability into cross-site authority.
@@ -139,7 +139,7 @@ target and should be used to derive implementation tasks and regression tests.
 ## Execution Boundary Contract
 
 Task and delegated-task surfaces must make the transition from intent to
-execution explicit. The shared `@narada2/execution-contract` package provides
+execution explicit. The shared `@narada-core/execution-contract` package provides
 the typed `ExecutionBinding` and request fingerprint primitives; the owning
 surface remains responsible for policy and durable state.
 
@@ -204,10 +204,10 @@ compiler rather than as carrier configuration fragments:
 5. Reconciliation compares desired and observed state and returns explicit
    start, stop, restart, or reconfigure actions for the owning actuator.
 
-`@narada2/mcp-fabric-contracts` owns the Zod/TypeScript/JSON Schema contracts,
+`@narada-core/mcp-fabric-contracts` owns the Zod/TypeScript/JSON Schema contracts,
 canonicalization rules, and stable digests for these documents. It does not own
 Site discovery, authority decisions, process lifecycle, or carrier files.
-`@narada2/mcp-fabric-compiler` consumes those contracts and purely produces
+`@narada-core/mcp-fabric-compiler` consumes those contracts and purely produces
 Codex TOML, Kimi MCP JSON with effect-derived approvals, and OpenCode JSONC
 documents. Guarded apply and rollback remain control-plane adapter concerns.
 

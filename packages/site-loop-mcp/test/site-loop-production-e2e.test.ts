@@ -10,7 +10,7 @@ import {
   structured,
   type JsonRecord,
   type JsonRpcResponse,
-} from '@narada2/mcp-e2e-harness';
+} from '@narada-core/mcp-e2e-harness';
 
 const TEST_ID = 'site-loop.production-scheduler-resident-recovery';
 const PRODUCTION_E2E_DEADLINE_MS = 150_000;

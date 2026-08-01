@@ -1,0 +1,20 @@
+{
+  "name": "@narada-core/mcp-runtime-client",
+  "version": "0.1.0",
+  "license": "Apache-2.0",
+  "type": "module",
+  "description": "Bounded production client for invoking Site MCP fabric surfaces through mcp-loader.",
+  "scripts": {
+    "build": "tsc -b",
+    "typecheck": "tsc -b --pretty false",
+    "test": "pnpm build && node dist/test/mcp-runtime-client.test.js"
+  },
+  "types": "./dist/src/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/src/index.d.ts",
+      "default": "./dist/src/index.js"
+    }
+  },
+  "files": ["dist/", "README.md"]
+}

@@ -9,7 +9,7 @@ import {
   SqliteDirectiveRuntimeStore,
   leaseExpiryIso,
   leaseId,
-} from '@narada2/task-governance-core/directive-runtime-store';
+} from '@narada-core/task-governance-core/directive-runtime-store';
 import { openTaskLifecycleStoreWithDiscipline } from './sqlite-discipline.js';
 import { classifyResidentCarrierLiveness, readCarrierHeartbeatRecord, readCarrierSessionReadiness } from './carrier-heartbeat.js';
 import { loadSiteLoopOperatingPolicy } from '../site-loop/operating-loop-policy.js';

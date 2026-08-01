@@ -8,7 +8,7 @@ import { readCanonicalProviderRegistry, type ProviderRegistrySource } from './ca
 import { providerRuntimeMetadataFromRegistry, type WorkerProviderRuntimeMetadata } from './provider-runtime-binding.js';
 import { loadIntelligenceLaunchContext } from './intelligence-launch-context.js';
 import type { WorkerMcpState } from './state.js';
-import { buildBoundedToolResult, outputShow } from '@narada2/mcp-transport';
+import { buildBoundedToolResult, outputShowAsync } from '@narada-core/mcp-transport';
 import { spawnSync } from 'node:child_process';
 import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import { basename, isAbsolute, join, relative, resolve } from 'node:path';
@@ -181,7 +181,7 @@ async function callTool(params: Record<string, unknown>, state: WorkerMcpState, 
   const name = String(params.name ?? '');
   const args = asRecord(params.arguments);
   if (name === 'worker_guidance') return toolResult(buildGuidanceResult(args), state, name);
-  if (name === 'worker_output_show') return toolResult(outputShow({ siteRoot: workerOutputRoot(state), args }), state, name);
+  if (name === 'worker_output_show') return toolResult(await outputShowAsync({ siteRoot: workerOutputRoot(state), args }), state, name);
   const result = await callWorkerTool(name, args, state, context);
   return toolResult(result, state, name);
 }

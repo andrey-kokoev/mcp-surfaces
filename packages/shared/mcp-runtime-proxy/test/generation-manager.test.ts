@@ -7,7 +7,7 @@ import {
   defineSurface,
   type DefinedSurface,
   type McpToolDefinition,
-} from '@narada2/mcp-fabric-contracts';
+} from '@narada-core/mcp-fabric-contracts';
 import {
   GenerationManager,
   JsonLineStdioGenerationAdapter,

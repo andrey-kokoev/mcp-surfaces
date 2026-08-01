@@ -1,6 +1,6 @@
 import { resolve } from 'path';
 import { normalizeToolName, validateArgs, validationErrorResult } from './index.js';
-import { requireTaskTagsArray } from '@narada2/task-governance-core/task-tags';
+import { requireTaskTagsArray } from '@narada-core/task-governance-core/task-tags';
 
 export function createTaskLifecycleToolCaller({
   toolAliases,

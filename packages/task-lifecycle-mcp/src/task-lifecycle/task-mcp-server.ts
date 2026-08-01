@@ -3,13 +3,13 @@ import {
   inspectPreparedTaskLifecycleStore,
   openTaskLifecycleStore,
   prepareTaskLifecycleStore as prepareCoreTaskLifecycleStore,
-} from '@narada2/task-governance-core/task-lifecycle-store';
-import { finishTaskService } from '@narada2/task-governance-core/task-finish-service';
+} from '@narada-core/task-governance-core/task-lifecycle-store';
+import { finishTaskService } from '@narada-core/task-governance-core/task-finish-service';
 import { classifyPostCloseoutContinuation, evaluatePostTransitionFollowups } from './follow-up-policy-service.js';
-import { closeTaskService } from '@narada2/task-governance-core/task-close-service';
-import { searchTasksService } from '@narada2/task-governance-core/task-search-service';
-import { continueTaskService } from '@narada2/task-governance-core/task-assignment-lifecycle-service';
-import { taskAgentIdentityRefJson } from '@narada2/task-governance-core/agent-identity-ref';
+import { closeTaskService } from '@narada-core/task-governance-core/task-close-service';
+import { searchTasksService } from '@narada-core/task-governance-core/task-search-service';
+import { continueTaskService } from '@narada-core/task-governance-core/task-assignment-lifecycle-service';
+import { taskAgentIdentityRefJson } from '@narada-core/task-governance-core/agent-identity-ref';
 import {
   inspectTaskEvidence,
   findTaskFile,
@@ -19,9 +19,9 @@ import {
   parseFrontMatter,
   isExecutableTaskFile,
   extractTaskNumberFromFileName,
-} from '@narada2/task-governance-core/task-governance';
-import { parseTaskSpecFromMarkdown, renderTaskBodyFromSpec } from '@narada2/task-governance-core/task-spec';
-import { normalizeTaskTags, parseStoredTaskTags } from '@narada2/task-governance-core/task-tags';
+} from '@narada-core/task-governance-core/task-governance';
+import { parseTaskSpecFromMarkdown, renderTaskBodyFromSpec } from '@narada-core/task-governance-core/task-spec';
+import { normalizeTaskTags, parseStoredTaskTags } from '@narada-core/task-governance-core/task-tags';
 import { buildWorkboard } from './workboard.js';
 import { buildNextWorkContract, buildUnifiedWorkboard, deriveNextRecommendation } from './unified-workboard.js';
 import {
@@ -32,9 +32,9 @@ import {
   computeStateFreshness as computeStateFreshnessCore,
   setTaskLifecycleReadModelContext,
 } from './task-lifecycle-read-models.js';
-import { admitTaskEvidence } from '@narada2/task-governance-core/evidence-admission';
-import { evaluateTaskDependencySatisfaction } from '@narada2/task-governance-core/task-dependency-satisfaction';
-import { defineSurface, type DefinedSurface, type ToolEffect } from '@narada2/mcp-fabric-contracts';
+import { admitTaskEvidence } from '@narada-core/task-governance-core/evidence-admission';
+import { evaluateTaskDependencySatisfaction } from '@narada-core/task-governance-core/task-dependency-satisfaction';
+import { defineSurface, type DefinedSurface, type ToolEffect } from '@narada-core/mcp-fabric-contracts';
 import { randomUUID } from 'crypto';
 import { relative, resolve, join, sep } from 'path';
 import { pathToFileURL } from 'url';
@@ -50,7 +50,7 @@ import { validateFollowUpLedger } from './follow-up-ledger-validation.js';
 import { validateRecoveryTruthfulnessBody, validateRecoveryTruthfulnessPacket } from './recovery-truthfulness-guard.js';
 import { validateSelfCertificationBody, validateSelfCertificationPacket } from './self-certification-guard.js';
 import { claimLifecycleTask, proveTaskCriteria, transitionLifecycleTask, unclaimLifecycleTask, unDeferLifecycleTask } from './task-lifecycle-mutation-services.js';
-import { TASK_LIFECYCLE_TOOL_ALIASES, taskLifecycleDomainTools } from '@narada2/task-governance-core/task-lifecycle-mcp-contract';
+import { TASK_LIFECYCLE_TOOL_ALIASES, taskLifecycleDomainTools } from '@narada-core/task-governance-core/task-lifecycle-mcp-contract';
 import {
   buildLifecycleTargetLocusStatus as buildPipelineLifecycleTargetLocusStatus,
   createTaskLifecycleToolCaller,
@@ -201,7 +201,7 @@ let taskLifecycleHandlerRegistry: any = null;
 
 const TOOL_ALIASES: any = TASK_LIFECYCLE_TOOL_ALIASES;
 
-function taskLifecycleTools() {
+export function taskLifecycleTools() {
   return [
     ...taskLifecycleDomainTools().map(patchLocalToolDefinition),
     {
@@ -369,7 +369,7 @@ export function taskLifecycleSurfaceDefinition(): DefinedSurface {
   taskLifecycleSurfaceCache = defineSurface({
     surface_id: 'task-lifecycle',
     surface_version: '0.1.0',
-    package: '@narada2/task-lifecycle-mcp',
+    package: '@narada-core/task-lifecycle-mcp',
     tools: definitions.map((definition: any) => ({
       definition,
       effect: taskLifecycleToolEffect(String(definition.name)),
@@ -960,6 +960,7 @@ export function configureTaskLifecycleMcpRuntime({
   env = process.env,
   stdout = process.stdout,
   stderr = process.stderr,
+  storeOverride = null,
 } : any= {}) {
   const options: any = parseArgs(argv);
   if (options.help) {
@@ -988,12 +989,17 @@ export function configureTaskLifecycleMcpRuntime({
   SESSION_IDENTITY = env.NARADA_AGENT_ID || null;
   deferredBootSideEffectsScheduled = false;
   publishTaskLifecycleRuntime(nextRoot, null);
+  if (storeOverride) {
+    runtimeStoreOwnership.initialize(storeOverride);
+    publishTaskLifecycleRuntime(nextRoot, storeOverride);
+  }
   siteRootSource = selectedRootSource;
   runtimeConfigured = !options.prepare;
   return {
     status: options.prepare ? 'prepare' : 'configured',
     siteRoot: nextRoot,
     siteRootSource: selectedRootSource,
+    storeOverride: Boolean(storeOverride),
   };
 }
 
@@ -1056,7 +1062,7 @@ function recordTaskLifecycleRuntimeObservation() {
       serverName: SERVER_NAME,
       serverEntryPoint: 'task-lifecycle-mcp',
       serverBootedAt: SERVER_BOOTED_AT,
-      watchedPaths: ['node_modules/@narada2/task-lifecycle-mcp/src', 'node_modules/@narada2/mcp-transport'],
+      watchedPaths: ['node_modules/@narada-core/task-lifecycle-mcp/src', 'node_modules/@narada-core/mcp-transport'],
       restartRequestPath: join(siteRoot, '.ai', 'tmp', 'task-lifecycle-restart-request.json'),
       baselinePath: join(siteRoot, '.ai', 'tmp', 'mcp-baseline.json'),
       freshnessEvidencePath: '.ai/runtime/typed-mcp/task-lifecycle-mcp',
@@ -1577,7 +1583,7 @@ function buildTaskLifecycleFreshness({ registeredTools }: any) {
     serverName: SERVER_NAME,
     serverEntryPoint: 'task-lifecycle-mcp',
     serverBootedAt: SERVER_BOOTED_AT,
-    watchedPaths: ['node_modules/@narada2/task-lifecycle-mcp/src', 'node_modules/@narada2/mcp-transport'],
+    watchedPaths: ['node_modules/@narada-core/task-lifecycle-mcp/src', 'node_modules/@narada-core/mcp-transport'],
     expectedTools: taskLifecycleTools().map((tool: any) => tool.name),
     registeredTools,
     restartRequestPath: join(siteRoot, '.ai', 'tmp', 'task-lifecycle-restart-request.json'),

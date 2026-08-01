@@ -1,4 +1,4 @@
-import { defineNativeSurface, type DefinedSurface, type McpToolDefinition } from '@narada2/mcp-fabric-contracts';
+import { defineNativeSurface, type DefinedSurface, type McpToolDefinition } from '@narada-core/mcp-fabric-contracts';
 import { listTools } from './main.js';
 
 const READ_ONLY_TOOLS = ["site_registry_guidance","site_registry_doctor","site_registry_command_map","site_registry_list","site_registry_show","site_registry_discover_plan"] as const;
@@ -7,7 +7,7 @@ export function surfaceDefinition(): DefinedSurface {
   return defineNativeSurface({
     surface_id: 'site-registry',
     surface_version: '0.1.0',
-    package: '@narada2/site-registry-mcp',
+    package: '@narada-core/site-registry-mcp',
     entrypoint: '{mcp_surfaces_root}/site-registry-mcp/dist/src/main.js',
     tools: listTools() as McpToolDefinition[],
     read_only_tools: READ_ONLY_TOOLS,

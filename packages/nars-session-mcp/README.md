@@ -1,6 +1,6 @@
 # NARS Session MCP
 
-`@narada2/nars-session-mcp` is a Narada-specific MCP adapter for governed
+`@narada-core/nars-session-mcp` is a Narada-specific MCP adapter for governed
 input to an existing NARS session.
 
 The canonical semantic contract is maintained in Narada proper:
@@ -39,7 +39,7 @@ The registrar passes the User Site projection binding as process arguments:
 `--user-site-root`, `--source-kind operator`, and `--operator-id`. A running
 MCP process must be restarted after its materialized binding changes.
 
-Session paths are resolved through `@narada2/site-paths`; the adapter does not
+Session paths are resolved through `@narada-core/site-paths`; the adapter does not
 construct `.narada` or `crew/nars-sessions` paths itself.
 
 ## Boundary

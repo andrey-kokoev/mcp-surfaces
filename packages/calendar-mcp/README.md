@@ -1,4 +1,4 @@
-# @narada2/calendar-mcp
+# @narada-core/calendar-mcp
 
 Policy-gated Microsoft Graph calendar MCP surface for live calendar reads and guarded event management.
 

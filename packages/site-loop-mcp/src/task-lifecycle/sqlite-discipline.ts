@@ -1,8 +1,8 @@
 import { copyFileSync, existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import { join, resolve } from 'node:path';
-import { openTaskLifecycleStore, prepareTaskLifecycleStore } from '@narada2/task-governance-core/task-lifecycle-store';
-import type { SqliteTaskLifecycleStore } from '@narada2/task-governance-core/task-lifecycle-store';
+import { openTaskLifecycleStore, prepareTaskLifecycleStore } from '@narada-core/task-governance-core/task-lifecycle-store';
+import type { SqliteTaskLifecycleStore } from '@narada-core/task-governance-core/task-lifecycle-store';
 import { requireSiteLoopConfig, schemaName } from '../site-loop/site-loop-config.js';
 
 export interface TaskLifecycleSqliteOptions {

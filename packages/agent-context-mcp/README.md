@@ -1,4 +1,4 @@
-# @narada2/agent-context-mcp
+# @narada-core/agent-context-mcp
 
 Agent-context MCP surface for site-local startup hydration and checkpoints.
 
@@ -23,7 +23,7 @@ The server uses a site root and these environment variables when present:
 It expects site-local evidence such as `AGENTS.md` and `.ai/agents/roster.json` when validating identities.
 
 ```powershell
-pnpm --filter @narada2/agent-context-mcp build
+pnpm --filter @narada-core/agent-context-mcp build
 node packages/agent-context-mcp/dist/src/main.js --site-root D:/code/site --site-id narada.example
 ```
 
@@ -61,5 +61,5 @@ Agents should hydrate at startup, checkpoint meaningful state transitions, and r
 ## Verification
 
 ```powershell
-pnpm --filter @narada2/agent-context-mcp test
+pnpm --filter @narada-core/agent-context-mcp test
 ```

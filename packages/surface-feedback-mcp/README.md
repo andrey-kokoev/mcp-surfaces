@@ -1,4 +1,4 @@
-# @narada2/surface-feedback-mcp
+# @narada-core/surface-feedback-mcp
 
 Cross-site MCP surface feedback intake and routing. Any site may submit feedback about any surface — bugs, improvements, gaps, observations.
 
@@ -65,5 +65,5 @@ Task lifecycle root resolution is, in order: `--task-lifecycle-root`, `NARADA_TA
 ## Quick Start
 
 ```
-pnpm --filter @narada2/surface-feedback-mcp test
+pnpm --filter @narada-core/surface-feedback-mcp test
 ```

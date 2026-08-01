@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { prepareTaskLifecycleStore } from '@narada2/task-governance-core/task-lifecycle-store';
+import { prepareTaskLifecycleStore } from '@narada-core/task-governance-core/task-lifecycle-store';
 import { handleTaskLifecycleMcpRequest, prepareTaskLifecycleMcpSite } from '../src/task-lifecycle/task-mcp-server.js';
 
 const siteRoot = mkdtempSync(join(tmpdir(), 'task-lifecycle-tags-'));

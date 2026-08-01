@@ -7,6 +7,7 @@
     "tsBuildInfoFile": "dist/.tsbuildinfo"
   },
   "references": [
+    { "path": "../browser-control-mcp" },
     { "path": "../local-filesystem-mcp" },
     { "path": "../structured-command-mcp" },
     { "path": "../git-mcp" },
@@ -15,6 +16,7 @@
     { "path": "../graph-mail-mcp" },
     { "path": "../calendar-mcp" },
     { "path": "../task-lifecycle-mcp" },
+    { "path": "../work-lifecycle-mcp" },
     { "path": "../site-loop-mcp" },
     { "path": "../site-lifecycle-mcp" },
     { "path": "../site-registry-mcp" },
@@ -32,6 +34,7 @@
     { "path": "../nars-session-mcp" },
     { "path": "../quota-meter-mcp" },
     { "path": "../operator-console-overlay-mcp" },
+    { "path": "../catalog-observation-mcp" },
     { "path": "../cloudflare-carrier-mcp" },
     { "path": "../site-coherence-mcp" },
     { "path": "../shared/mcp-fabric-compiler" },

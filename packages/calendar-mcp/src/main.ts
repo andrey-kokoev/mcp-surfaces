@@ -5,8 +5,8 @@ import { existsSync, readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { buildGraphUrl, graphCalendarPath, graphRequest, graphTop, requiredString } from './graph-client.js';
 import { decideEventWrite, loadCalendarPolicy, recordCalendarAudit } from './policy.js';
-import { buildCalendarTelemetryDeclaration, emitTelemetryEvent, type TelemetryDeclaration, type TelemetryEventKind } from '@narada2/mcp-telemetry';
-import { buildBoundedToolResult, outputShowAsync } from '@narada2/mcp-transport';
+import { buildCalendarTelemetryDeclaration, emitTelemetryEvent, type TelemetryDeclaration, type TelemetryEventKind } from '@narada-core/mcp-telemetry';
+import { buildBoundedToolResult, outputShowAsync } from '@narada-core/mcp-transport';
 
 const SERVER_NAME = 'narada-calendar-mcp';
 const SERVER_VERSION = '0.1.0';

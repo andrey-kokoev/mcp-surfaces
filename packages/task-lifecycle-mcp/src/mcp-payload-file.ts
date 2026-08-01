@@ -1,1 +1,1 @@
-export * from '@narada2/mcp-transport';
+export * from '@narada-core/mcp-transport';

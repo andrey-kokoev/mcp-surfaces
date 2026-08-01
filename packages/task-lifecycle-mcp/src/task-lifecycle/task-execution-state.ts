@@ -1,4 +1,4 @@
-import { executionRequestFingerprint, normalizeExecutionBinding, type ExecutionBinding } from '@narada2/execution-contract';
+import { executionRequestFingerprint, normalizeExecutionBinding, type ExecutionBinding } from '@narada-core/execution-contract';
 
 type SqliteStoreLike = {
   db: {

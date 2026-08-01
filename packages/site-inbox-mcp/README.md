@@ -1,4 +1,4 @@
-# @narada2/site-inbox-mcp
+# @narada-core/site-inbox-mcp
 
 Governed inbox intake and triage MCP surface.
 
@@ -13,7 +13,7 @@ Use this package for site-local inbox envelopes that need triage, acknowledgemen
 - Not allowed: live Microsoft Graph access.
 - Not allowed: task lifecycle mutation beyond envelope intake and triage signals.
 
-Use `@narada2/mailbox-mcp` for synced mailbox reads and `@narada2/graph-mail-mcp` for live Graph/draft operations.
+Use `@narada-core/mailbox-mcp` for synced mailbox reads and `@narada-core/graph-mail-mcp` for live Graph/draft operations.
 
 ## Storage
 
@@ -61,5 +61,5 @@ Agents should use `inbox_list` or `inbox_next`, then `inbox_show` before acting 
 ## Verification
 
 ```powershell
-pnpm --filter @narada2/site-inbox-mcp test
+pnpm --filter @narada-core/site-inbox-mcp test
 ```

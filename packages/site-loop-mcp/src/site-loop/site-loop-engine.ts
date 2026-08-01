@@ -4,10 +4,10 @@ import { spawn, spawnSync, type ChildProcess } from 'node:child_process';
 import { closeSync, existsSync, mkdirSync, openSync, readdirSync, readFileSync, realpathSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { basename, dirname, isAbsolute, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { SqliteDirectiveRuntimeStore } from '@narada2/task-governance-core/directive-runtime-store';
-import { findTaskFile, readTaskFile, writeTaskProjection } from '@narada2/task-governance-core/task-governance';
+import { SqliteDirectiveRuntimeStore } from '@narada-core/task-governance-core/directive-runtime-store';
+import { findTaskFile, readTaskFile, writeTaskProjection } from '@narada-core/task-governance-core/task-governance';
 import { openTaskLifecycleStoreWithDiscipline, taskLifecycleDbHealth } from '../task-lifecycle/sqlite-discipline.js';
-import { pollInboxBridge, targetInboxEnvelope } from '@narada2/task-lifecycle-mcp/task-lifecycle-runtime/inbox-bridge';
+import { pollInboxBridge, targetInboxEnvelope } from '@narada-core/task-lifecycle-mcp/task-lifecycle-runtime/inbox-bridge';
 import { dispatchPendingDirectives, getResidentStatus } from '../task-lifecycle/dispatch-directives.js';
 import { classifyResidentCarrierLiveness, readCarrierHeartbeatRecord, readCarrierSessionReadiness } from '../task-lifecycle/carrier-heartbeat.js';
 import { taskLifecycleTools } from '../task-lifecycle/task-mcp-tool-registry.js';
@@ -1584,7 +1584,7 @@ function resolveTaskLifecyclePackageRootFromEntrypoint(siteRoot: any, entrypoint
     const packageJsonPath = join(current, 'package.json');
     if (existsSync(packageJsonPath)) {
       const packageJson: any = JSON.parse(readFileSync(packageJsonPath, 'utf8'));
-      return packageJson.name === '@narada2/task-lifecycle-mcp' ? current : null;
+      return packageJson.name === '@narada-core/task-lifecycle-mcp' ? current : null;
     }
     const next = dirname(current);
     if (next === current) break;
@@ -1600,31 +1600,31 @@ export function checkTaskGovernancePackageBoundary(siteRoot: any) {
   const naradaCoreRoot = resolve(siteRoot, '..', 'narada-core');
   const packages = [
     {
-      name: '@narada2/charters',
+      name: '@narada-core/charters',
       vendor: 'charters',
       expectedDependency: 'workspace:*',
       naradaPackageRoot: join(naradaProperRoot, 'packages', 'domains', 'charters'),
     },
     {
-      name: '@narada2/control-plane',
+      name: '@narada-core/control-plane',
       vendor: 'control-plane',
       expectedDependency: 'workspace:*',
       naradaPackageRoot: join(naradaProperRoot, 'packages', 'layers', 'control-plane'),
     },
     {
-      name: '@narada2/intent-zones',
+      name: '@narada-core/intent-zones',
       vendor: 'intent-zones',
       expectedDependency: 'workspace:*',
       naradaPackageRoot: join(naradaProperRoot, 'packages', 'intent-zones'),
     },
     {
-      name: '@narada2/task-lifecycle-kernel',
+      name: '@narada-core/task-lifecycle-kernel',
       vendor: 'task-lifecycle-kernel',
       expectedDependency: 'workspace:*',
       naradaPackageRoot: join(naradaProperRoot, 'packages', 'task-lifecycle-kernel'),
     },
     {
-      name: '@narada2/task-governance-core',
+      name: '@narada-core/task-governance-core',
       vendor: 'task-governance',
       expectedDependency: 'workspace:*',
       naradaPackageRoot: join(naradaCoreRoot, 'packages', 'task-governance-core'),
@@ -1647,10 +1647,10 @@ export function checkTaskGovernancePackageBoundary(siteRoot: any) {
   try {
     const packageJson: any = JSON.parse(readFileSync(join(taskLifecycleRoot, 'package.json'), 'utf8'));
     result.block_codes = [];
-    if (packageJson.name === '@narada2/task-lifecycle-mcp') {
-      const dependency: any = packageJson.dependencies?.['@narada2/task-governance-core'] ?? null;
+    if (packageJson.name === '@narada-core/task-lifecycle-mcp') {
+      const dependency: any = packageJson.dependencies?.['@narada-core/task-governance-core'] ?? null;
       result.packages.push({
-        package: '@narada2/task-governance-core',
+        package: '@narada-core/task-governance-core',
         expected_dependency: 'workspace:*',
         configured_dependency: dependency,
         boundary_mode: 'shared_mcp_package',
@@ -1658,8 +1658,8 @@ export function checkTaskGovernancePackageBoundary(siteRoot: any) {
       });
       if (dependency !== 'workspace:*') {
         result.status = 'blocked';
-        result.block_codes.push('blocked_by_wrong_dependency:@narada2/task-governance-core');
-        result.remediation = 'Keep @narada2/task-lifecycle-mcp dependencies on workspace:* and run pnpm install from D:/code/mcp-surfaces.';
+        result.block_codes.push('blocked_by_wrong_dependency:@narada-core/task-governance-core');
+        result.remediation = 'Keep @narada-core/task-lifecycle-mcp dependencies on workspace:* and run pnpm install from D:/code/mcp-surfaces.';
       }
       return result;
     }

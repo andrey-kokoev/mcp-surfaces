@@ -9,7 +9,7 @@
       "class": "generated_wrapper",
       "owner": "narada-proper",
       "surface": "agent-cli",
-      "package": "@narada2/agent-cli",
+      "package": "@narada-core/agent-cli",
       "version": "2",
       "hash": "4f0c1f06f96cd84491f3a70a4fb68b956c5942d5b99fffad8249333fe0e995e7",
       "allowed_root_refs": [

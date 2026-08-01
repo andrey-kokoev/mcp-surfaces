@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { openTaskLifecycleStore } from '@narada2/task-governance-core/task-lifecycle-store';
+import { openTaskLifecycleStore } from '@narada-core/task-governance-core/task-lifecycle-store';
 import {
   assembleDeclaredEnvironment,
   computeDispatchFingerprint,
@@ -10,7 +10,7 @@ import {
   declaredEnvironmentDigest,
   enqueueTaskExecutabilityRequest,
   taskSpecDigest,
-} from '@narada2/task-governance-core/task-executability-service';
+} from '@narada-core/task-governance-core/task-executability-service';
 import { createServerState, handleRequest } from '../src/main.js';
 import { taskExecutabilityAssessmentTemplate } from '../src/task-executability-assessment.js';
 

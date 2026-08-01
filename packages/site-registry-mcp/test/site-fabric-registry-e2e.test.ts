@@ -12,7 +12,7 @@ import {
   siteFabricChildEnv,
   spawnJsonlMcpServer,
   type JsonRecord,
-} from '@narada2/mcp-e2e-harness';
+} from '@narada-core/mcp-e2e-harness';
 
 const cliModulePath = process.env.NARADA_SITE_E2E_CLI_MODULE
   ?? 'D:/code/narada/packages/layers/cli/dist/commands/site-registry-management.js';

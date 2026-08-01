@@ -4,7 +4,7 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { buildOutputRefToolContent } from '@narada2/mcp-transport';
+import { buildOutputRefToolContent } from '@narada-core/mcp-transport';
 import { createServerState, executeStructuredCommand, handleRequest } from '../src/main.js';
 
 type ToolSummary = { name: string; annotations: Record<string, unknown>; outputSchema: Record<string, unknown> };

@@ -7,7 +7,7 @@ import {
   type LifecycleRequirement,
   type McpToolDefinition,
   type SurfaceDescriptorV2,
-} from '@narada2/mcp-fabric-contracts';
+} from '@narada-core/mcp-fabric-contracts';
 import { describeUnknownError } from './error-description.js';
 
 type JsonRecord = Record<string, unknown>;

@@ -2,7 +2,7 @@
 import { buildGuidanceResult } from './guidance.js';
 import { guidanceToolDefinition } from './guidance.js';
 import { resolve } from 'node:path';
-import { buildBoundedToolResult, outputShowAsync } from '@narada2/mcp-transport';
+import { buildBoundedToolResult, outputShowAsync } from '@narada-core/mcp-transport';
 import { admitEnvelope, emitEnvelopeAcknowledged, emitEnvelopeDismissed, emitEnvelopePromoted, readAdmissionLog } from './admission-log.js';
 import { INBOX_ENVELOPE_KINDS, assertKnownInboxEnvelopeKind } from './envelope-kinds.js';
 import { readInboxEnvelopeById, readIndexedInboxBacklog, readIndexedInboxRows, readInboxIndexCounts, refreshInboxIndex } from './inbox-index.js';

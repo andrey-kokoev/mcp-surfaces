@@ -43,6 +43,7 @@ export function buildGuidanceResult(args: GuidanceRecord = {}): GuidanceRecord {
     first_use: [
       'Call mcp_loader_policy_inspect before relying on loader capabilities or allowed roots.',
       'Call mcp_loader_connection_inventory before attachment when recovering from capacity errors or an earlier interrupted session.',
+      'Call mcp_loader_process_ownership when reconciling child processes after an interrupted attach; it reports only this loader run\'s direct children and safe known-connection cleanup actions.',
       'Call mcp_loader_list_site_surfaces and mcp_loader_site_fabric_diagnostics for the explicit Site root.',
       'Use mcp_loader_attach_surface with an explicit surface_id and runtime_kind when the projection requires one.',
       'Use mcp_loader_list_tools or mcp_loader_tool_discovery_manifest after attachment; the child tools/list response owns exact tool schemas.',
@@ -54,6 +55,7 @@ export function buildGuidanceResult(args: GuidanceRecord = {}): GuidanceRecord {
     tool_preference: [
       { step: 'orient', guidance: 'Use mcp_loader_guidance, mcp_loader_runtime_status, and mcp_loader_policy_inspect before attachment or proxy calls.' },
       { step: 'recover', guidance: 'For a stale or transport-closed child, inspect mcp_loader_connection_inventory or mcp_loader_surface_status, then call mcp_loader_surface_restart with the connection_id; the agent session does not need to restart.' },
+      { step: 'reconcile_processes', guidance: 'Use mcp_loader_process_ownership to distinguish loader-owned direct children from unobserved host processes. Only known loader-owned connections may be detached; conhost or unrelated host processes require the external host/runtime supervisor.' },
       { step: 'resolve_site', guidance: 'Use mcp_loader_list_site_surfaces and mcp_loader_site_fabric_diagnostics against the same explicit Site root.' },
       { step: 'attach', guidance: 'Use mcp_loader_open_surface when repeated calls should survive a loader-managed child restart; it returns a stable surface_handle scoped to this loader process. Use mcp_loader_attach_surface when a one-generation connection id is sufficient.' },
       { step: 'discover', guidance: 'Use mcp_loader_list_tools or mcp_loader_tool_discovery_manifest; use the child tools/list definitions for exact input and output shape.' },
@@ -66,6 +68,7 @@ export function buildGuidanceResult(args: GuidanceRecord = {}): GuidanceRecord {
       { intent: 'First use', call: 'mcp_loader_guidance({})' },
       { intent: 'Inspect a workflow', call: 'mcp_loader_guidance({ workflow: "discover", tool: "mcp_loader_list_tools" })' },
       { intent: 'Recover capacity', call: 'mcp_loader_connection_inventory({})' },
+      { intent: 'Reconcile loader children', call: 'mcp_loader_process_ownership({})' },
       { intent: 'Inspect a Site', call: 'mcp_loader_list_site_surfaces({ site_root: "<site_root>" })' },
       { intent: 'Inspect loader freshness', call: 'mcp_loader_runtime_status({})' },
       { intent: 'Observe live tools', call: 'mcp_loader_site_tool_inventory_check({ site_root: "<site_root>", runtime_kind: "<runtime_kind>" })' },
@@ -80,6 +83,7 @@ export function buildGuidanceResult(args: GuidanceRecord = {}): GuidanceRecord {
       'Do not copy or hand-build observation maps; pass the immutable observation_ref returned by mcp_loader_site_tool_inventory_check.',
       'Do not bypass the owning surface with shell scripts when a governed MCP tool exists.',
       'Do not treat mcp_loader_surface_restart as a loader hot-reload; it replaces only the selected attached child process.',
+      'Do not enumerate or terminate arbitrary host processes, conhost descendants, or processes lacking this loader run\'s ownership marker.',
       'Do not apply a reconciliation plan from an old observation; use its expected observation digest and required authority before invoking the named actuator.',
     ],
     recovery: [
@@ -90,6 +94,7 @@ export function buildGuidanceResult(args: GuidanceRecord = {}): GuidanceRecord {
       'For child failures, inspect mcp_loader_surface_status and stderr evidence, then use mcp_loader_surface_restart({ connection_id, reason }) when the attached child should be replaced.',
       'For a replayable generation, invoke mcp_loader_surface_restart with the connection_id. For session_pinned or restart_required lifecycle, the observation names carrier-supervisor as the actuator; mcp-loader marks that capability agent_callable=false, so invoke restart_mcp_loader_process only if the carrier supervisor separately exposes it before reconnecting.',
       'For max_connections_reached, call mcp_loader_connection_inventory, detach stale or closed connection ids, and retry only after capacity is available.',
+      'For interrupted child cleanup, call mcp_loader_process_ownership and reconcile only the listed loader-owned connection ids; external or unobserved process cleanup belongs to the host/runtime supervisor.',
       'For stale loader runtime, call mcp_loader_runtime_status and use reload_action.capability as a request to the carrier or runtime supervisor; mcp-loader itself cannot invoke it and child restart cannot reload the loader.',
       'For unclear behavior, submit surface_feedback_submit with reproduction steps, expected behavior, and impact.',
     ],
@@ -106,6 +111,7 @@ export function buildGuidanceResult(args: GuidanceRecord = {}): GuidanceRecord {
       'MCP Loader owns child attachment, initialization, tool discovery, call proxying, and detachment.',
       'MCP Loader does not own attached-surface domain policy, action admission, or child tool semantics.',
       'The loader binds children to the requested Site root and does not let an ambient caller Site root override it.',
+      'Process ownership is limited to direct children spawned by this loader run; the loader does not own arbitrary host process or conhost enumeration.',
       'Guidance is read-only model-facing operating advice and does not replace tool schemas or policy checks.',
     ],
   };

@@ -1,4 +1,4 @@
-# @narada2/worker-delegation-mcp
+# @narada-core/worker-delegation-mcp
 
 Policy-gated MCP surface for delegating bounded work to a worker runtime.
 
@@ -74,7 +74,7 @@ Only a small environment allowlist is passed to workers: `PATH`, `USERPROFILE`, 
 ## Run
 
 ```powershell
-pnpm --filter @narada2/worker-delegation-mcp build
+pnpm --filter @narada-core/worker-delegation-mcp build
 node D:/code/mcp-surfaces/packages/worker-delegation-mcp/dist/src/main.js --allowed-root D:/code/mcp-surfaces --run-root D:/tmp/worker-runs
 ```
 
@@ -115,7 +115,7 @@ The package has two explicit real-boundary delegation proofs:
 Run the B4 proof with:
 
 ```powershell
-pnpm --filter @narada2/worker-delegation-mcp test:e2e:carrier
+pnpm --filter @narada-core/worker-delegation-mcp test:e2e:carrier
 ```
 
 The B4/W1 proofs use a bounded local provider fixture (A0). They prove the
@@ -301,7 +301,7 @@ The external-provider E2E is opt-in and resolves the low-cognition provider/mode
 ```powershell
 $env:NARADA_E2E_WORKER_EXTERNAL_PROVIDER_LIVE = '1'
 $env:NARADA_E2E_WORKER_PROVIDER_REGISTRY = 'D:/path/to/worker-provider-registry.json'
-pnpm --filter @narada2/worker-delegation-mcp test:e2e:external-provider
+pnpm --filter @narada-core/worker-delegation-mcp test:e2e:external-provider
 ```
 
 The registry must use `narada.carrier.provider_registry.v1`, expose `cognition_defaults.low`, and declare an OpenAI-compatible chat-completions adapter. Missing registry, credential, supported adapter, or runtime prerequisites produce a structured bounded skip with exit code `2`; they are not treated as provider verdicts. A passing live check is evidence that the configured provider/model adapter and runtime path are reachable; it is not a Task Executability verdict or proof of task correctness. The timeout is bounded by `NARADA_E2E_WORKER_EXTERNAL_PROVIDER_TIMEOUT_MS` (5-120 seconds).
@@ -309,9 +309,9 @@ The registry must use `narada.carrier.provider_registry.v1`, expose `cognition_d
 ## Verification
 
 ```powershell
-pnpm --filter @narada2/worker-delegation-mcp test
-pnpm --filter @narada2/worker-delegation-mcp test:e2e:edit
-pnpm --filter @narada2/worker-delegation-mcp test:e2e:site-fabric
+pnpm --filter @narada-core/worker-delegation-mcp test
+pnpm --filter @narada-core/worker-delegation-mcp test:e2e:edit
+pnpm --filter @narada-core/worker-delegation-mcp test:e2e:site-fabric
 ```
 
 The E2E commands start the built worker, loader, and filesystem MCP children,

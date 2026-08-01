@@ -7,7 +7,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { effectiveRequestTimeoutMs } from '../src/main.js';
-import { createTestProcessScope } from '@narada2/mcp-e2e-harness';
+import { createTestProcessScope } from '@narada-core/mcp-e2e-harness';
 import {
   captureRuntimeFreshness,
   classifyRuntimeInstance,

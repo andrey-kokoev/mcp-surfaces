@@ -1,7 +1,7 @@
 # Start-AgentCliSession.ps1
 # narada_template_id: narada.agent_cli.windows_wrapper
 # narada_template_version: 2
-# narada_template_source: @narada2/agent-runtime-server ./agent-cli-windows-wrapper-template
+# narada_template_source: @narada-core/agent-runtime-server ./agent-cli-windows-wrapper-template
 # narada_template_hash: 4f0c1f06f96cd84491f3a70a4fb68b956c5942d5b99fffad8249333fe0e995e7
 
 param(
@@ -121,7 +121,7 @@ function Resolve-NaradaPackageRoot {
         throw "narada_package_not_resolvable: $PackageName; set NARADA_PROPER_ROOT or install the package where Node can resolve it"
     }
 
-    if ($PackageName -eq '@narada2/agent-cli') {
+    if ($PackageName -eq '@narada-core/agent-cli') {
         $agentCliRoot = if ($env:NARADA_AGENT_CLI_ROOT) { $env:NARADA_AGENT_CLI_ROOT } else { 'D:\code\agent-cli' }
         $agentCliPackageJson = Join-Path $agentCliRoot 'package.json'
         if (Test-Path -LiteralPath $agentCliPackageJson -PathType Leaf) {
@@ -181,9 +181,9 @@ function Resolve-NaradaPackageExport {
     return Join-Path $package.Root $target
 }
 
-$AgentCliPath = Resolve-NaradaPackageBin -PackageName '@narada2/agent-cli' -BinName 'narada-agent-cli'
-$AgentRuntimeServerPath = Resolve-NaradaPackageBin -PackageName '@narada2/agent-runtime-server' -BinName 'narada-agent-runtime-server'
-$ProviderMetadataPath = Resolve-NaradaPackageExport -PackageName '@narada2/carrier-provider-contract' -ExportName './provider-registry'
+$AgentCliPath = Resolve-NaradaPackageBin -PackageName '@narada-core/agent-cli' -BinName 'narada-agent-cli'
+$AgentRuntimeServerPath = Resolve-NaradaPackageBin -PackageName '@narada-core/agent-runtime-server' -BinName 'narada-agent-runtime-server'
+$ProviderMetadataPath = Resolve-NaradaPackageExport -PackageName '@narada-core/carrier-provider-contract' -ExportName './provider-registry'
 $ProviderMetadata = (Get-Content $ProviderMetadataPath -Raw | ConvertFrom-Json).providers
 $providerDefault = $ProviderMetadata.PSObject.Properties[$IntelligenceProvider].Value
 if (-not $providerDefault) {
@@ -267,7 +267,7 @@ function Import-DotEnvFile {
 Import-DotEnvFile -Path (Join-Path $SiteRoot '.env')
 
 # Load API provider config if present
-$ConfigPath = Join-Path (Resolve-NaradaPackageRoot -PackageName '@narada2/agent-cli') 'agent-cli-config.json'
+$ConfigPath = Join-Path (Resolve-NaradaPackageRoot -PackageName '@narada-core/agent-cli') 'agent-cli-config.json'
 $EffectiveConfigPath = if (Test-Path $ConfigPath) { $ConfigPath } else { $null }
 if ($EffectiveConfigPath) {
     $config = Get-Content $EffectiveConfigPath -Raw | ConvertFrom-Json

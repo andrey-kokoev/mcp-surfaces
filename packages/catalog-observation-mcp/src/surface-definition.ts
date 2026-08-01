@@ -1,4 +1,4 @@
-import { defineNativeSurface, type DefinedSurface, type McpToolDefinition } from '@narada2/mcp-fabric-contracts';
+import { defineNativeSurface, type DefinedSurface, type McpToolDefinition } from '@narada-core/mcp-fabric-contracts';
 import { listTools } from './main.js';
 
 const READ_ONLY_TOOLS = ['catalog_observation_guidance', 'catalog_observation_observe'] as const;
@@ -7,7 +7,7 @@ export function surfaceDefinition(): DefinedSurface {
   return defineNativeSurface({
     surface_id: 'catalog-observation',
     surface_version: '0.1.0',
-    package: '@narada2/catalog-observation-mcp',
+    package: '@narada-core/catalog-observation-mcp',
     entrypoint: '{mcp_surfaces_root}/catalog-observation-mcp/dist/src/main.js',
     tools: listTools() as McpToolDefinition[],
     read_only_tools: READ_ONLY_TOOLS,

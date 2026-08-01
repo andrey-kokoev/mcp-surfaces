@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import { buildGuidanceResult } from './guidance.js';
 import { guidanceToolDefinition } from './guidance.js';
-import { emitTelemetryEvent, type TelemetryDeclaration, type TelemetryEventKind } from '@narada2/mcp-telemetry';
+import { emitTelemetryEvent, type TelemetryDeclaration, type TelemetryEventKind } from '@narada-core/mcp-telemetry';
 import { createHash } from 'node:crypto';
 import { pathToFileURL } from 'node:url';
 

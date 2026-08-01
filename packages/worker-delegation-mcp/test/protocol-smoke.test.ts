@@ -3,7 +3,7 @@ import { spawn } from 'node:child_process';
 import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { validateAffordanceDocument } from '@narada2/mcp-affordances';
+import { validateAffordanceDocument } from '@narada-core/mcp-affordances';
 
 const root = mkdtempSync(join(testTempRoot(), 'worker-delegation-protocol-'));
 const SMOKE_WAIT_MS = 15_000;

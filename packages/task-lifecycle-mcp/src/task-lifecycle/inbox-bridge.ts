@@ -7,9 +7,9 @@
  */
 import { existsSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join, relative, resolve } from 'node:path';
-import { allocateTaskNumbers } from '@narada2/task-governance-core/task-governance';
-import { renderTaskBodyFromSpec } from '@narada2/task-governance-core/task-spec';
-import { openTaskLifecycleStore } from '@narada2/task-governance-core/task-lifecycle-store';
+import { allocateTaskNumbers } from '@narada-core/task-governance-core/task-governance';
+import { renderTaskBodyFromSpec } from '@narada-core/task-governance-core/task-spec';
+import { openTaskLifecycleStore } from '@narada-core/task-governance-core/task-lifecycle-store';
 import { readAdmissionLog, getLatestEventsByEnvelope, appendAdmissionEvent, acknowledgeEnvelope, dismissEnvelope } from '../inbox/admission-log.js';
 import { readTaskLifecycleSitePolicy } from './task-lifecycle-site-policy.js';
 import {

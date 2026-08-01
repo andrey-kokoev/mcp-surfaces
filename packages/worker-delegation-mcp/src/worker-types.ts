@@ -80,6 +80,7 @@ export type WorkerConstraintOverrides = {
 };
 
 export type WorkerRunToolInput = {
+  idempotency_key?: string;
   intent: WorkerIntent;
   constraints: WorkerConstraintRequest;
 };
@@ -140,6 +141,8 @@ export type WorkerResolvedExecutionPolicy = {
 export type WorkerExecutorRequest = {
   schema: 'narada.worker.executor_request.v1';
   run_id: string;
+  idempotency_key?: string;
+  request_fingerprint?: string;
   resume_worker_session_id: string | null;
   intent: WorkerIntent;
   requested_mode: WorkerDelegationMode;

@@ -6,7 +6,7 @@ import { createServer, type Socket } from 'node:net';
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { resolveNaradaSitePaths } from '@narada2/site-paths';
+import { resolveNaradaSitePaths } from '@narada-core/site-paths';
 import { buildGuidanceResult } from '../src/guidance.js';
 import { buildInputEvent, createSessionClient, configFromEnv, summarizeInputEvents, websocketEndpointProtocol } from '../src/session-client.js';
 import { handleRequest, listTools } from '../src/main.js';

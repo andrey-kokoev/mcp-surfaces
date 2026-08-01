@@ -14,8 +14,8 @@ import {
   type LifecycleRequirement,
   type McpToolDefinition,
   type SurfaceDescriptorV2,
-} from '@narada2/mcp-fabric-contracts';
-import { buildBoundedToolResult, outputShow, payloadCreate, prunePayloadWorkspaces } from '@narada2/mcp-transport';
+} from '@narada-core/mcp-fabric-contracts';
+import { buildBoundedToolResult, outputShow, outputShowAsync, payloadCreate, prunePayloadWorkspaces } from '@narada-core/mcp-transport';
 import { buildGuidanceResult, guidanceToolDefinition } from './guidance.js';
 import { loaderRuntimeLifecycle, loaderSupervisorRestartAction } from './runtime-lifecycle.js';
 import { DEFAULT_TOOL_CALL_TIMEOUT_MS, DEFAULT_TOOL_TIMEOUT_GRACE_MS, resolveToolCallTimeoutMs } from './tool-timeout.js';
@@ -79,6 +79,9 @@ const SITE_TOOL_OBSERVATION_MAX_ENTRIES = 32;
 const SITE_TOOL_OBSERVATION_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
 const REJECTED_SITE_IDS = new Set(['narada-andrey', 'narada-user-site']);
 const SURFACE_HANDLE_PREFIX = 'msh_';
+const LOADER_RUN_ID = `loader-${randomUUID()}`;
+const LOADER_OWNER_PID = process.pid;
+const LOADER_OWNERSHIP_MARKER = `narada.mcp.loader/${LOADER_RUN_ID}`;
 
 type McpRuntimeKind = string;
 
@@ -91,6 +94,17 @@ function assertSupportedSiteId(siteId: string, source: string): string {
     );
   }
   return siteId;
+}
+
+function connectionOwnershipFields(connection: ChildConnection): JsonRecord {
+  return {
+    owner: 'mcp-loader',
+    owner_run_id: connection.ownerRunId,
+    owner_pid: connection.ownerPid,
+    parent_pid: connection.parentPid,
+    ownership_marker: connection.ownershipMarker,
+    cleanup_scope: 'loader_owned_child_only',
+  };
 }
 
 function runtimeObservation(args: JsonRecord, state: LoaderState): JsonRecord {
@@ -470,6 +484,10 @@ type LoaderPolicy = {
 
 type ChildConnection = {
   connectionId: string;
+  ownerRunId: string;
+  ownerPid: number;
+  parentPid: number;
+  ownershipMarker: string;
   logicalConnectionId: string;
   generationId: string;
   serverName: string;
@@ -586,6 +604,7 @@ export function listTools() {
     tool('mcp_loader_runtime_status', 'Inspect whether this loader process is current relative to its runtime, source, dependency, and build-configuration evidence and whether the loader process itself must be restarted.', {}, [], { readOnly: true }),
     tool('mcp_loader_policy_inspect', 'Inspect the policy governing runtime MCP surface loading.', {}, [], { readOnly: true }),
     tool('mcp_loader_connection_inventory', 'List attached loader connections, including liveness, age, explicit loader-managed restartability, capacity, and bounded recovery actions for stale children.', {}, [], { readOnly: true }),
+    tool('mcp_loader_process_ownership', 'Inspect process ownership for children spawned by this loader run. This is a read-only reconciliation view: it reports loader-owned direct children and safe cleanup actions, but never enumerates or terminates unrelated host processes or conhost descendants.', {}, [], { readOnly: true }),
     tool('mcp_loader_runtime_observation', 'Return the normalized V2 runtime observation for one attached surface, including stable logical identity, generation state, lifecycle eligibility, contract digests, and bounded actuator guidance.', {
       connection_id: { type: 'string', description: 'Connection id returned by mcp_loader_attach_surface.' },
       carrier_kind: { type: 'string', description: 'Carrier kind producing the observation, such as codex, kimi, or opencode.' },
@@ -645,6 +664,7 @@ export function listTools() {
       output_ref: { type: 'string', description: 'Alias for ref.' },
       offset: { type: 'integer', minimum: 0, description: 'Character offset into the materialized JSON output.' },
       limit: { type: 'integer', minimum: 1, description: 'Maximum output characters for this page.' },
+      timeout_ms: { type: 'integer', minimum: 1, maximum: 15000, description: 'Strict upper bound for reading and validating the materialized output file.' },
     }, ['connection_id'], { readOnly: true }),
     tool('mcp_loader_detach', 'Detach and terminate an attached MCP surface.', {
       connection_id: { type: 'string', description: 'Connection id returned by mcp_loader_attach_surface.' },
@@ -668,6 +688,8 @@ async function callTool(params: JsonRecord, state: LoaderState): Promise<JsonRec
       return policyInspect(state);
     case 'mcp_loader_connection_inventory':
       return connectionInventory(state);
+    case 'mcp_loader_process_ownership':
+      return processOwnership(state);
     case 'mcp_loader_runtime_observation':
       return runtimeObservation(args, state);
     case 'mcp_loader_list_site_surfaces':
@@ -693,7 +715,7 @@ async function callTool(params: JsonRecord, state: LoaderState): Promise<JsonRec
     case 'mcp_loader_call_surface_tool':
       return callSurfaceHandleTool(args, state);
     case 'mcp_loader_read_result':
-      return readLoaderResult(args, state);
+      return await readLoaderResult(args, state);
     case 'mcp_loader_detach':
       return detachConnection(args, state);
     case 'mcp_loader_surface_restart':
@@ -722,6 +744,7 @@ function connectionInventory(state: LoaderState): JsonRecord {
         inspect: { tool_name: 'mcp_loader_surface_status', arguments: { connection_id: connection.connectionId } },
         detach: { tool_name: 'mcp_loader_detach', arguments: { connection_id: connection.connectionId } },
         restart: loaderRecoveryActions(connection)[0],
+        ownership: { tool_name: 'mcp_loader_process_ownership', arguments: {} },
       },
     };
   });
@@ -744,7 +767,52 @@ function connectionInventory(state: LoaderState): JsonRecord {
       inspect_tool: 'mcp_loader_surface_status',
       detach_tool: 'mcp_loader_detach',
       restart_tool: 'mcp_loader_surface_restart',
+      ownership_tool: 'mcp_loader_process_ownership',
       note: 'The inventory is read-only and does not reap children or free slots automatically.',
+    },
+  };
+}
+
+function processOwnership(state: LoaderState): JsonRecord {
+  const processes = [...state.connections.values()].map((connection) => {
+    const live = isConnectionLive(connection);
+    const ownershipVerified = connection.ownerRunId === LOADER_RUN_ID
+      && connection.ownerPid === LOADER_OWNER_PID
+      && connection.parentPid === LOADER_OWNER_PID
+      && connection.ownershipMarker === LOADER_OWNERSHIP_MARKER;
+    return {
+      ...connectionOwnershipFields(connection),
+      connection_id: connection.connectionId,
+      logical_connection_id: connection.logicalConnectionId,
+      generation_id: connection.generationId,
+      pid: connection.process.pid ?? null,
+      status: live ? 'live' : 'closed',
+      ownership_status: ownershipVerified ? 'loader_owned' : 'ownership_mismatch',
+      descendant_scope: 'direct_child_process_only',
+      cleanup: live
+        ? { status: 'not_eligible', action: { tool_name: 'mcp_loader_detach', arguments: { connection_id: connection.connectionId } } }
+        : { status: 'safe_to_reconcile', action: { tool_name: 'mcp_loader_detach', arguments: { connection_id: connection.connectionId } } },
+    };
+  });
+  const safeClosed = processes.filter((process) => process.ownership_status === 'loader_owned' && process.status === 'closed');
+  return {
+    schema: 'narada.mcp_loader.process_ownership.v1',
+    status: 'ok',
+    loader: {
+      run_id: LOADER_RUN_ID,
+      pid: LOADER_OWNER_PID,
+      ownership_marker: LOADER_OWNERSHIP_MARKER,
+      started_at: new Date(LOADER_PROCESS_STARTED_AT_MS).toISOString(),
+    },
+    scope: 'known_direct_children_spawned_by_this_loader_run',
+    processes,
+    safe_reconciliation_connection_ids: safeClosed.map((process) => process.connection_id),
+    external_process_policy: 'unowned_or_unobserved_processes_are_not_enumerated_or_terminated',
+    host_process_reconciliation: {
+      status: 'not_available',
+      reason: 'mcp-loader has no authority to enumerate arbitrary host processes or conhost descendants',
+      conhost_descendants: 'not_enumerated',
+      remediation: 'Use the host/runtime supervisor for external process inspection; use mcp_loader_detach for a known loader-owned connection.',
     },
   };
 }
@@ -808,7 +876,7 @@ function siteFabricDiagnostics(args: JsonRecord, state: LoaderState): JsonRecord
       },
       provenance: {
         config_source: fabricPath,
-        shared_registry_source: shared ? '@narada2/mcp-loader-mcp embedded registry' : null,
+        shared_registry_source: shared ? '@narada-core/mcp-loader-mcp embedded registry' : null,
         generator: typeof fabric.generated_by === 'string' ? fabric.generated_by : null,
         generated_at: typeof fabric.generated_at === 'string' ? fabric.generated_at : null,
         tracking_state: 'unknown',
@@ -825,7 +893,7 @@ function siteFabricDiagnostics(args: JsonRecord, state: LoaderState): JsonRecord
       shared_registry_entrypoint: normalizePath(shared.entrypoint.replace(/{site_root}/g, siteRoot)),
       classification: 'registry_fallback_available',
       provenance: {
-        shared_registry_source: '@narada2/mcp-loader-mcp embedded registry',
+        shared_registry_source: '@narada-core/mcp-loader-mcp embedded registry',
       },
     }));
   return {
@@ -907,6 +975,7 @@ async function openSurfaceHandle(args: JsonRecord, state: LoaderState): Promise<
     handle_survives_loader_restart: false,
     logical_connection_id: connection.logicalConnectionId,
     connection_id: connection.connectionId,
+    ownership: connectionOwnershipFields(connection),
     generation_id: connection.generationId,
     site_root: connection.siteRoot,
     surface_id: connection.surfaceId,
@@ -971,13 +1040,17 @@ async function openConnection(input: {
   const attachedAt = new Date().toISOString();
   const child = spawn(process.execPath, [entrypoint, ...resolvedArgs], {
     stdio: ['pipe', 'pipe', 'pipe'],
-    env: buildChildEnv(siteRoot, state.policy),
+    env: buildChildEnv(siteRoot, state.policy, { connectionId, logicalConnectionId: stableLogicalConnectionId, generationId }),
     shell: false,
     windowsHide: true,
   });
 
   const connection: ChildConnection = {
     connectionId,
+    ownerRunId: LOADER_RUN_ID,
+    ownerPid: LOADER_OWNER_PID,
+    parentPid: LOADER_OWNER_PID,
+    ownershipMarker: LOADER_OWNERSHIP_MARKER,
     logicalConnectionId: stableLogicalConnectionId,
     generationId,
     serverName: metadata.serverName,
@@ -1054,6 +1127,7 @@ function attachedResponse(connection: ChildConnection): JsonRecord {
     descriptor_digest: connection.descriptorDigest,
     tool_contract_digest: connection.toolContractDigest,
     lifecycle: connection.lifecycle,
+    ownership: connectionOwnershipFields(connection),
   };
 }
 
@@ -1184,15 +1258,16 @@ async function callSurfaceHandleTool(args: JsonRecord, state: LoaderState): Prom
   }, state);
 }
 
-function readLoaderResult(args: JsonRecord, state: LoaderState): JsonRecord {
+async function readLoaderResult(args: JsonRecord, state: LoaderState): Promise<JsonRecord> {
   const connection = getConnection(args, state);
   const ref = requiredString(args.ref ?? args.output_ref, 'missing_output_ref');
-  const page = outputShow({
+  const page = await outputShowAsync({
     siteRoot: connection.siteRoot,
     args: {
       ref,
       ...(args.offset === undefined ? {} : { offset: args.offset }),
       ...(args.limit === undefined ? {} : { limit: args.limit }),
+      ...(args.timeout_ms === undefined ? {} : { timeout_ms: args.timeout_ms }),
     },
     maxBytes: state.policy.maxResponseBytes,
   });
@@ -1558,12 +1633,19 @@ function findSiteServer(servers: JsonRecord, requestedSurfaceId: string): { serv
   return null;
 }
 
-function buildChildEnv(siteRoot: string, policy: LoaderPolicy): NodeJS.ProcessEnv {
+function buildChildEnv(siteRoot: string, policy: LoaderPolicy, ownership: { connectionId: string; logicalConnectionId: string; generationId: string }): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = {};
   for (const key of policy.allowedEnvVars) {
     if (process.env[key] !== undefined) env[key] = process.env[key];
   }
   env.NARADA_SITE_ROOT = siteRoot;
+  env.NARADA_MCP_LOADER_RUN_ID = LOADER_RUN_ID;
+  env.NARADA_MCP_LOADER_CONNECTION_ID = ownership.connectionId;
+  env.NARADA_MCP_LOADER_LOGICAL_CONNECTION_ID = ownership.logicalConnectionId;
+  env.NARADA_MCP_LOADER_GENERATION_ID = ownership.generationId;
+  env.NARADA_MCP_LOADER_OWNER_PID = String(LOADER_OWNER_PID);
+  env.NARADA_MCP_LOADER_PARENT_PID = String(LOADER_OWNER_PID);
+  env.NARADA_MCP_LOADER_OWNERSHIP_MARKER = LOADER_OWNERSHIP_MARKER;
   return env;
 }
 
@@ -1700,11 +1782,14 @@ function waitForChildClose(proc: ChildProcess, timeoutMs: number): Promise<boole
       if (settled) return;
       settled = true;
       clearTimeout(timer);
+      proc.off('exit', onExit);
       proc.off('close', onClose);
       resolvePromise(closed);
     };
+    const onExit = () => finish(true);
     const onClose = () => finish(true);
     const timer = setTimeout(() => finish(false), timeoutMs);
+    proc.once('exit', onExit);
     proc.once('close', onClose);
   });
 }
@@ -1715,6 +1800,7 @@ function connectionStatusFields(connection: ChildConnection): JsonRecord {
   const observedAt = new Date().toISOString();
   return {
     connection_id: connection.connectionId,
+    ownership: connectionOwnershipFields(connection),
     logical_connection_id: connection.logicalConnectionId,
     generation_id: connection.generationId,
     site_root: connection.siteRoot,

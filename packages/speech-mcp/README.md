@@ -1,4 +1,4 @@
-# @narada2/speech-mcp
+# @narada-core/speech-mcp
 
 Host-level speech MCP surface for text-to-speech, bounded microphone capture, transcript-returning remote transcription, prompt-response workflows, and bounded local listen sessions.
 

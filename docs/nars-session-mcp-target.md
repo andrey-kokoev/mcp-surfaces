@@ -11,7 +11,7 @@ This document defines the MCP-facing boundary only.
 
 ## Purpose
 
-The `@narada2/nars-session-mcp` surface allows an authorized caller
+The `@narada-core/nars-session-mcp` surface allows an authorized caller
 to inspect and deliver bounded input to an already-existing NARS session. It is
 a facade over the NARS session authority and `carrier.input.deliver`; it is not
 a general messaging bus, worker launcher, task surface, or provider adapter.

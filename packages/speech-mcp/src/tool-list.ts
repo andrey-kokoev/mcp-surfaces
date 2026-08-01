@@ -1,4 +1,4 @@
-import { listCapabilityCatalog, type Capability } from '@narada2/provider-registry';
+import { listCapabilityCatalog, type Capability } from '@narada-core/provider-registry';
 import { guidanceToolDefinition } from './guidance.js';
 import { MAX_LISTEN_DURATION_SECONDS } from './constants.js';
 import type { SpeechState } from './state.js';

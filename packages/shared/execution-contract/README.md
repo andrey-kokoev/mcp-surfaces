@@ -1,4 +1,4 @@
-# `@narada2/execution-contract`
+# `@narada-core/execution-contract`
 
 This package defines the shared execution identity used when a task or delegated workflow crosses from intent into execution.
 

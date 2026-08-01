@@ -62,7 +62,7 @@ export function findTaskLifecyclePackageRoot(runtimeModulePath: string): string 
     if (existsSync(packageJson)) {
       try {
         const parsed = JSON.parse(readFileSync(packageJson, 'utf8'));
-        if (parsed?.name === '@narada2/task-lifecycle-mcp') return cursor;
+        if (parsed?.name === '@narada-core/task-lifecycle-mcp') return cursor;
       } catch {
         // Keep walking; malformed unrelated package metadata is not authority.
       }

@@ -191,7 +191,7 @@ satisfied.
   `runtime_requirements: ["nars"]`. It is materialized when the launcher
   explicitly selects the NARS runtime.
 
-Both projections use the same `@narada2/nars-session-mcp` entrypoint. The
+Both projections use the same `@narada-core/nars-session-mcp` entrypoint. The
 projection metadata, not a duplicated package or site-specific carrier profile,
 defines why that entrypoint is present in a session.
 

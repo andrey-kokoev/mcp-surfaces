@@ -1,4 +1,4 @@
-# @narada2/artifacts-mcp
+# @narada-core/artifacts-mcp
 
 NARS session artifact MCP surface for model-facing artifact workflows.
 

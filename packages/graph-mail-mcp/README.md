@@ -1,8 +1,8 @@
-# @narada2/graph-mail-mcp
+# @narada-core/graph-mail-mcp
 
 Policy-gated Microsoft Graph mail MCP surface for live reads and draft lifecycle operations.
 
-Use this package when an agent needs live Microsoft Graph state or needs to create and manage Outlook drafts. Routine mailbox reading should use `@narada2/mailbox-mcp` first.
+Use this package when an agent needs live Microsoft Graph state or needs to create and manage Outlook drafts. Routine mailbox reading should use `@narada-core/mailbox-mcp` first.
 
 ## Boundary
 
@@ -180,5 +180,5 @@ Agents should:
 ## Verification
 
 ```powershell
-pnpm --filter @narada2/graph-mail-mcp test
+pnpm --filter @narada-core/graph-mail-mcp test
 ```

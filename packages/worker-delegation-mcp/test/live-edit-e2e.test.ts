@@ -10,7 +10,7 @@ import {
   runMcpProtocolSmoke,
   spawnJsonlMcpServer,
   type JsonRecord,
-} from '@narada2/mcp-e2e-harness';
+} from '@narada-core/mcp-e2e-harness';
 
 const root = createTemporaryE2eRoot('worker-delegation-live-edit-e2e');
 const targetPath = join(root, 'worker-edit-target.txt');

@@ -1,4 +1,4 @@
-# @narada2/site-loop-mcp
+# @narada-core/site-loop-mcp
 
 Config-governed Site Loop MCP runtime and site operating-loop tools.
 
@@ -160,7 +160,7 @@ If preparation has not happened, the cutover fails fast with
 prepare-then-retry sequence.
 
 ```powershell
-pnpm --filter @narada2/site-loop-mcp exec site-loop-storage-cutover --site-root D:/code/site --ack-cutover
+pnpm --filter @narada-core/site-loop-mcp exec site-loop-storage-cutover --site-root D:/code/site --ack-cutover
 ```
 
 The cutover does not retain a legacy schema or runtime fallback. It preserves
@@ -188,13 +188,13 @@ explicit site root and acknowledgement; each invocation is bounded and
 advances its evidence cursor:
 
 ```powershell
-pnpm --filter @narada2/site-loop-mcp exec site-loop-storage-maintenance --site-root D:/code/site --ack-maintenance
+pnpm --filter @narada-core/site-loop-mcp exec site-loop-storage-maintenance --site-root D:/code/site --ack-maintenance
 ```
 
 Add `--compact` when a full SQLite rewrite is wanted after pruning:
 
 ```powershell
-pnpm --filter @narada2/site-loop-mcp exec site-loop-storage-maintenance --site-root D:/code/site --ack-maintenance --compact
+pnpm --filter @narada-core/site-loop-mcp exec site-loop-storage-maintenance --site-root D:/code/site --ack-maintenance --compact
 ```
 
 Full run reads fail closed when a referenced evidence artifact is missing,
@@ -206,7 +206,7 @@ available.
 ## Run
 
 ```powershell
-pnpm --filter @narada2/site-loop-mcp build
+pnpm --filter @narada-core/site-loop-mcp build
 site-loop-mcp --site-root D:/code/site
 ```
 
@@ -223,7 +223,7 @@ e2e tests.
 The deterministic cross-surface proof is the Site Loop closure gate:
 
 ```powershell
-pnpm --filter @narada2/site-loop-mcp test:e2e:task-executability
+pnpm --filter @narada-core/site-loop-mcp test:e2e:task-executability
 ```
 
 It uses separate real Task Lifecycle MCP, Site Loop runner, and NARS runtime child processes, including the production NARS task-executability dispatch hook. The only controlled boundary is a local OpenAI-compatible HTTP evaluator fixture; its response and the bounded race delay are synthetic test controls, not claims about external-provider correctness. The emitted evidence distinguishes the real NARS hook path, Site Loop reconciliation, persisted assessment, delegated/worker provenance, and exactly-one-completed/one-locked concurrent run. Store ownership and temporary-root cleanup are asserted; promise barriers, not sleeps, establish ordering. This does not prove that the task, its outcome, or an external provider is correct. The optional live provider proof and recovery runbook are documented in Narada's `docs/operations/task-executability-e2e-and-recovery.md` runbook.
@@ -231,5 +231,5 @@ It uses separate real Task Lifecycle MCP, Site Loop runner, and NARS runtime chi
 ## Verification
 
 ```powershell
-pnpm --filter @narada2/site-loop-mcp test
+pnpm --filter @narada-core/site-loop-mcp test
 ```

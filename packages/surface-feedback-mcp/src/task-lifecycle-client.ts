@@ -18,7 +18,7 @@ export type TaskLifecycleProcessClient = {
 const require = createRequire(import.meta.url);
 
 function defaultTaskLifecycleEntrypoint(): string {
-  return require.resolve('@narada2/task-lifecycle-mcp/task-lifecycle-mcp-server');
+  return require.resolve('@narada-core/task-lifecycle-mcp/task-lifecycle-mcp-server');
 }
 
 export function createTaskLifecycleProcessClient({

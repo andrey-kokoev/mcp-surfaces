@@ -1,4 +1,4 @@
-import { defineNativeSurface, type DefinedSurface, type McpToolDefinition } from '@narada2/mcp-fabric-contracts';
+import { defineNativeSurface, type DefinedSurface, type McpToolDefinition } from '@narada-core/mcp-fabric-contracts';
 import { listTools } from './main.js';
 
 const READ_ONLY_TOOLS = [
@@ -10,7 +10,7 @@ export function surfaceDefinition(): DefinedSurface {
   return defineNativeSurface({
     surface_id: 'operator-console-overlay',
     surface_version: '0.1.0',
-    package: '@narada2/operator-console-overlay-mcp',
+    package: '@narada-core/operator-console-overlay-mcp',
     entrypoint: '{mcp_surfaces_root}/operator-console-overlay-mcp/dist/src/main.js',
     tools: listTools() as McpToolDefinition[],
     read_only_tools: READ_ONLY_TOOLS,

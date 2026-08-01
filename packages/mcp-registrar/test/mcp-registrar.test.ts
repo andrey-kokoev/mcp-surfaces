@@ -5,11 +5,18 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { DatabaseSync } from 'node:sqlite';
-import { payloadCreate } from '@narada2/mcp-transport';
+import { payloadCreate } from '@narada-core/mcp-transport';
 import { buildGuidanceResult } from '../src/guidance.js';
-import { buildSiteBindConfig, buildSiteSurfaceRegistry, checkOutputReaderClosureForRegistry, checkSiteRegistryConformance, checkSiteRegistryConformanceFromObservation, compareCarrierProjection, createServerState, handleRequest, sharedSurfaceIdsForBinding, siteBindSidecarRefusal, siteSurfaceServerKey, validateSiteMcpFabric, validateSiteToolInventoryObservation } from '../src/main.js';
+import { buildSiteBindConfig, buildSiteSurfaceRegistry, checkOutputReaderClosureForRegistry, checkSiteRegistryConformance, checkSiteRegistryConformanceFromObservation, compareCarrierProjection, createServerState, handleRequest, readSiteSurfaceOverrides, sharedSurfaceIdsForBinding, siteBindSidecarRefusal, siteSurfaceServerKey, validateSiteMcpFabric, validateSiteToolInventoryObservation } from '../src/main.js';
 
 const root: any = mkdtempSync(join(tmpdir(), 'mcp-registrar-behavior-'));
+const siteOverrideConfig = join(root, 'site-overrides.json');
+writeFileSync(siteOverrideConfig, JSON.stringify({ surface_overrides: { 'task-lifecycle': { enabled: false } } }), 'utf8');
+assert.deepEqual(readSiteSurfaceOverrides(siteOverrideConfig), { 'task-lifecycle': { enabled: false } });
+assert.equal(sharedSurfaceIdsForBinding(
+  { site_id: 'fixture', surfaces: ['task-lifecycle', 'work-lifecycle'], prefix: 'fixture' },
+  { site_id: 'fixture', root, config_path: siteOverrideConfig, surfaces: [], surface_overrides: readSiteSurfaceOverrides(siteOverrideConfig) },
+).includes('task-lifecycle'), false);
 
 const guidance = buildGuidanceResult();
 assert.equal(
@@ -857,11 +864,11 @@ try {
   assert.equal(validateFindings.some((finding: any) => finding.surface_id === 'site-loop'), false);
   assert.ok(validateFindings.some((finding: any) => finding.surface_id === 'mcp-loader'));
   assert.equal(
-    validateFindings.some((finding: any) => finding.code === 'registrar_runtime_dependency_missing' && finding.dependency === '@narada2/mcp-fabric-contracts'),
+    validateFindings.some((finding: any) => finding.code === 'registrar_runtime_dependency_missing' && finding.dependency === '@narada-core/mcp-fabric-contracts'),
     false,
   );
   assert.equal(
-    validateFindings.some((finding: any) => finding.code === 'registrar_runtime_dependency_missing' && finding.dependency === '@narada2/mcp-loader-mcp'),
+    validateFindings.some((finding: any) => finding.code === 'registrar_runtime_dependency_missing' && finding.dependency === '@narada-core/mcp-loader-mcp'),
     false,
   );
   const filesystemFinding: any = validateFindings.find((finding: any) => finding.surface_id === 'local-filesystem');
@@ -1276,7 +1283,12 @@ try {
   assert.ok(mailboxRegistry);
   assert.ok((mailboxRegistry.registered_live_tools as string[]).includes('mailbox_output_show'));
   assert.ok((mailboxRegistry.tool_contract.read_only_tools as string[]).includes('mailbox_output_show'));
-  assert.deepEqual(mailboxRegistry.tool_contract.mutating_tools, []);
+  assert.deepEqual(mailboxRegistry.tool_contract.mutating_tools, [
+    'mailbox_sync_generation',
+    'mailbox_message_admit',
+    'mailbox_outbox_consumer_register',
+    'mailbox_outbox_ack',
+  ]);
   const graphMailRegistry: any = (mailRegistry.surfaces as Array<Record<string, any>>).find((surface) => surface.catalog_surface_id === 'graph-mail');
   assert.ok(graphMailRegistry);
   assert.ok((graphMailRegistry.registered_live_tools as string[]).includes('graph_mail_output_show'));

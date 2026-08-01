@@ -1,6 +1,6 @@
 # Delegated Task MCP Task Graph
 
-This graph defines the implementation and verification shape for `@narada2/delegated-task-mcp`.
+This graph defines the implementation and verification shape for `@narada-core/delegated-task-mcp`.
 
 ## Graph
 

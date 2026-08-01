@@ -1,4 +1,4 @@
-# @narada2/mcp-runtime-proxy
+# @narada-core/mcp-runtime-proxy
 
 Small stdio proxy for carrier-launched MCP servers.
 

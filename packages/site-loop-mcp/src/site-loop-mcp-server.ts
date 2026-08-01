@@ -11,13 +11,13 @@ import {
   validateAffordanceDocument,
   type AffordanceAction,
   type AffordancePanel,
-} from '@narada2/mcp-affordances';
+} from '@narada-core/mcp-affordances';
 import {
   buildBoundedToolResult,
   listOutputResources,
   outputShowAsync,
   readOutputResource,
-} from '@narada2/mcp-transport';
+} from '@narada-core/mcp-transport';
 import { loadSiteLoopConfig, siteLoopConfigJsonSchema } from './site-loop/site-loop-config.js';
 import { siteLoopDependencyBoundaries } from './site-loop/site-loop-boundary.js';
 import { runSiteLoopWithCanonicalRuntimeHost } from './site-loop/site-operating-runtime-host.js';

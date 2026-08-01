@@ -156,16 +156,16 @@ assert.ok(defaultPwshCommand.reasons.some((reason) => String(reason).startsWith(
 const defaultPnpmTest = decideStructuredCommandExecution({ command: 'pnpm', args: ['test'], workingDirectory: root }, stateWithDefaultCommands.policy);
 assert.equal(defaultPnpmTest.status, 'allowed');
 assert.deepEqual(defaultPnpmTest.reasons, []);
-const defaultPnpmFilteredTest = decideStructuredCommandExecution({ command: 'pnpm', args: ['--filter', '@narada2/structured-command-mcp', 'test'], workingDirectory: root }, stateWithDefaultCommands.policy);
+const defaultPnpmFilteredTest = decideStructuredCommandExecution({ command: 'pnpm', args: ['--filter', '@narada-core/structured-command-mcp', 'test'], workingDirectory: root }, stateWithDefaultCommands.policy);
 assert.equal(defaultPnpmFilteredTest.status, 'allowed');
 assert.deepEqual(defaultPnpmFilteredTest.reasons, []);
-const defaultPnpmFilteredDeploy = decideStructuredCommandExecution({ command: 'pnpm', args: ['--filter', '@narada2/structured-command-mcp', 'deploy'], workingDirectory: root }, stateWithDefaultCommands.policy);
+const defaultPnpmFilteredDeploy = decideStructuredCommandExecution({ command: 'pnpm', args: ['--filter', '@narada-core/structured-command-mcp', 'deploy'], workingDirectory: root }, stateWithDefaultCommands.policy);
 assert.equal(defaultPnpmFilteredDeploy.status, 'refused');
 assert.ok(defaultPnpmFilteredDeploy.reasons.some((reason) => String(reason).startsWith('command_not_allowed:')));
 
 const focusedTestPosture = await exec({
   command: 'pnpm',
-  args: ['--filter', '@narada2/structured-command-mcp', 'test'],
+  args: ['--filter', '@narada-core/structured-command-mcp', 'test'],
   working_directory: root,
 }, stateWithDefaultCommands);
 assert.equal(focusedTestPosture.test_scope, 'focused');

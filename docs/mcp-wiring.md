@@ -4,13 +4,13 @@ This repository ships standalone MCP surfaces. A surface can run without Narada,
 
 ## What To Use
 
-- `@narada2/local-filesystem-mcp` when you want governed filesystem access.
-- `@narada2/mcp-registrar` when you want Narada to write the carrier config for Codex, opencode, or Kimi.
+- `@narada-core/local-filesystem-mcp` when you want governed filesystem access.
+- `@narada-core/mcp-registrar` when you want Narada to write the carrier config for Codex, opencode, or Kimi.
 
 ## Standalone Filesystem Example
 
 ```powershell
-pnpm --filter @narada2/local-filesystem-mcp build
+pnpm --filter @narada-core/local-filesystem-mcp build
 node <installed-package>/dist/src/main.js --mode read --allowed-root <your-workspace-root>
 ```
 

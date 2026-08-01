@@ -1,4 +1,4 @@
-# @narada2/mcp-affordances
+# @narada-core/mcp-affordances
 
 Shared Narada MCP affordance schema and validation helpers.
 

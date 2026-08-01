@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { assertLiveToolsConform } from '@narada2/mcp-fabric-contracts';
+import { assertLiveToolsConform } from '@narada-core/mcp-fabric-contracts';
 import { createServerState, handleRequest, launcherSurfaceDefinition } from '../src/main.js';
 
 const root = mkdtempSync(join(tmpdir(), 'launcher-mcp-'));

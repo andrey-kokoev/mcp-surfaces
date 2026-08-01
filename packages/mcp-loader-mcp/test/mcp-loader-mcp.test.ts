@@ -3,8 +3,8 @@ import { mkdtempSync, rmSync, writeFileSync, mkdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { payloadShow } from '@narada2/mcp-transport';
-import { createTestProcessScope } from '@narada2/mcp-e2e-harness';
+import { payloadShow } from '@narada-core/mcp-transport';
+import { createTestProcessScope } from '@narada-core/mcp-e2e-harness';
 import { resolveToolCallTimeoutMs } from '../src/tool-timeout.js';
 import { loaderRuntimeLifecycle } from '../src/runtime-lifecycle.js';
 
@@ -287,6 +287,14 @@ try {
   assert.equal(emptyInventory?.closed_count, 0);
   assert.match(String(emptyInventory?.recovery?.note), /read-only/);
 
+  const emptyOwnership = await call('tools/call', { name: 'mcp_loader_process_ownership', arguments: {} }, 34);
+  assert.equal(emptyOwnership?.schema, 'narada.mcp_loader.process_ownership.v1');
+  assert.equal(emptyOwnership?.scope, 'known_direct_children_spawned_by_this_loader_run');
+  assert.deepEqual(emptyOwnership?.processes, []);
+  assert.equal(emptyOwnership?.host_process_reconciliation?.status, 'not_available');
+  assert.equal(emptyOwnership?.host_process_reconciliation?.conhost_descendants, 'not_enumerated');
+  assert.match(String(emptyOwnership?.external_process_policy), /not_enumerated_or_terminated/);
+
   const listResult = await call('tools/call', { name: 'mcp_loader_list_site_surfaces', arguments: { site_root: root } }, 3);
   assert.equal(listResult?.schema, 'narada.mcp_loader.site_surfaces.v1');
   const surfaces = listResult?.surfaces as { surface_id: string; runtime_lifecycle: Record<string, any> }[];
@@ -456,6 +464,17 @@ try {
   assert.equal(liveEntry?.runtime_lifecycle?.actions?.restart?.tool_name, 'mcp_loader_surface_restart');
   assert.equal(liveEntry?.recovery_actions?.inspect?.tool_name, 'mcp_loader_surface_status');
   assert.equal(liveEntry?.recovery_actions?.detach?.tool_name, 'mcp_loader_detach');
+  assert.equal(liveEntry?.ownership?.owner, 'mcp-loader');
+  assert.match(String(liveEntry?.ownership?.owner_run_id), /^loader-/);
+  assert.equal(liveEntry?.ownership?.owner_pid, liveEntry?.ownership?.parent_pid);
+  assert.match(String(liveEntry?.ownership?.ownership_marker), /^narada\.mcp\.loader\/loader-/);
+  assert.equal(liveEntry?.ownership?.cleanup_scope, 'loader_owned_child_only');
+  const liveOwnership = await call('tools/call', { name: 'mcp_loader_process_ownership', arguments: {} }, 39);
+  const liveOwnershipEntry = (liveOwnership?.processes as Array<Record<string, any>>).find((entry) => entry.connection_id === fabricAttach?.connection_id);
+  assert.equal(liveOwnershipEntry?.ownership_status, 'loader_owned');
+  assert.equal(liveOwnershipEntry?.status, 'live');
+  assert.equal(liveOwnershipEntry?.descendant_scope, 'direct_child_process_only');
+  assert.equal(liveOwnershipEntry?.cleanup?.status, 'not_eligible');
   const runtimeObservation = await call('tools/call', { name: 'mcp_loader_runtime_observation', arguments: { connection_id: fabricAttach?.connection_id, carrier_kind: 'codex' } }, 38);
   assert.equal(runtimeObservation?.schema_version, '2.0', JSON.stringify(runtimeObservation));
   assert.equal(runtimeObservation?.carrier_kind, 'codex');
@@ -486,7 +505,7 @@ try {
   assert.equal(absoluteNodeAttach?.schema, 'narada.mcp_loader.surface_attached.v1');
   assert.equal(absoluteNodeAttach?.entrypoint, restartableEntrypoint.replace(/\\/g, '/'));
   assert.deepEqual(absoluteNodeAttach?.args, ['--site-root', root, '--marker', 'absolute']);
-  const absoluteNodeDetach = await call('tools/call', { name: 'mcp_loader_detach', arguments: { connection_id: absoluteNodeAttach?.connection_id } }, 34);
+  const absoluteNodeDetach = await call('tools/call', { name: 'mcp_loader_detach', arguments: { connection_id: absoluteNodeAttach?.connection_id } }, 334);
   assert.equal(absoluteNodeDetach?.termination?.status, 'terminated');
 
   const restartableAttach = await call('tools/call', { name: 'mcp_loader_attach_surface', arguments: { site_root: root, surface_id: 'restartable', entrypoint: restartableEntrypoint } }, 11);

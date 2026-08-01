@@ -5,9 +5,9 @@ import { fileURLToPath } from 'node:url';
 import {
   buildOutputRefToolContent,
   listOutputResources,
-  outputShow,
+  outputShowAsync,
   readOutputResource,
-} from '@narada2/mcp-transport';
+} from '@narada-core/mcp-transport';
 import { diagnosticError, GitMcpError } from './git-errors.js';
 import { createGitPolicy, GitPolicyError } from './policy.js';
 import { callGitTool, type GitRequestContext } from './git-tools.js';
@@ -174,14 +174,14 @@ async function callTool(params: Record<string, unknown>, state: GitMcpState, con
   const name = String(params.name ?? '');
   const args = asRecord(params.arguments);
   if (name === 'git_guidance') return toolResult(buildGuidanceResult(args), state, name);
-  if (name === 'git_output_show') return toolResult(gitOutputShow(args, state), state, name);
+  if (name === 'git_output_show') return toolResult(await gitOutputShow(args, state), state, name);
   const result = await callGitTool(name, args, state, context);
   return toolResult(result, state, name);
 }
 
-function gitOutputShow(args: Record<string, unknown>, state: GitMcpState) {
+async function gitOutputShow(args: Record<string, unknown>, state: GitMcpState) {
   try {
-    const page = outputShow({ siteRoot: state.outputRoot, args });
+    const page = await outputShowAsync({ siteRoot: state.outputRoot, args });
     return {
       ...asRecord(page),
       output_scope: {

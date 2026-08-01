@@ -1,4 +1,4 @@
-# @narada2/mailbox-mcp
+# @narada-core/mailbox-mcp
 
 Read-only MCP surface for site-local synced mailbox projections.
 
@@ -12,7 +12,7 @@ Use this package when an agent needs to inspect mail that has already been synce
 - Not allowed: creating, updating, sending, or deleting mail.
 - Not allowed: PowerShell or arbitrary command execution.
 
-Use `@narada2/graph-mail-mcp` for live Microsoft Graph reads and draft lifecycle operations.
+Use `@narada-core/graph-mail-mcp` for live Microsoft Graph reads and draft lifecycle operations.
 
 ## Local Data Contract
 
@@ -79,5 +79,5 @@ Agents should prefer this surface for routine mailbox inspection because it is r
 ## Verification
 
 ```powershell
-pnpm --filter @narada2/mailbox-mcp test
+pnpm --filter @narada-core/mailbox-mcp test
 ```

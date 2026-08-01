@@ -1,5 +1,5 @@
 {
-  "name": "@narada2/mcp-fabric-contracts",
+  "name": "@narada-core/mcp-fabric-contracts",
   "version": "0.1.0",
   "type": "module",
   "main": "dist/src/index.js",

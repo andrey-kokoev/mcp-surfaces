@@ -1,12 +1,12 @@
 {
-  "name": "@narada2/mcp-runtime-proxy",
+  "name": "@narada-core/mcp-runtime-proxy",
   "version": "0.1.0",
   "license": "Apache-2.0",
   "type": "module",
   "scripts": {
     "build": "tsc -b",
     "typecheck": "tsc -b --pretty false",
-    "test": "pnpm --filter @narada2/mcp-e2e-harness build && pnpm build && node dist/test/mcp-runtime-proxy.test.js && node dist/test/generation-manager.test.js && node --test dist/test/runtime-observation.test.js && node --test dist/test/workspace-artifact-manifest.test.js && node --test dist/test/materialization-contract.test.js"
+    "test": "pnpm --filter @narada-core/mcp-e2e-harness build && pnpm build && node dist/test/mcp-runtime-proxy.test.js && node dist/test/generation-manager.test.js && node --test dist/test/runtime-observation.test.js && node --test dist/test/workspace-artifact-manifest.test.js && node --test dist/test/materialization-contract.test.js"
   },
   "types": "./dist/src/main.d.ts",
   "exports": {
@@ -32,14 +32,14 @@
     }
   },
   "dependencies": {
-    "@narada2/mcp-fabric-contracts": "workspace:*",
-    "@narada2/process-launch-posture": "workspace:*"
+    "@narada-core/mcp-fabric-contracts": "workspace:*",
+    "@narada-core/process-launch-posture": "workspace:*"
   },
   "files": [
     "dist/",
     "README.md"
   ],
   "devDependencies": {
-    "@narada2/mcp-e2e-harness": "workspace:*"
+    "@narada-core/mcp-e2e-harness": "workspace:*"
   }
 }

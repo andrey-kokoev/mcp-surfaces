@@ -1,4 +1,4 @@
-import { defineNativeSurface, type DefinedSurface, type McpToolDefinition } from '@narada2/mcp-fabric-contracts';
+import { defineNativeSurface, type DefinedSurface, type McpToolDefinition } from '@narada-core/mcp-fabric-contracts';
 import { listTools } from './site-loop-mcp-server.js';
 
 const READ_ONLY_TOOLS = [
@@ -15,7 +15,7 @@ export function surfaceDefinition(): DefinedSurface {
   return defineNativeSurface({
     surface_id: 'site-loop',
     surface_version: '0.1.0',
-    package: '@narada2/site-loop-mcp',
+    package: '@narada-core/site-loop-mcp',
     entrypoint: '{mcp_surfaces_root}/site-loop-mcp/dist/src/site-loop-mcp-server.js',
     tools: listTools() as McpToolDefinition[],
     read_only_tools: READ_ONLY_TOOLS,

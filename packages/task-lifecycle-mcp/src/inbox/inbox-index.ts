@@ -1,6 +1,6 @@
 import { existsSync, mkdirSync, readdirSync, readFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
-import { Database } from '@narada2/task-governance-core/sqlite-database';
+import { Database } from '@narada-core/task-governance-core/sqlite-database';
 import { getLatestEventsByEnvelope } from './admission-log.js';
 
 const INBOX_DIR: any = '.ai/inbox-envelopes';

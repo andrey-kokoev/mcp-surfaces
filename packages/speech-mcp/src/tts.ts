@@ -4,7 +4,7 @@ import { existsSync, mkdirSync, unlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import type { Readable } from 'node:stream';
-import { listCapabilityCatalog, resolveCapabilitySelection, type ResolvedCapabilitySelection } from '@narada2/provider-registry';
+import { listCapabilityCatalog, resolveCapabilitySelection, type ResolvedCapabilitySelection } from '@narada-core/provider-registry';
 import { withAudibleOutput } from './audible-output.js';
 import { OPENAI_TTS_URL } from './constants.js';
 import { diagnosticError } from './diagnostics.js';

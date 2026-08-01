@@ -13,7 +13,7 @@ import {
   listOutputResources,
   readOutputResource,
   resolveToolPayloadArgs,
-} from '@narada2/mcp-transport';
+} from '@narada-core/mcp-transport';
 import { buildAllowedRoots, rootEntriesToRoots, resolveAllowedPath as resolvePolicyAllowedPath } from './policy.js';
 import { applyDeletePatch as applyParsedDeletePatch, applyFilePatch as applyParsedFilePatch, parsePatch as parseToolPatch } from './patch-apply.js';
 import { renderToolResultText as renderFilesystemToolResultText } from './result-rendering.js';

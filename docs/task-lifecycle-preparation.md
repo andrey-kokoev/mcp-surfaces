@@ -15,7 +15,7 @@ during explicit preparation.
 Build the package, then run the package-owned preparation command:
 
 ```powershell
-pnpm --filter @narada2/task-lifecycle-mcp build
+pnpm --filter @narada-core/task-lifecycle-mcp build
 node packages/task-lifecycle-mcp/dist/src/task-lifecycle/task-mcp-server.js --prepare --site-root D:/code/site
 ```
 

@@ -1,4 +1,4 @@
-import { defineNativeSurface, type DefinedSurface, type McpToolDefinition } from '@narada2/mcp-fabric-contracts';
+import { defineNativeSurface, type DefinedSurface, type McpToolDefinition } from '@narada-core/mcp-fabric-contracts';
 import { listTools } from './main.js';
 
 const READ_ONLY_TOOLS = ["fs_guidance","fs_read_file","fs_read_file_range","fs_stat","fs_glob_search","fs_grep_search","fs_repository_inventory","fs_file_metrics","fs_doctor","fs_patch_outcome_show"] as const;
@@ -7,7 +7,7 @@ export function surfaceDefinition(): DefinedSurface {
   return defineNativeSurface({
     surface_id: 'local-filesystem',
     surface_version: '0.1.0',
-    package: '@narada2/local-filesystem-mcp',
+    package: '@narada-core/local-filesystem-mcp',
     entrypoint: '{mcp_surfaces_root}/local-filesystem-mcp/dist/src/main.js',
     tools: listTools('write') as McpToolDefinition[],
     read_only_tools: READ_ONLY_TOOLS,

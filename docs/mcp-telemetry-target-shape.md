@@ -31,8 +31,8 @@ packages/
 
 Shared packages are not MCP servers. They provide reusable mechanics that surfaces import. In this model:
 
-- `@narada2/mcp-transport` owns payload refs, output refs, materialization, and compact rendering helpers.
-- `@narada2/mcp-telemetry` owns optional telemetry policy loading, declaration enforcement, event envelope construction, redaction, and local JSONL persistence.
+- `@narada-core/mcp-transport` owns payload refs, output refs, materialization, and compact rendering helpers.
+- `@narada-core/mcp-telemetry` owns optional telemetry policy loading, declaration enforcement, event envelope construction, redaction, and local JSONL persistence.
 
 `mcp-transport` must not absorb telemetry. Transport and telemetry are separate concerns.
 
@@ -244,7 +244,7 @@ V1 telemetry does not run a retention daemon and does not delete files automatic
 
 1. Document the target shape and persistence contract.
 2. Move shared packages under `packages/shared/` while preserving published package names.
-3. Create `@narada2/mcp-telemetry` with no-op default behavior and tests.
+3. Create `@narada-core/mcp-telemetry` with no-op default behavior and tests.
 4. Integrate with one low-risk read surface to validate ergonomics.
 5. Integrate with one audited mutation surface to prove telemetry does not replace audit.
 6. Inventory remaining surfaces and create high-confidence migration tasks only after the first integrations settle.

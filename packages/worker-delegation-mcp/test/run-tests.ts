@@ -1,6 +1,6 @@
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { createTestProcessScope } from '@narada2/mcp-e2e-harness';
+import { createTestProcessScope } from '@narada-core/mcp-e2e-harness';
 
 const testRoot = dirname(fileURLToPath(import.meta.url));
 const testFiles = [

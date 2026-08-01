@@ -1,4 +1,4 @@
-# @narada2/mcp-loader-mcp
+# @narada-core/mcp-loader-mcp
 
 Policy-gated runtime attachment and proxying for MCP surfaces admitted by a Site fabric.
 

@@ -9,8 +9,8 @@
 
 import { readFileSync, readdirSync } from 'node:fs';
 import { join, resolve } from 'node:path';
-import { parseFrontMatter } from '@narada2/task-governance-core/task-governance';
-import { parseStoredTaskTags, parseTaskTagsValue } from '@narada2/task-governance-core/task-tags';
+import { parseFrontMatter } from '@narada-core/task-governance-core/task-governance';
+import { parseStoredTaskTags, parseTaskTagsValue } from '@narada-core/task-governance-core/task-tags';
 
 const STOP_WORDS = new Set([
   'a','an','the','and','or','but','in','on','at','to','for','of','with','by','from','as','is','was','are','be','been','being','have','has','had','do','does','did','will','would','could','should','may','might','must','shall','can','need','dare','ought','used','this','that','these','those','i','you','he','she','it','we','they','me','him','her','us','them','my','your','his','her','its','our','their','mine','yours','hers','ours','theirs','what','which','who','whom','whose','where','when','why','how','all','each','every','both','few','more','most','other','some','such','no','nor','not','only','own','same','so','than','too','very','just','now','then','here','there','up','down','out','off','over','under','again','further','also','into','through','during','before','after','above','below','between','among','within','without','against','towards','upon','across','around','behind','beyond','except','inside','outside','until','via','per','amongst','amid','beside','besides','concerning','despite','following','like','minus','near','past','regarding','round','save','since','till','toward','underneath','unlike','versus','worth',

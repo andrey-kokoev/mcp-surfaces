@@ -1,4 +1,4 @@
-import { defineNativeSurface, type DefinedSurface, type McpToolDefinition } from '@narada2/mcp-fabric-contracts';
+import { defineNativeSurface, type DefinedSurface, type McpToolDefinition } from '@narada-core/mcp-fabric-contracts';
 import { listTools } from './main.js';
 
 const READ_ONLY_TOOLS = ["inbox_guidance","inbox_doctor","inbox_list","inbox_show","inbox_audit","inbox_next","capa_queue","inbox_output_show"] as const;
@@ -7,7 +7,7 @@ export function surfaceDefinition(): DefinedSurface {
   return defineNativeSurface({
     surface_id: 'site-inbox',
     surface_version: '0.1.0',
-    package: '@narada2/site-inbox-mcp',
+    package: '@narada-core/site-inbox-mcp',
     entrypoint: '{mcp_surfaces_root}/site-inbox-mcp/dist/src/main.js',
     tools: listTools() as McpToolDefinition[],
     read_only_tools: READ_ONLY_TOOLS,

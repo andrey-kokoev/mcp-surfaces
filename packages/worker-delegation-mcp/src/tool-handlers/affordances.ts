@@ -5,7 +5,7 @@ import {
   type AffordanceAction,
   type AffordancePanel,
   type AffordanceRef,
-} from '@narada2/mcp-affordances';
+} from '@narada-core/mcp-affordances';
 import type { WorkerMcpState } from '../state.js';
 
 export function workerOperatorAffordances(state: WorkerMcpState): Record<string, unknown> {

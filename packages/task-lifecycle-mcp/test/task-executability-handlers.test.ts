@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { mkdirSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { prepareTaskLifecycleStore } from '@narada2/task-governance-core/task-lifecycle-store';
+import { prepareTaskLifecycleStore } from '@narada-core/task-governance-core/task-lifecycle-store';
 import { createTaskLifecycleExecutabilityHandlers } from '../src/task-lifecycle/task-lifecycle-executability-handlers.js';
 
 function stringField(args: Record<string, unknown>, field: string): string | undefined {
