@@ -7,7 +7,7 @@ import { fileURLToPath } from 'node:url';
 import { DatabaseSync } from 'node:sqlite';
 import { payloadCreate } from '@narada-core/mcp-transport';
 import { buildGuidanceResult } from '../src/guidance.js';
-import { buildSiteBindConfig, buildSiteSurfaceRegistry, checkOutputReaderClosureForRegistry, checkSiteRegistryConformance, checkSiteRegistryConformanceFromObservation, compareCarrierProjection, createServerState, handleRequest, readSiteSurfaceOverrides, sharedSurfaceIdsForBinding, siteBindSidecarRefusal, siteSurfaceServerKey, validateSiteMcpFabric, validateSiteToolInventoryObservation } from '../src/main.js';
+import { appendLoaderAllowedSiteRoots, buildSiteBindConfig, buildSiteSurfaceRegistry, checkOutputReaderClosureForRegistry, checkSiteRegistryConformance, checkSiteRegistryConformanceFromObservation, compareCarrierProjection, createServerState, handleRequest, readSiteSurfaceOverrides, sharedSurfaceIdsForBinding, siteBindSidecarRefusal, siteSurfaceServerKey, validateSiteMcpFabric, validateSiteToolInventoryObservation } from '../src/main.js';
 
 const root: any = mkdtempSync(join(tmpdir(), 'mcp-registrar-behavior-'));
 const siteOverrideConfig = join(root, 'site-overrides.json');
@@ -788,6 +788,10 @@ try {
   const carriers: any = await call('registrar_carrier_list', {});
   const carrierData: any = view(carriers);
   assert.ok((carrierData.items as Array<unknown>).length >= 3);
+  const registeredSites: any = view(await call('registrar_site_list', {}));
+  const registeredSiteRoots: any = (registeredSites.items as Array<Record<string, any>>)
+    .map((site) => String(site.root).replace(/\\/g, '/'));
+  assert.ok(registeredSiteRoots.length > 0);
   const carrierIds: any = (carrierData.items as Array<Record<string, any>>).map((carrier) => carrier.carrier_id);
   assert.deepEqual(carrierIds.sort(), ['codex-andrey', 'kimi-andrey', 'opencode-andrey']);
   assert.equal(carrierIds.includes('opencode-sonar'), false);
@@ -799,6 +803,16 @@ try {
     loading_mode: 'progressive',
   });
   assert.deepEqual(progressiveBootstrap, ['agent-context', 'mcp-registrar', 'mcp-loader', 'local-filesystem']);
+  assert.deepEqual(
+    appendLoaderAllowedSiteRoots(
+      ['--allowed-site-root', 'D:\\code\\narada.sonar'],
+      ['D:\\code\\narada.sonar', 'D:\\code\\smart-scheduling'],
+    ),
+    [
+      '--allowed-site-root', 'D:\\code\\narada.sonar',
+      '--allowed-site-root', 'D:/code/smart-scheduling',
+    ],
+  );
   assert.throws(
     () => sharedSurfaceIdsForBinding({ site_id: 'fixture-site', surfaces: 'all', prefix: 'fixture', loading_mode: 'progressive' }),
     /registrar_progressive_binding_requires_explicit_bootstrap/,
@@ -836,6 +850,11 @@ try {
     const generatedText: any = readFileSync(generatedPath, 'utf8');
     const normalizedGeneratedText: any = generatedText.replace(/\\\\/g, '/').replace(/\\/g, '/');
     assert.equal(normalizedGeneratedText.includes('mcp-loader-mcp/dist/src/main.js'), true);
+    assert.equal(normalizedGeneratedText.includes('--allowed-site-root'), true);
+    assert.equal(normalizedGeneratedText.includes('D:/code/mcp-surfaces'), true);
+    for (const registeredSiteRoot of registeredSiteRoots) {
+      assert.equal(normalizedGeneratedText.includes(registeredSiteRoot), true);
+    }
     assert.equal(normalizedGeneratedText.includes('local-filesystem-mcp/dist/src/main.js'), true);
     assert.equal(normalizedGeneratedText.includes('agent-context-mcp/dist/src/main.js'), true);
     assert.equal(normalizedGeneratedText.includes('mcp-registrar/dist/src/main.js'), true);

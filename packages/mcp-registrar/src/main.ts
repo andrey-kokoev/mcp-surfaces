@@ -1314,6 +1314,22 @@ function dedupeRoots(roots: string[]): string[] {
   return result;
 }
 
+export function appendLoaderAllowedSiteRoots(args: string[], siteRoots: string[]): string[] {
+  const out = [...args];
+  const present = new Set<string>();
+  for (let index = 0; index < out.length; index += 1) {
+    if (out[index] !== '--allowed-site-root' || index + 1 >= out.length) continue;
+    present.add(out[++index]!.replace(/\\/g, '/').toLowerCase());
+  }
+  for (const root of dedupeRoots(siteRoots.map((value) => canonicalWorkspaceRoot(value)))) {
+    const comparable = root.replace(/\\/g, '/').toLowerCase();
+    if (present.has(comparable)) continue;
+    out.push('--allowed-site-root', root);
+    present.add(comparable);
+  }
+  return out;
+}
+
 function writeSiteAllowedRootsConfig(carrier: CarrierDef): void {
   for (const binding of carrier.site_bindings) {
     const site = lookupSite(binding.site_id);
@@ -1355,10 +1371,16 @@ function materializeSharedSurface(binding: SiteBinding, site: SiteDef, surfaceId
   const selected = selectSurfaceProjection(surfaceId, undefined, binding.runtime_kind);
   const projection = selected.projection;
   const siteRoot = canonicalWorkspaceRoot(site.root);
-  const resolvedArgs = [
+  let resolvedArgs = [
     ...resolveSurfaceArgs(surface, site.site_id, siteRoot, extraRoots, projection),
     ...projectionLaunchArgs(projection),
   ];
+  if (surfaceId === 'mcp-loader') {
+    resolvedArgs = appendLoaderAllowedSiteRoots(resolvedArgs, [
+      MCP_WORKSPACE_ROOT,
+      ...siteCatalogForOperations().map((registeredSite) => registeredSite.root),
+    ]);
+  }
   const resolvedEntrypoint = resolveEntrypoint(surface, site.site_id, siteRoot, projection);
   if (surfaceId === 'sop') appendSopsDirs(resolvedArgs);
   const serverKey = `${binding.prefix}-${surfaceId}`;
