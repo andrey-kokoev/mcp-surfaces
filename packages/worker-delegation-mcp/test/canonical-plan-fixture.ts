@@ -9,6 +9,7 @@ export function writeCanonicalPlanRegistry({
   model = 'fixture-model',
   purpose = 'local-agent-runtime',
   validUntil = '2099-01-01T00:00:00.000Z',
+  planOptions = { thinking: 'high' },
 }: {
   databasePath: string;
   planRef: string;
@@ -18,6 +19,7 @@ export function writeCanonicalPlanRegistry({
   model?: string;
   purpose?: string;
   validUntil?: string;
+  planOptions?: Record<string, unknown>;
 }): void {
   const database = new DatabaseSync(databasePath);
   try {
@@ -105,7 +107,7 @@ export function writeCanonicalPlanRegistry({
       },
       authority_provenance: { schema: 'narada.invokable-intelligence.authority-resolution-provenance.v1', decisions: [] },
       snapshot,
-      options: { thinking: 'high' },
+      options: planOptions,
       provenance: { applied_constraints: [], applied_preferences: [], applied_defaults: [], rejected_candidates: [] },
     };
     const resources = [

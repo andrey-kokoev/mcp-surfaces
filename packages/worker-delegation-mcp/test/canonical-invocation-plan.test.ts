@@ -8,7 +8,7 @@ import {
 } from '../src/canonical-invocation-plan.js';
 import { writeCanonicalPlanRegistry } from './canonical-plan-fixture.js';
 
-function fixture(options: { validUntil?: string } = {}) {
+function fixture(options: { validUntil?: string; planOptions?: Record<string, unknown> } = {}) {
   const root = mkdtempSync(join(testTempRoot(), 'worker-canonical-plan-'));
   mkdirSync(join(root, '.ai'), { recursive: true });
   const databasePath = join(root, '.ai', 'intelligence-registry.db');
@@ -40,6 +40,23 @@ test('canonical worker plan is dereferenced from durable authority with target a
     assert.equal(binding.intent_ref, 'intent:canonical-worker-test');
     assert.equal(binding.purpose, 'local-agent-runtime');
     assert.equal(binding.snapshot_digest, `sha256:${'1'.repeat(64)}`);
+    assert.deepEqual(binding.options, { thinking: 'high' });
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('canonical worker plan accepts an empty effective options map', () => {
+  const { root, databasePath } = fixture({ planOptions: {} });
+  try {
+    const binding = readCanonicalInvocationPlan({
+      databasePath,
+      planRef: 'plan:canonical-worker-test',
+      expectedPurpose: 'local-agent-runtime',
+      expectedTargetSite: 'site:worker-target',
+      now: new Date('2026-08-01T00:00:00.000Z'),
+    });
+    assert.deepEqual(binding.options, {});
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

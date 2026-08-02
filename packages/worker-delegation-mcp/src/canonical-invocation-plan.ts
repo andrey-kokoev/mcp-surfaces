@@ -199,7 +199,7 @@ export function readCanonicalInvocationPlan({
       endpoint_ref: endpointRef,
       adapter_ref: adapterRef,
       credential_ref: credentialRef,
-      options: requiredRecord(plan.options, 'options', planRef),
+      options: requiredObjectRecord(plan.options, 'options', planRef),
       snapshot_digest: snapshotDigest,
       valid_until: validUntil,
       governance_requirement_refs: governanceRequirementRefs,
@@ -252,6 +252,13 @@ function requiredRecord(value: unknown, field: string, planRef: string): JsonRec
   const record = asRecord(value);
   if (Object.keys(record).length === 0) throw invalidPlan(planRef, `${field} must be an object`);
   return record;
+}
+
+function requiredObjectRecord(value: unknown, field: string, planRef: string): JsonRecord {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    throw invalidPlan(planRef, `${field} must be an object`);
+  }
+  return value as JsonRecord;
 }
 
 function requiredReference(value: unknown, kind: string, field: string, planRef: string): string {
