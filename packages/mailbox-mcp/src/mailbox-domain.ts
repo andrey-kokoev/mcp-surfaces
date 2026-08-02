@@ -4,6 +4,7 @@ import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import {
   loadControlPlaneRuntime,
+  loadSiteGraphEnvironment,
   type ControlPlaneRuntime,
   type Fact,
   type FactStore,
@@ -46,6 +47,7 @@ export class MailboxDomainService {
   }
 
   async syncGeneration(args: JsonRecord): Promise<JsonRecord> {
+    await loadSiteGraphEnvironment(this.siteRoot);
     const kernel = await this.runtime();
     const idempotencyKey = requiredBoundedString(args.idempotency_key, 'mailbox_sync_idempotency_key_required', MAX_IDEMPOTENCY_KEY);
     const loaded = await this.loadScope(args, kernel);

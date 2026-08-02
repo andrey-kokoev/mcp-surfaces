@@ -179,6 +179,56 @@ export async function loadControlPlaneRuntime(siteRoot: string): Promise<Control
   return runtime;
 }
 
+const SITE_GRAPH_ENV_KEYS = [
+  'GRAPH_ACCESS_TOKEN',
+  'GRAPH_TENANT_ID',
+  'GRAPH_CLIENT_ID',
+  'GRAPH_CLIENT_SECRET',
+] as const;
+
+export async function loadSiteGraphEnvironment(siteRoot: string): Promise<void> {
+  const envPath = resolve(siteRoot, '.env');
+  let content: string;
+  try {
+    content = await readFile(envPath, 'utf8');
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return;
+    throw new Error(`mailbox_graph_credential_file_unreadable:${envPath}`, { cause: error });
+  }
+
+  const values = new Map<string, string>();
+  for (const rawLine of content.split(/\r?\n/)) {
+    const line = rawLine.trim();
+    if (line.length === 0 || line.startsWith('#')) continue;
+    const assignment = line.startsWith('export ') ? line.slice('export '.length).trim() : line;
+    const separator = assignment.indexOf('=');
+    if (separator <= 0) continue;
+    const key = assignment.slice(0, separator).trim();
+    if (!(SITE_GRAPH_ENV_KEYS as readonly string[]).includes(key)) continue;
+    if (values.has(key)) throw new Error(`mailbox_graph_credential_duplicate:${key}`);
+    let value = assignment.slice(separator + 1).trim();
+    if (
+      value.length >= 2
+      && ((value.startsWith('"') && value.endsWith('"'))
+        || (value.startsWith("'") && value.endsWith("'")))
+    ) {
+      value = value.slice(1, -1);
+    }
+    if (value.length === 0) throw new Error(`mailbox_graph_credential_empty:${key}`);
+    values.set(key, value);
+  }
+
+  if (values.size === 0) return;
+  if (!values.has('GRAPH_ACCESS_TOKEN')) {
+    for (const key of ['GRAPH_TENANT_ID', 'GRAPH_CLIENT_ID', 'GRAPH_CLIENT_SECRET'] as const) {
+      if (!values.has(key)) throw new Error(`mailbox_graph_credential_missing:${key}`);
+    }
+    // A complete Site-owned app binding must not be shadowed by an ambient token.
+    delete process.env.GRAPH_ACCESS_TOKEN;
+  }
+  for (const [key, value] of values) process.env[key] = value;
+}
+
 async function resolveControlPlaneEntrypoint(siteRoot: string): Promise<string> {
   let cursor = resolve(siteRoot);
   const root = parse(cursor).root;
