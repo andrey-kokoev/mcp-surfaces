@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { buildCreateScheduleArgs, buildScheduledTaskMutationScript, buildTaskRunCommand, compactScheduledTaskRows, createServerState, handleRequest, schedulerRuntimeStatus, scheduledActionPolicyReasons, schedulerFailureDetails, splitScheduledTaskPath } from '../src/main.js';
+import { buildCreateScheduleArgs, buildScheduledTaskLaunchPlan, buildScheduledTaskMutationScript, buildTaskRunCommand, compactScheduledTaskRows, createServerState, handleRequest, normalizeScheduledTaskDefinition, schedulerRuntimeStatus, scheduledActionPolicyReasons, schedulerFailureDetails, splitScheduledTaskPath } from '../src/main.js';
 
 const state = createServerState({});
 const runtimeStatus = schedulerRuntimeStatus();
@@ -11,9 +11,27 @@ assert.equal(state.implementationId, runtimeStatus.implementation_id);
 assert.match(buildScheduledTaskMutationScript(), /ExecutionTimeLimit/);
 assert.match(buildScheduledTaskMutationScript(), /MultipleInstances/);
 assert.match(buildScheduledTaskMutationScript(), /-TaskPath \$taskPath/);
+assert.match(buildScheduledTaskMutationScript(), /Get-ScheduledTask -TaskName \$taskName -TaskPath \$taskPath/);
+assert.match(buildScheduledTaskMutationScript(), /if \(\$wasDisabled\) \{ \$settingsArguments\.Disable = \$true \}/);
 assert.deepEqual(splitScheduledTaskPath('\\Narada\\SonarOperatingProgramDispatch'), {
   taskName: 'SonarOperatingProgramDispatch',
   taskPath: '\\Narada\\',
+});
+const noWindowPlan = buildScheduledTaskLaunchPlan(
+  'node.exe',
+  '"D:\\code\\narada.sonar\\scripts\\sonar-operating-program.ts" dispatch-once',
+);
+assert.equal(noWindowPlan.console_window_policy, 'native_create_no_window');
+assert.equal(noWindowPlan.launcher_argv[0], '--scheduled-v1');
+assert.deepEqual(normalizeScheduledTaskDefinition({
+  execute: noWindowPlan.launcher_path,
+  arguments: noWindowPlan.launcher_arguments,
+}), {
+  execute: 'node.exe',
+  arguments: '"D:\\code\\narada.sonar\\scripts\\sonar-operating-program.ts" dispatch-once',
+  console_window_policy: 'native_create_no_window',
+  launcher_execute: noWindowPlan.launcher_path,
+  launcher_arguments: noWindowPlan.launcher_arguments,
 });
 assert.deepEqual(splitScheduledTaskPath('\\Narada-Sonar-Daemon'), {
   taskName: 'Narada-Sonar-Daemon',
@@ -110,7 +128,12 @@ const dryRunUpdate = await callTool('scheduler_task_update_action', {
 const dryRunUpdateData = view(dryRunUpdate);
 assert.equal(dryRunUpdateData.status, 'planned');
 assert.equal(dryRunUpdateData.preserves_triggers, true);
-assert.equal(dryRunUpdateData.mutation_method, 'powershell_set_scheduled_task_action');
+assert.equal(dryRunUpdateData.preserves_enabled_state, true);
+assert.equal(dryRunUpdateData.enabled_state_preservation, 'scheduled_task_settings_disable_flag');
+assert.equal(dryRunUpdateData.mutation_method, 'powershell_set_scheduled_task_native_no_window_action');
+assert.equal(dryRunUpdateData.console_window_policy, 'native_create_no_window');
+assert.match(String(dryRunUpdateData.launcher_execute), /narada-process-supervisor\.exe$/i);
+assert.match(String(dryRunUpdateData.launcher_arguments), /^--scheduled-v1\s+[A-Za-z0-9_-]+$/);
 assert.equal(dryRunUpdateData.execute, 'pwsh.exe');
 assert.equal(dryRunUpdateData.arguments, '-NoProfile -File D:\\code\\narada.sonar\\scripts\\supervisor.ps1 start');
 assert.equal(dryRunUpdateData.schtasks_fallback, undefined);

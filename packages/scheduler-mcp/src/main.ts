@@ -8,6 +8,15 @@ import { existsSync, readFileSync, statSync } from 'node:fs';
 import { extname, relative, resolve, dirname } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import {
+  createScheduledCommandLaunchPlan,
+  createScheduledCommandPlaceholderPlan,
+  decodeScheduledCommandLaunchArguments,
+  scheduledCommandEntrypoint,
+  scheduledCommandSourceEntrypoint,
+  type ScheduledCommandLaunchPlan,
+  type ScheduledCommandPlaceholderPlan,
+} from '@narada-core/process-launch-posture';
+import {
   callSchedulerActivationTool,
   closeSchedulerActivationRuntime,
   isSchedulerActivationMutation,
@@ -65,6 +74,50 @@ function terminateProcessTree(child: ChildProcess) {
   child.kill('SIGTERM');
 }
 
+export function buildScheduledTaskLaunchPlan(
+  command: string,
+  cmdArgs?: string | null,
+  options: { require_available?: boolean } = {},
+): ScheduledCommandLaunchPlan {
+  let plan: ScheduledCommandLaunchPlan;
+  try {
+    plan = createScheduledCommandLaunchPlan(command, cmdArgs ?? '', {
+      platform: 'win32',
+      env: process.env,
+    });
+  } catch (error) {
+    throw diagnosticError('scheduler_no_window_launch_invalid', 'scheduler_no_window_launch_invalid', {
+      error: error instanceof Error ? error.message : String(error),
+    });
+  }
+  if (options.require_available === true) {
+    if (process.platform !== 'win32') {
+      throw diagnosticError('scheduler_windows_only', `scheduler_windows_only:${process.platform}`);
+    }
+    if (!existsSync(plan.launcher_path)) {
+      throw diagnosticError('scheduler_no_window_launcher_unavailable', 'scheduler_no_window_launcher_unavailable', {
+        launcher_path: plan.launcher_path,
+        remediation: 'Build @narada-core/process-launch-posture before mutating scheduled tasks.',
+      });
+    }
+  }
+  return plan;
+}
+
+function buildScheduledTaskPlaceholderPlan(): ScheduledCommandPlaceholderPlan {
+  const plan = createScheduledCommandPlaceholderPlan({ platform: 'win32', env: process.env });
+  if (process.platform !== 'win32') {
+    throw diagnosticError('scheduler_windows_only', `scheduler_windows_only:${process.platform}`);
+  }
+  if (!existsSync(plan.launcher_path)) {
+    throw diagnosticError('scheduler_no_window_launcher_unavailable', 'scheduler_no_window_launcher_unavailable', {
+      launcher_path: plan.launcher_path,
+      remediation: 'Build @narada-core/process-launch-posture before mutating scheduled tasks.',
+    });
+  }
+  return plan;
+}
+
 function actionTokens(value: string | null | undefined): string[] {
   if (!value) return [];
   return value.match(/"[^"]*"|'[^']*'|\S+/g)?.map((token) => token.replace(/^['"]|['"]$/g, '')) ?? [];
@@ -77,10 +130,15 @@ function isPathWithinRoot(root: string, candidate: string): boolean {
 
 const RUNTIME_ENTRYPOINT = fileURLToPath(import.meta.url);
 const SOURCE_ENTRYPOINT = resolve(dirname(RUNTIME_ENTRYPOINT), '../../src/main.ts');
+const SCHEDULED_COMMAND_LAUNCHER = scheduledCommandEntrypoint({ platform: 'win32' });
+const SCHEDULED_COMMAND_SOURCE = scheduledCommandSourceEntrypoint({ platform: 'win32' });
 const SCHEDULER_RUNTIME_COMPONENTS = [
   { name: 'main', runtime: RUNTIME_ENTRYPOINT, source: SOURCE_ENTRYPOINT },
   { name: 'activation_mcp', runtime: resolve(dirname(RUNTIME_ENTRYPOINT), 'activation-mcp.js'), source: resolve(dirname(SOURCE_ENTRYPOINT), 'activation-mcp.ts') },
   { name: 'activation_store', runtime: resolve(dirname(RUNTIME_ENTRYPOINT), 'activation-store.js'), source: resolve(dirname(SOURCE_ENTRYPOINT), 'activation-store.ts') },
+  ...(process.platform === 'win32' && SCHEDULED_COMMAND_LAUNCHER && SCHEDULED_COMMAND_SOURCE
+    ? [{ name: 'scheduled_command_launcher', runtime: SCHEDULED_COMMAND_LAUNCHER, source: SCHEDULED_COMMAND_SOURCE }]
+    : []),
 ] as const;
 const FRESHNESS_SKEW_MS = 1000;
 
@@ -298,12 +356,12 @@ export function listTools() {
     },
     {
       name: 'scheduler_task_create',
-      description: 'Create a new scheduled task.',
+      description: 'Create a new scheduled task whose target is always launched through the native no-console actuator.',
       inputSchema: {
         type: 'object',
         properties: {
           task_name: { type: 'string', description: 'Task path, e.g. \\Narada\\MyTask.' },
-          command: { type: 'string', description: 'Executable path or command.' },
+          command: { type: 'string', description: 'Target executable path or command. Scheduler stores it behind the native CREATE_NO_WINDOW actuator.' },
           arguments: { type: 'string', description: 'Command-line arguments.' },
           working_dir: { type: 'string', description: 'Start-in directory. When supplied, the MCP applies it through the Task Scheduler action WorkingDirectory property after creation.' },
           schedule: { type: 'string', enum: ['daily', 'hourly', 'at_startup', 'at_logon', 'once'], description: 'Trigger schedule type.' },
@@ -336,7 +394,7 @@ export function listTools() {
     },
     {
       name: 'scheduler_task_update_action',
-      description: 'Update only the action/command for an existing scheduled task, preserving its existing triggers and enabled state.',
+      description: 'Update only the target action for an existing scheduled task, preserving triggers and enabled state while enforcing native no-console execution.',
       inputSchema: {
         type: 'object',
         properties: {
@@ -409,7 +467,7 @@ export function listTools() {
           task_name: { type: 'string' },
           implementation_id: { type: 'string', description: 'Current implementation_id returned by scheduler_runtime_status.' },
         },
-        required: ['task_name'],
+        required: ['task_name', 'implementation_id'],
         additionalProperties: false,
       },
       annotations: { title: 'scheduler_task_run', readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
@@ -501,8 +559,11 @@ export function buildScheduledTaskMutationScript(): string {
     '$multipleInstances = [Environment]::GetEnvironmentVariable("NARADA_SCHEDULER_MULTIPLE_INSTANCES")',
     '$taskName = [Environment]::GetEnvironmentVariable("NARADA_SCHEDULER_TASK_NAME")',
     '$taskPath = [Environment]::GetEnvironmentVariable("NARADA_SCHEDULER_TASK_PATH")',
+    '$existingTask = Get-ScheduledTask -TaskName $taskName -TaskPath $taskPath',
+    '$wasDisabled = [string]$existingTask.State -eq "Disabled"',
     'if ([string]::IsNullOrWhiteSpace($workingDirectory)) { if ([string]::IsNullOrWhiteSpace($arguments)) { $action = New-ScheduledTaskAction -Execute $execute } else { $action = New-ScheduledTaskAction -Execute $execute -Argument $arguments } } else { if ([string]::IsNullOrWhiteSpace($arguments)) { $action = New-ScheduledTaskAction -Execute $execute -WorkingDirectory $workingDirectory } else { $action = New-ScheduledTaskAction -Execute $execute -Argument $arguments -WorkingDirectory $workingDirectory } }',
     '$settingsArguments = @{ Hidden = $true }',
+    'if ($wasDisabled) { $settingsArguments.Disable = $true }',
     'if (-not [string]::IsNullOrWhiteSpace($executionLimitSeconds)) { $settingsArguments.ExecutionTimeLimit = [TimeSpan]::FromSeconds([int]$executionLimitSeconds) }',
     'if (-not [string]::IsNullOrWhiteSpace($multipleInstances)) { $settingsArguments.MultipleInstances = $multipleInstances }',
     '$settings = New-ScheduledTaskSettingsSet @settingsArguments',
@@ -524,8 +585,7 @@ export function splitScheduledTaskPath(value: string): { taskName: string; taskP
 
 async function setScheduledTaskAction(
   taskName: string,
-  command: string,
-  cmdArgs?: string | null,
+  launchPlan: ScheduledCommandLaunchPlan,
   workingDir?: string | null,
   executionTimeLimitSeconds?: number | null,
   multipleInstances?: string | null,
@@ -548,8 +608,8 @@ async function setScheduledTaskAction(
         ...process.env,
         NARADA_SCHEDULER_TASK_NAME: task.taskName,
         NARADA_SCHEDULER_TASK_PATH: task.taskPath,
-        NARADA_SCHEDULER_EXECUTE: command,
-        NARADA_SCHEDULER_ARGUMENTS: cmdArgs ?? '',
+        NARADA_SCHEDULER_EXECUTE: launchPlan.launcher_path,
+        NARADA_SCHEDULER_ARGUMENTS: launchPlan.launcher_arguments,
         NARADA_SCHEDULER_WORKING_DIR: workingDir ?? '',
         NARADA_SCHEDULER_EXECUTION_LIMIT_SECONDS: executionTimeLimitSeconds === null || executionTimeLimitSeconds === undefined ? '' : String(executionTimeLimitSeconds),
         NARADA_SCHEDULER_MULTIPLE_INSTANCES: multipleInstances ?? '',
@@ -715,6 +775,15 @@ function quoteCmd(value: string): string {
   return `"${String(value).replace(/"/g, '\\"')}"`;
 }
 
+function sameWindowsExecutablePath(left: string, right: string): boolean {
+  const normalize = (value: string) => String(value)
+    .trim()
+    .replace(/^"|"$/g, '')
+    .replace(/\//g, '\\')
+    .toLowerCase();
+  return normalize(left) === normalize(right);
+}
+
 export function compactScheduledTaskRows(rows: JsonRecord[]): JsonRecord[] {
   const grouped = new Map<string, JsonRecord>();
   for (const row of rows) {
@@ -821,7 +890,40 @@ async function scheduledTaskDefinition(taskName: string): Promise<JsonRecord> {
   if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
     throw diagnosticError('scheduler_task_definition_invalid', `scheduler_task_definition_invalid:${taskName}`);
   }
-  return parsed as JsonRecord;
+  return normalizeScheduledTaskDefinition(parsed as JsonRecord);
+}
+
+export function normalizeScheduledTaskDefinition(definition: JsonRecord): JsonRecord {
+  const rawExecute = String(definition.execute ?? '');
+  const rawArguments = String(definition.arguments ?? '');
+  const expectedLauncher = scheduledCommandEntrypoint({ platform: 'win32', env: process.env });
+  if (!expectedLauncher || !sameWindowsExecutablePath(rawExecute, expectedLauncher)) {
+    return {
+      ...definition,
+      console_window_policy: 'unmanaged_direct_process',
+      launcher_execute: null,
+      launcher_arguments: null,
+    };
+  }
+  try {
+    const target = decodeScheduledCommandLaunchArguments(rawArguments);
+    return {
+      ...definition,
+      execute: target.target_command,
+      arguments: target.target_arguments,
+      console_window_policy: 'native_create_no_window',
+      launcher_execute: rawExecute,
+      launcher_arguments: rawArguments,
+    };
+  } catch (error) {
+    return {
+      ...definition,
+      console_window_policy: 'native_launcher_contract_invalid',
+      launcher_execute: rawExecute,
+      launcher_arguments: rawArguments,
+      launcher_contract_error: error instanceof Error ? error.message : String(error),
+    };
+  }
 }
 
 async function schedulerTaskCreate(args: JsonRecord, state: SchedulerState): Promise<JsonRecord> {
@@ -837,15 +939,17 @@ async function schedulerTaskCreate(args: JsonRecord, state: SchedulerState): Pro
     : integer(args.execution_time_limit_seconds, 0, 1, 86_400);
   const multipleInstances = schedulerMultipleInstances(args.multiple_instances);
   assertScheduledActionAllowed(command, cmdArgs, workingDir, state);
-  const taskRun = cmdArgs ? `${command} ${cmdArgs}` : command;
-  const schArgs = ['/create', '/tn', taskName, '/tr', taskRun, '/f'];
+  const launchPlan = buildScheduledTaskLaunchPlan(command, cmdArgs, { require_available: true });
+  const placeholderPlan = buildScheduledTaskPlaceholderPlan();
+  const taskRun = buildTaskRunCommand(launchPlan.target_command, launchPlan.target_arguments);
+  const placeholderTaskRun = buildTaskRunCommand(quoteCmd(placeholderPlan.launcher_path), placeholderPlan.launcher_arguments);
+  const schArgs = ['/create', '/tn', taskName, '/tr', placeholderTaskRun, '/f'];
   schArgs.push(...buildCreateScheduleArgs(schedule, args));
   const { stdout, stderr, exitCode, timedOut } = await schtasks(schArgs);
-  if (exitCode !== 0) throw diagnosticError('scheduler_create_failed', `scheduler_create_failed:${exitCode}`, schedulerFailureDetails({ operation: 'create', exitCode, stdout, stderr, taskName, command: taskRun, timedOut }));
+  if (exitCode !== 0) throw diagnosticError('scheduler_create_failed', `scheduler_create_failed:${exitCode}`, schedulerFailureDetails({ operation: 'create', exitCode, stdout, stderr, taskName, command: placeholderTaskRun, timedOut }));
   const actionResult = await setScheduledTaskAction(
     taskName,
-    command,
-    cmdArgs,
+    launchPlan,
     workingDir,
     executionTimeLimitSeconds,
     multipleInstances,
@@ -854,7 +958,7 @@ async function schedulerTaskCreate(args: JsonRecord, state: SchedulerState): Pro
     throw diagnosticError('scheduler_create_action_failed', `scheduler_create_action_failed:${actionResult.exitCode}`, {
       ...schedulerFailureDetails({ operation: 'create_action', exitCode: actionResult.exitCode, stdout: actionResult.stdout, stderr: actionResult.stderr, taskName, command: taskRun, timedOut: actionResult.timedOut }),
       task_created: true,
-      mutation_method: 'powershell_set_scheduled_task_action_and_hidden_settings',
+      mutation_method: 'powershell_set_scheduled_task_native_no_window_action_and_hidden_settings',
     });
   }
   return {
@@ -862,13 +966,17 @@ async function schedulerTaskCreate(args: JsonRecord, state: SchedulerState): Pro
     task_name: taskName,
     schedule,
     command: taskRun,
+    execute: launchPlan.target_command,
+    arguments: launchPlan.target_arguments,
+    launcher_execute: launchPlan.launcher_path,
+    launcher_arguments: launchPlan.launcher_arguments,
     working_dir: workingDir,
     working_dir_applied: Boolean(workingDir),
     task_hidden: true,
     execution_time_limit_seconds: executionTimeLimitSeconds,
     multiple_instances: multipleInstances,
-    console_window_policy: 'direct_executable_no_shell_wrapper',
-    mutation_method: 'schtasks_create_then_powershell_set_scheduled_task_action_and_hidden_settings',
+    console_window_policy: launchPlan.console_window_policy,
+    mutation_method: 'schtasks_create_then_powershell_set_scheduled_task_native_no_window_action_and_hidden_settings',
   };
 }
 
@@ -917,8 +1025,10 @@ async function schedulerTaskUpdateAction(args: JsonRecord, state: SchedulerState
     : integer(args.execution_time_limit_seconds, 0, 1, 86_400);
   const multipleInstances = schedulerMultipleInstances(args.multiple_instances);
   assertScheduledActionAllowed(command, cmdArgs, workingDir, state);
-  const taskRun = buildTaskRunCommand(command, cmdArgs);
-  const schArgs = ['/change', '/tn', taskName, '/tr', taskRun];
+  const launchPlan = buildScheduledTaskLaunchPlan(command, cmdArgs, { require_available: args.dry_run !== true });
+  const taskRun = buildTaskRunCommand(launchPlan.target_command, launchPlan.target_arguments);
+  const launcherTaskRun = buildTaskRunCommand(quoteCmd(launchPlan.launcher_path), launchPlan.launcher_arguments);
+  const schArgs = ['/change', '/tn', taskName, '/tr', launcherTaskRun];
   if (args.dry_run === true) {
     return {
       status: 'planned',
@@ -926,10 +1036,15 @@ async function schedulerTaskUpdateAction(args: JsonRecord, state: SchedulerState
       command: taskRun,
       execute: command,
       arguments: cmdArgs ?? '',
-      mutation_method: 'powershell_set_scheduled_task_action',
+      mutation_method: 'powershell_set_scheduled_task_native_no_window_action',
+      console_window_policy: launchPlan.console_window_policy,
+      launcher_execute: launchPlan.launcher_path,
+      launcher_arguments: launchPlan.launcher_arguments,
       schtasks_preview_args: schArgs,
       schtasks_preview_not_used_for_mutation: true,
       preserves_triggers: true,
+      preserves_enabled_state: true,
+      enabled_state_preservation: 'scheduled_task_settings_disable_flag',
       working_dir: workingDir,
       working_dir_applied: false,
       working_dir_would_apply: Boolean(workingDir),
@@ -939,8 +1054,7 @@ async function schedulerTaskUpdateAction(args: JsonRecord, state: SchedulerState
   }
   const powershellResult = await setScheduledTaskAction(
     taskName,
-    command,
-    cmdArgs,
+    launchPlan,
     workingDir,
     executionTimeLimitSeconds,
     multipleInstances,
@@ -959,7 +1073,7 @@ async function schedulerTaskUpdateAction(args: JsonRecord, state: SchedulerState
           command: taskRun,
           timedOut: powershellResult.timedOut,
         }),
-        mutation_method: 'powershell_set_scheduled_task_action',
+        mutation_method: 'powershell_set_scheduled_task_native_no_window_action',
         schtasks_preview_args: schArgs,
         schtasks_preview_not_used_for_mutation: true,
       },
@@ -970,7 +1084,14 @@ async function schedulerTaskUpdateAction(args: JsonRecord, state: SchedulerState
     task_name: taskName,
     command: taskRun,
     preserves_triggers: true,
-    mutation_method: 'powershell_set_scheduled_task_action',
+    preserves_enabled_state: true,
+    enabled_state_preservation: 'scheduled_task_settings_disable_flag',
+    mutation_method: 'powershell_set_scheduled_task_native_no_window_action',
+    execute: launchPlan.target_command,
+    arguments: launchPlan.target_arguments,
+    launcher_execute: launchPlan.launcher_path,
+    launcher_arguments: launchPlan.launcher_arguments,
+    console_window_policy: launchPlan.console_window_policy,
     working_dir: workingDir,
     working_dir_applied: Boolean(workingDir),
     execution_time_limit_seconds: executionTimeLimitSeconds,

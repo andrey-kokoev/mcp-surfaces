@@ -101,6 +101,30 @@ test('completion events are replay-safe, completion-relative, and pause-safe', (
   }
 });
 
+test('retiring a binding stops future activations without cancelling an admitted occurrence', () => {
+  const f = fixture();
+  try {
+    const binding = installSyncBinding(f.store);
+    const firstEvent = completionEvent('event-before-retirement', f.now().toISOString());
+    const admitted = f.store.admitEvent(firstEvent);
+    assert.equal(admitted.activation_count, 1);
+
+    f.store.setBindingStatus(binding.binding_id, 'retired', binding.revision);
+    const afterRetirement = f.store.admitEvent(
+      completionEvent('event-after-retirement', f.now().toISOString()),
+    );
+    assert.equal(afterRetirement.activation_count, 0);
+
+    f.advance(1_000);
+    const claim = f.store.claimDue('dispatcher');
+    assert.ok(claim);
+    assert.equal(claim.source_event_id, firstEvent.event_id);
+    assert.equal(f.store.claimDue('dispatcher'), undefined);
+  } finally {
+    f.close();
+  }
+});
+
 test('singleton concurrency remains held through SOP terminal receipt', () => {
   const f = fixture();
   try {

@@ -726,7 +726,7 @@ export class SchedulerActivationStore {
           join scheduler_bindings binding on binding.binding_id = activation.binding_id
          where activation.status = 'pending'
            and activation.due_at <= ?
-           and binding.status = 'active'
+           and binding.status in ('active', 'retired')
            and not exists (
              select 1 from scheduler_activations active
               where active.binding_id = activation.binding_id

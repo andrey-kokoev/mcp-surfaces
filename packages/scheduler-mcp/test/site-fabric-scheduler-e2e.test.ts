@@ -49,7 +49,6 @@ type CleanupEvidence = {
   fixture_process_started: boolean;
   fixture_process_exited: boolean;
   scheduler_mcp_exited: boolean;
-  fixture_launcher_removed: boolean;
   temporary_root_removed: boolean;
   failures: string[];
 };
@@ -62,7 +61,6 @@ const recorder = installE2eArtifactRecorder(ARTIFACT_PATH, {
 
 let scheduler: SpawnedJsonlMcpServer | null = null;
 let temporaryRoot: string | null = null;
-let fixtureLauncherPath: string | null = null;
 let taskName = ['', `NaradaMcpSurfacesE2e-${process.pid}-${Date.now()}`].join('\\');
 let taskCreated = false;
 let taskMayExist = false;
@@ -70,7 +68,7 @@ let taskDeleted = false;
 let taskAbsentAfterDelete = false;
 let fixtureProcessExited = false;
 let schedulerMcpExited = false;
-let fixtureLauncherRemoved = true;
+let schedulerImplementationId = '';
 let fixture: FixtureEvidence | null = null;
 let history: JsonRecord | null = null;
 let action: JsonRecord | null = null;
@@ -103,12 +101,7 @@ async function main(): Promise<void> {
     const fixtureScriptPath = join(temporaryRoot, 'scheduler-fixture.cjs');
     const token = `${TEST_ID}:${Date.now()}`;
     writeFileSync(fixtureScriptPath, fixtureScript(), 'utf8');
-    fixtureLauncherPath = join(temporaryRoot, 'scheduler-fixture-launcher.ps1');
-    writeFileSync(fixtureLauncherPath, fixtureLauncher(fixtureScriptPath, markerPath, token), 'utf8');
-    const launcherCommand = process.env.SystemRoot
-      ? join(process.env.SystemRoot, 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe')
-      : 'powershell.exe';
-    const launcherArguments = `-NoProfile -NonInteractive -WindowStyle Hidden -ExecutionPolicy Bypass -File ${quoteWindows(fixtureLauncherPath)}`;
+    const targetArguments = [fixtureScriptPath, markerPath, token].map(quoteWindows).join(' ');
 
     scheduler = spawnJsonlMcpServer(process.execPath, [serverPath], {
       cwd: temporaryRoot,
@@ -124,20 +117,26 @@ async function main(): Promise<void> {
         'scheduler_task_create',
         'scheduler_task_show',
         'scheduler_task_update_action',
+        'scheduler_task_disable',
+        'scheduler_task_enable',
         'scheduler_task_run',
         'scheduler_task_history',
         'scheduler_task_delete',
       ],
     });
+    const runtime = await callRequired('scheduler_runtime_status', {});
+    schedulerImplementationId = String(runtime.implementation_id ?? '');
+    assert.ok(schedulerImplementationId, JSON.stringify(runtime));
 
     const create = await call('scheduler_task_create', {
       task_name: taskName,
-      command: quoteWindows(launcherCommand),
-      arguments: launcherArguments,
+      command: process.execPath,
+      arguments: targetArguments,
       working_dir: temporaryRoot,
       schedule: 'once',
       start_time: futureStartTime(),
       description: 'Disposable bounded Scheduler MCP PC-host lifecycle proof.',
+      implementation_id: schedulerImplementationId,
     });
     taskMayExist = true;
     if (create.error) {
@@ -155,34 +154,63 @@ async function main(): Promise<void> {
     assert.equal(created.working_dir_applied, true, JSON.stringify(created));
     taskCreated = true;
     action = {
-      command: launcherCommand,
-      arguments: launcherArguments,
+      command: process.execPath,
+      arguments: targetArguments,
       working_dir: temporaryRoot,
+      launcher_execute: created.launcher_execute,
+      launcher_arguments: created.launcher_arguments,
+      console_window_policy: created.console_window_policy,
     };
 
     const shown = await callRequired('scheduler_task_show', { task_name: taskName });
     const shownTask = asRecord(shown.task);
     assert.equal(shownTask.TaskName, taskName, JSON.stringify(shown));
     const taskToRun = String(shownTask['Task To Run'] ?? '');
-    assert.match(taskToRun, /scheduler-fixture-launcher\.ps1/i, JSON.stringify(shown));
-    assert.match(taskToRun, /powershell(?:\.exe)?/i, JSON.stringify(shown));
-    assert.match(taskToRun, /-WindowStyle\s+Hidden/i, JSON.stringify(shown));
-    assert.doesNotMatch(taskToRun, /cmd(?:\.exe)?|\.cmd(?:\s|$)/i, JSON.stringify(shown));
+    assert.match(taskToRun, /narada-process-supervisor\.exe/i, JSON.stringify(shown));
+    assert.match(taskToRun, /--scheduled-v1\s+[A-Za-z0-9_-]+/i, JSON.stringify(shown));
+    assert.doesNotMatch(taskToRun, /powershell|pwsh|cmd(?:\.exe)?|\.cmd(?:\s|$)/i, JSON.stringify(shown));
     assert.equal(resolve(String(shownTask['Start In'] ?? shownTask['Start In Directory'] ?? '')), resolve(temporaryRoot), JSON.stringify(shown));
+    const shownDefinition = asRecord(shown.task_definition);
+    assert.equal(resolve(String(shownDefinition.execute ?? '')), resolve(process.execPath), JSON.stringify(shown));
+    assert.equal(shownDefinition.arguments, targetArguments, JSON.stringify(shown));
+    assert.equal(shownDefinition.console_window_policy, 'native_create_no_window', JSON.stringify(shown));
+    assert.match(String(shownDefinition.launcher_execute ?? ''), /narada-process-supervisor\.exe$/i, JSON.stringify(shown));
+
+    const disabled = await callRequired('scheduler_task_disable', {
+      task_name: taskName,
+      implementation_id: schedulerImplementationId,
+    });
+    assert.equal(disabled.status, 'disabled', JSON.stringify(disabled));
+    const disabledShown = await callRequired('scheduler_task_show', { task_name: taskName });
+    assert.equal(asRecord(disabledShown.task_definition).state, 'Disabled', JSON.stringify(disabledShown));
 
     const updated = await callRequired('scheduler_task_update_action', {
       task_name: taskName,
-      command: quoteWindows(launcherCommand),
-      arguments: launcherArguments,
+      command: process.execPath,
+      arguments: targetArguments,
       working_dir: temporaryRoot,
+      implementation_id: schedulerImplementationId,
     });
     assert.equal(updated.status, 'updated', JSON.stringify(updated));
     assert.equal(updated.working_dir_applied, true, JSON.stringify(updated));
+    assert.equal(updated.preserves_enabled_state, true, JSON.stringify(updated));
     const updatedShown = await callRequired('scheduler_task_show', { task_name: taskName });
     const updatedTask = asRecord(updatedShown.task);
     assert.equal(resolve(String(updatedTask['Start In'] ?? updatedTask['Start In Directory'] ?? '')), resolve(temporaryRoot), JSON.stringify(updatedShown));
+    assert.equal(updatedTask['Scheduled Task State'], 'Disabled', JSON.stringify(updatedShown));
+    assert.equal(asRecord(updatedShown.task_definition).state, 'Disabled', JSON.stringify(updatedShown));
+    if (action) action.disabled_state_preserved = true;
 
-    const run = await callRequired('scheduler_task_run', { task_name: taskName });
+    const enabled = await callRequired('scheduler_task_enable', {
+      task_name: taskName,
+      implementation_id: schedulerImplementationId,
+    });
+    assert.equal(enabled.status, 'enabled', JSON.stringify(enabled));
+
+    const run = await callRequired('scheduler_task_run', {
+      task_name: taskName,
+      implementation_id: schedulerImplementationId,
+    });
     assert.equal(run.status, 'started', JSON.stringify(run));
 
     fixture = await waitFor(() => {
@@ -234,16 +262,6 @@ async function main(): Promise<void> {
         cleanupFailures.push(`temporary_root_remove:${error instanceof Error ? error.message : String(error)}`);
       }
     }
-    if (fixtureLauncherPath) {
-      try {
-        await rm(fixtureLauncherPath, { force: true, maxRetries: 3, retryDelay: 100 });
-        fixtureLauncherRemoved = !existsSync(fixtureLauncherPath);
-        if (!fixtureLauncherRemoved) cleanupFailures.push('fixture_launcher_still_exists');
-      } catch (error) {
-        fixtureLauncherRemoved = false;
-        cleanupFailures.push(`fixture_launcher_remove:${error instanceof Error ? error.message : String(error)}`);
-      }
-    }
     const noResourcesRequired = status === 'not_run'
       && scheduler === null
       && temporaryRoot === null
@@ -256,7 +274,6 @@ async function main(): Promise<void> {
           && (!taskCreated || taskAbsentAfterDelete)
           && (!fixture || fixtureProcessExited)
           && schedulerMcpExited
-          && fixtureLauncherRemoved
           && temporaryRootRemoved
           ? 'passed'
           : preserveRoot && cleanupFailures.length === 0
@@ -267,7 +284,6 @@ async function main(): Promise<void> {
       fixture_process_started: fixture !== null,
       fixture_process_exited: fixtureProcessExited,
       scheduler_mcp_exited: schedulerMcpExited,
-      fixture_launcher_removed: fixtureLauncherRemoved,
       temporary_root_removed: temporaryRootRemoved,
       failures: cleanupFailures,
     };
@@ -299,19 +315,10 @@ async function main(): Promise<void> {
         fixture_process_started: fixture !== null,
         fixture_process_exited: fixtureProcessExited,
         scheduler_mcp_exited: schedulerMcpExited,
-        fixture_launcher_removed: fixtureLauncherRemoved,
       },
     }));
     process.exitCode = exitCode;
   }
-}
-
-function fixtureLauncher(scriptPath: string, markerPath: string, token: string): string {
-  const powershellLiteral = (value: string) => `'${value.replaceAll("'", "''")}'`;
-  return [
-    `$process = Start-Process -FilePath ${powershellLiteral(process.execPath)} -ArgumentList @(${powershellLiteral(quoteWindows(scriptPath))}, ${powershellLiteral(quoteWindows(markerPath))}, ${powershellLiteral(quoteWindows(token))}) -WindowStyle Hidden -Wait -PassThru`,
-    'exit $process.ExitCode',
-  ].join('\r\n') + '\r\n';
 }
 
 async function call(name: string, args: JsonRecord): Promise<JsonRecord> {
@@ -331,7 +338,10 @@ async function callRequired(name: string, args: JsonRecord): Promise<JsonRecord>
 async function cleanupTask(): Promise<void> {
   if (!taskMayExist || !scheduler) return;
   try {
-    const deleted = await call('scheduler_task_delete', { task_name: taskName });
+    const deleted = await call('scheduler_task_delete', {
+      task_name: taskName,
+      implementation_id: schedulerImplementationId,
+    });
     if (deleted.error) {
       const message = JSON.stringify(deleted.error);
       if (!/not_found|cannot find|does not exist/i.test(message)) {

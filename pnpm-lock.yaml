@@ -426,6 +426,9 @@ importers:
       '@narada-core/mcp-runtime-client':
         specifier: workspace:*
         version: link:../shared/mcp-runtime-client
+      '@narada-core/process-launch-posture':
+        specifier: workspace:*
+        version: link:../../../narada/packages/process-launch-posture
     devDependencies:
       '@narada-core/mcp-e2e-harness':
         specifier: workspace:*

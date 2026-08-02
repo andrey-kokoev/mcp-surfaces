@@ -36,7 +36,8 @@
   },
   "dependencies": {
     "@narada-core/mcp-fabric-contracts": "workspace:*",
-    "@narada-core/mcp-runtime-client": "workspace:*"
+    "@narada-core/mcp-runtime-client": "workspace:*",
+    "@narada-core/process-launch-posture": "workspace:*"
   },
   "devDependencies": {
     "@narada-core/mcp-e2e-harness": "workspace:*"
