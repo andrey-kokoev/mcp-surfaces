@@ -1,7 +1,18 @@
 import { defineNativeSurface, type DefinedSurface, type McpToolDefinition } from '@narada-core/mcp-fabric-contracts';
 import { listTools } from './main.js';
 
-const READ_ONLY_TOOLS = ["graph_mail_guidance","graph_mail_doctor","graph_mail_auth_status","graph_mail_query","graph_mail_message_show","graph_mail_output_show","graph_mail_folder_list","graph_mail_attachment_list","graph_mail_attachment_get"] as const;
+const READ_ONLY_TOOLS = [
+  'graph_mail_guidance',
+  'graph_mail_doctor',
+  'graph_mail_auth_status',
+  'graph_mail_query',
+  'graph_mail_message_show',
+  'graph_mail_output_show',
+  'graph_mail_folder_list',
+  'graph_mail_attachment_list',
+  'graph_mail_attachment_get',
+  'graph_mail_ticket_draft_disposition_list',
+] as const;
 
 export function surfaceDefinition(): DefinedSurface {
   return defineNativeSurface({

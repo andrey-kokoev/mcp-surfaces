@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { runMcpProtocolSmoke, spawnJsonlMcpServer } from '@narada-core/mcp-e2e-harness';
+import { surfaceDefinition } from '../src/surface-definition.js';
 
 type ToolSummary = { name: string; annotations: { readOnlyHint: boolean; destructiveHint: boolean }; inputSchema: { properties: Record<string, { default?: unknown; minimum?: number }>; required?: string[] } };
 const root = mkdtempSync(join(tmpdir(), 'graph-mail-mcp-protocol-'));
@@ -72,6 +73,11 @@ try {
   assert.equal(toolRows.find((tool) => tool.name === 'graph_mail_attachment_upload_session_create')?.inputSchema.properties.size.minimum, 1);
   assert.equal((toolRows.find((tool) => tool.name === 'graph_mail_attachment_upload_chunk') as any)?.inputSchema?.required?.join(','), 'upload_url,content_base64,range_start,range_end,total_size');
   assert.equal((toolRows.find((tool) => tool.name === 'graph_mail_attachment_upload_file') as any)?.inputSchema?.required?.join(','), 'file_path');
+
+  const descriptorTools = new Map(surfaceDefinition().descriptor.tools.map((tool) => [tool.name, tool]));
+  assert.equal(descriptorTools.get('graph_mail_ticket_draft_disposition_list')?.effect.class, 'read');
+  assert.equal(descriptorTools.get('graph_mail_ticket_draft_disposition_scan')?.effect.class, 'external_write');
+  assert.equal(descriptorTools.get('graph_mail_ticket_draft_disposition_ack')?.effect.class, 'external_write');
 
   console.log('graph-mail-mcp protocol smoke ok');
 } finally {

@@ -308,6 +308,9 @@ try {
   assert.ok((bySurface.get('git')?.tools as string[]).includes('git_unstage'));
   assert.ok((bySurface.get('graph-mail')?.tools as string[]).includes('graph_mail_attachment_upload_file'));
   assert.ok((bySurface.get('graph-mail')?.tools as string[]).includes('graph_mail_reply_all_to_last_in_thread_draft_create'));
+  assert.ok((bySurface.get('graph-mail')?.tools as string[]).includes('graph_mail_ticket_draft_disposition_scan'));
+  assert.ok((bySurface.get('graph-mail')?.tools as string[]).includes('graph_mail_ticket_draft_disposition_list'));
+  assert.ok((bySurface.get('graph-mail')?.tools as string[]).includes('graph_mail_ticket_draft_disposition_ack'));
   assert.ok((bySurface.get('task-lifecycle')?.tools as string[]).includes('task_lifecycle_submit_work'));
   assert.ok((bySurface.get('task-lifecycle')?.tools as string[]).includes('task_lifecycle_evidence_supersede'));
   assert.ok((bySurface.get('task-lifecycle')?.tools as string[]).includes('task_lifecycle_tags_update'));
@@ -1313,6 +1316,9 @@ try {
   assert.ok(graphMailRegistry);
   assert.ok((graphMailRegistry.registered_live_tools as string[]).includes('graph_mail_output_show'));
   assert.ok((graphMailRegistry.tool_contract.read_only_tools as string[]).includes('graph_mail_output_show'));
+  assert.ok((graphMailRegistry.tool_contract.read_only_tools as string[]).includes('graph_mail_ticket_draft_disposition_list'));
+  assert.equal((graphMailRegistry.tool_contract.mutating_tools as string[]).includes('graph_mail_ticket_draft_disposition_scan'), true);
+  assert.equal((graphMailRegistry.tool_contract.mutating_tools as string[]).includes('graph_mail_ticket_draft_disposition_ack'), true);
   assert.equal((graphMailRegistry.tool_contract.refused_tools as string[]).includes('graph_mail_draft_send'), false);
   assert.equal((graphMailRegistry.tool_contract.mutating_tools as string[]).includes('graph_mail_draft_send'), true);
 
