@@ -14,6 +14,8 @@ const client = await SiteFabricClient.open({
   allowedSurfaceIds: ['alpha', 'beta'],
   requestTimeoutMs: 1_000,
   closeTimeoutMs: 250,
+  maxMaterializedResultChars: 30_000,
+  materializedResultPageChars: 4_000,
 });
 
 try {
@@ -31,7 +33,23 @@ try {
   assert.equal(concurrent.every((result) => result.attach_count === 2), true);
 
   await assert.rejects(() => client.call('gamma', 'echo'), /site_fabric_surface_not_allowed:gamma/);
-  await assert.rejects(() => client.call('alpha', 'materialized'), /mcp_runtime_result_materialized:alpha:materialized/);
+  const outerMaterialized = await client.call('alpha', 'outer-materialized');
+  assert.deepEqual(outerMaterialized, { schema: 'fake.materialized.v1', kind: 'outer' });
+
+  const nestedMaterialized = await client.call('alpha', 'nested-materialized');
+  assert.equal(nestedMaterialized.schema, 'fake.materialized.v1');
+  assert.equal(nestedMaterialized.kind, 'nested-materialized');
+  assert.equal(String(nestedMaterialized.payload).length, 24_000);
+
+  const doubleMaterialized = await client.call('alpha', 'materialized');
+  assert.equal(doubleMaterialized.schema, 'fake.materialized.v1');
+  assert.equal(doubleMaterialized.kind, 'double');
+  assert.equal(String(doubleMaterialized.payload).length, 24_000);
+
+  await assert.rejects(
+    () => client.call('alpha', 'too-large'),
+    /mcp_runtime_materialized_result_too_large:alpha:too-large/,
+  );
   await assert.rejects(() => client.call('alpha', 'fail'), /mcp_tool_error:alpha:fail/);
   await assert.rejects(() => client.call('alpha', 'hang', {}, { timeoutMs: 50 }), /mcp_request_timeout:tools\/call:50ms/);
 } finally {

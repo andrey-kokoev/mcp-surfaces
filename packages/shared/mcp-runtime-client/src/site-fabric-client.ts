@@ -10,6 +10,8 @@ export interface SiteFabricClientOptions {
   requestTimeoutMs?: number;
   closeTimeoutMs?: number;
   maxConnections?: number;
+  maxMaterializedResultChars?: number;
+  materializedResultPageChars?: number;
   env?: NodeJS.ProcessEnv;
 }
 
@@ -24,6 +26,12 @@ interface AttachedSurface {
   runtimeKind: string | null;
 }
 
+const DEFAULT_MAX_MATERIALIZED_RESULT_CHARS = 1_000_000;
+const DEFAULT_MATERIALIZED_RESULT_PAGE_CHARS = 20_000;
+const MAX_MATERIALIZED_RESULT_PAGE_CHARS = 20_000;
+const MAX_MATERIALIZED_RESULT_PAGES = 256;
+const MAX_MATERIALIZED_RESULT_DEPTH = 4;
+
 export class SiteFabricClient {
   readonly siteRoot: string;
   readonly allowedSurfaceIds: ReadonlySet<string> | null;
@@ -32,6 +40,8 @@ export class SiteFabricClient {
   #connections = new Map<string, AttachedSurface>();
   #attachments = new Map<string, Promise<AttachedSurface>>();
   #detachTimeoutMs: number;
+  #maxMaterializedResultChars: number;
+  #materializedResultPageChars: number;
   #closed = false;
 
   private constructor(
@@ -39,11 +49,15 @@ export class SiteFabricClient {
     siteRoot: string,
     allowedSurfaceIds: ReadonlySet<string> | null,
     detachTimeoutMs: number,
+    maxMaterializedResultChars: number,
+    materializedResultPageChars: number,
   ) {
     this.#client = client;
     this.siteRoot = siteRoot;
     this.allowedSurfaceIds = allowedSurfaceIds;
     this.#detachTimeoutMs = detachTimeoutMs;
+    this.#maxMaterializedResultChars = maxMaterializedResultChars;
+    this.#materializedResultPageChars = materializedResultPageChars;
   }
 
   static async open(options: SiteFabricClientOptions): Promise<SiteFabricClient> {
@@ -51,6 +65,17 @@ export class SiteFabricClient {
     const allowedSurfaceIds = normalizeSurfaceIds(options.allowedSurfaceIds);
     const maxConnections = positiveInteger(options.maxConnections, Math.max(8, allowedSurfaceIds?.size ?? 0), 'maxConnections');
     const detachTimeoutMs = positiveInteger(options.closeTimeoutMs, 5_000, 'closeTimeoutMs');
+    const maxMaterializedResultChars = positiveInteger(
+      options.maxMaterializedResultChars,
+      DEFAULT_MAX_MATERIALIZED_RESULT_CHARS,
+      'maxMaterializedResultChars',
+    );
+    const materializedResultPageChars = positiveIntegerAtMost(
+      options.materializedResultPageChars,
+      DEFAULT_MATERIALIZED_RESULT_PAGE_CHARS,
+      MAX_MATERIALIZED_RESULT_PAGE_CHARS,
+      'materializedResultPageChars',
+    );
     const args = [
       options.loaderEntrypoint ?? defaultMcpLoaderEntrypoint(),
       '--allowed-site-root', siteRoot,
@@ -66,7 +91,14 @@ export class SiteFabricClient {
       closeTimeoutMs: options.closeTimeoutMs,
       clientName: 'narada-site-fabric-runtime-client',
     });
-    return new SiteFabricClient(client, siteRoot, allowedSurfaceIds, detachTimeoutMs);
+    return new SiteFabricClient(
+      client,
+      siteRoot,
+      allowedSurfaceIds,
+      detachTimeoutMs,
+      maxMaterializedResultChars,
+      materializedResultPageChars,
+    );
   }
 
   async attach(surfaceId: string, runtimeKind?: string): Promise<AttachedSurface> {
@@ -108,16 +140,104 @@ export class SiteFabricClient {
   ): Promise<JsonRecord> {
     const connection = await this.attach(surfaceId, options.runtimeKind);
     const timeoutMs = options.timeoutMs ?? this.#client.requestTimeoutMs;
+    const deadlineAt = Date.now() + timeoutMs;
     const outer = unwrapOuterToolResult(await this.#client.callTool('mcp_loader_call_tool', {
       connection_id: connection.connectionId,
       tool_name: requiredString(toolName, 'toolName'),
       arguments: args,
     }, timeoutMs));
-    if (outer.result_bounded === true || typeof outer.details_ref === 'string') {
-      throw new Error(`mcp_runtime_result_materialized:${surfaceId}:${toolName}`);
+    const context = `${surfaceId}:${toolName}`;
+    const childResult = outer.result_bounded === true || typeof outer.details_ref === 'string'
+      ? await this.#readMaterializedRecord(
+        connection,
+        requiredString(outer.details_ref, 'mcp_loader_materialized_result_ref_missing'),
+        deadlineAt,
+        `mcp-loader:${context}`,
+      )
+      : asRecordStrict(outer.result, 'mcp_loader_child_result_missing');
+    return await this.#unwrapChildResult(childResult, connection, deadlineAt, context);
+  }
+
+  async #unwrapChildResult(
+    childResult: JsonRecord,
+    connection: AttachedSurface,
+    deadlineAt: number,
+    context: string,
+  ): Promise<JsonRecord> {
+    let value = unwrapChildToolResult(childResult, context);
+    for (let depth = 0; isMaterializedOutputPage(value); depth += 1) {
+      if (depth >= MAX_MATERIALIZED_RESULT_DEPTH) {
+        throw new Error(`mcp_runtime_materialized_result_depth_exceeded:${context}`);
+      }
+      value = await this.#readMaterializedRecord(
+        connection,
+        requiredString(value.output_ref ?? value.ref, 'mcp_runtime_materialized_output_ref_missing'),
+        deadlineAt,
+        context,
+      );
     }
-    const childResult = asRecordStrict(outer.result, 'mcp_loader_child_result_missing');
-    return unwrapChildToolResult(childResult, `${surfaceId}:${toolName}`);
+    return value;
+  }
+
+  async #readMaterializedRecord(
+    connection: AttachedSurface,
+    ref: string,
+    deadlineAt: number,
+    context: string,
+  ): Promise<JsonRecord> {
+    const chunks: string[] = [];
+    let offset = 0;
+    let declaredLength: number | null = null;
+    for (let pageNumber = 0; pageNumber < MAX_MATERIALIZED_RESULT_PAGES; pageNumber += 1) {
+      const remainingMs = deadlineAt - Date.now();
+      if (remainingMs <= 0) throw new Error(`mcp_runtime_materialized_result_timeout:${context}`);
+      const response = unwrapOuterToolResult(await this.#client.callTool('mcp_loader_read_result', {
+        connection_id: connection.connectionId,
+        ref,
+        offset,
+        limit: this.#materializedResultPageChars,
+      }, remainingMs));
+      const page = asRecordStrict(response.result, 'mcp_loader_materialized_result_page_missing');
+      if (page.schema !== 'narada.mcp_output_page.v1') {
+        throw new Error(`mcp_runtime_materialized_result_page_schema_invalid:${context}`);
+      }
+      const pageRef = requiredString(page.ref ?? page.output_ref, 'mcp_runtime_materialized_result_page_ref_missing');
+      if (pageRef !== ref) throw new Error(`mcp_runtime_materialized_result_ref_mismatch:${context}`);
+      const pageOffset = nonNegativeInteger(page.offset, 'mcp_runtime_materialized_result_page_offset_invalid');
+      if (pageOffset !== offset) throw new Error(`mcp_runtime_materialized_result_page_offset_mismatch:${context}`);
+      const fullLength = nonNegativeInteger(
+        page.full_output_char_length,
+        'mcp_runtime_materialized_result_length_invalid',
+      );
+      if (declaredLength === null) declaredLength = fullLength;
+      if (declaredLength !== fullLength) {
+        throw new Error(`mcp_runtime_materialized_result_length_changed:${context}`);
+      }
+      if (fullLength > this.#maxMaterializedResultChars) {
+        throw new Error(
+          `mcp_runtime_materialized_result_too_large:${context}:${fullLength}>${this.#maxMaterializedResultChars}`,
+        );
+      }
+      if (typeof page.output_text !== 'string') {
+        throw new Error(`mcp_runtime_materialized_result_page_text_missing:${context}`);
+      }
+      chunks.push(page.output_text);
+      const consumed = offset + page.output_text.length;
+      if (consumed > fullLength) throw new Error(`mcp_runtime_materialized_result_length_exceeded:${context}`);
+      if (page.next_offset === null || page.next_offset === undefined) {
+        if (consumed !== fullLength) throw new Error(`mcp_runtime_materialized_result_incomplete:${context}`);
+        return parseJsonRecord(chunks.join(''), `mcp_runtime_materialized_result_not_object:${context}`);
+      }
+      const nextOffset = nonNegativeInteger(
+        page.next_offset,
+        'mcp_runtime_materialized_result_next_offset_invalid',
+      );
+      if (nextOffset !== consumed || nextOffset <= offset) {
+        throw new Error(`mcp_runtime_materialized_result_page_progress_invalid:${context}`);
+      }
+      offset = nextOffset;
+    }
+    throw new Error(`mcp_runtime_materialized_result_page_limit_exceeded:${context}`);
   }
 
   async close(): Promise<void> {
@@ -216,6 +336,30 @@ function positiveInteger(value: number | undefined, fallback: number, name: stri
   const resolved = value ?? fallback;
   if (!Number.isSafeInteger(resolved) || resolved <= 0) throw new Error(`${name}_must_be_positive_integer`);
   return resolved;
+}
+
+function positiveIntegerAtMost(value: number | undefined, fallback: number, maximum: number, name: string): number {
+  const resolved = positiveInteger(value, fallback, name);
+  if (resolved > maximum) throw new Error(`${name}_must_be_at_most_${maximum}`);
+  return resolved;
+}
+
+function nonNegativeInteger(value: unknown, code: string): number {
+  if (!Number.isSafeInteger(value) || (value as number) < 0) throw new Error(code);
+  return value as number;
+}
+
+function isMaterializedOutputPage(value: JsonRecord): boolean {
+  return value.schema === 'narada.producer_output_page.v1' && value.result_materialized === true;
+}
+
+function parseJsonRecord(serialized: string, code: string): JsonRecord {
+  try {
+    return asRecordStrict(JSON.parse(serialized), code);
+  } catch (error) {
+    if (error instanceof SyntaxError) throw new Error(`${code}:invalid_json`);
+    throw error;
+  }
 }
 
 function separator(): string {

@@ -5,6 +5,8 @@ type JsonRecord = Record<string, unknown>;
 
 let attachCount = 0;
 let responseCount = 0;
+let outputCount = 0;
+const materializedOutputs = new Map<string, JsonRecord>();
 
 const lines = createInterface({ input: process.stdin, crlfDelay: Infinity });
 for await (const line of lines) {
@@ -37,6 +39,37 @@ for await (const line of lines) {
     respond(request.id, toolResult({ schema: 'narada.mcp_loader.detached.v1', status: 'detached' }));
     continue;
   }
+  if (name === 'mcp_loader_read_result') {
+    const ref = String(args.ref ?? args.output_ref ?? '');
+    const value = materializedOutputs.get(ref);
+    if (!value) {
+      respond(request.id, toolResult({ schema: 'fake.output.error.v1', status: 'error' }, true));
+      continue;
+    }
+    const fullText = JSON.stringify(value, null, 2);
+    const offset = integer(args.offset, 0);
+    const limit = integer(args.limit, 20_000);
+    const outputText = fullText.slice(offset, offset + limit);
+    const nextOffset = offset + outputText.length < fullText.length ? offset + outputText.length : null;
+    const connectionId = String(args.connection_id ?? '');
+    respond(request.id, toolResult({
+      schema: 'narada.mcp_loader.result_page.v1',
+      connection_id: connectionId,
+      surface_id: connectionId.replace(/^connection-/, ''),
+      result: {
+        schema: 'narada.mcp_output_page.v1',
+        status: 'ok',
+        ref,
+        offset,
+        limit,
+        next_offset: nextOffset,
+        output_text: outputText,
+        output_truncated: nextOffset !== null,
+        full_output_char_length: fullText.length,
+      },
+    }));
+    continue;
+  }
   if (name !== 'mcp_loader_call_tool') {
     respond(request.id, toolResult({ schema: 'fake.unknown.v1' }, true));
     continue;
@@ -44,11 +77,41 @@ for await (const line of lines) {
   const childTool = String(args.tool_name ?? '');
   if (childTool === 'hang') continue;
   if (childTool === 'materialized') {
+    const domainRef = materialize({
+      schema: 'fake.materialized.v1',
+      kind: 'double',
+      payload: 'm'.repeat(24_000),
+    });
+    const childResult = toolResult(outputPage(domainRef));
+    const loaderRef = materialize(childResult);
     respond(request.id, toolResult({
       schema: 'narada.mcp_loader.tool_result.v1',
       result_bounded: true,
-      details_ref: 'mcp_output:fake',
-      result: { schema: 'narada.producer_output_page.v1' },
+      details_ref: loaderRef,
+      result: outputPage(loaderRef, 'mcp_loader_read_result'),
+    }));
+    continue;
+  }
+  if (childTool === 'outer-materialized') {
+    const loaderRef = materialize(toolResult({ schema: 'fake.materialized.v1', kind: 'outer' }));
+    respond(request.id, toolResult({
+      schema: 'narada.mcp_loader.tool_result.v1',
+      result_bounded: true,
+      details_ref: loaderRef,
+      result: outputPage(loaderRef, 'mcp_loader_read_result'),
+    }));
+    continue;
+  }
+  if (childTool === 'nested-materialized' || childTool === 'too-large') {
+    const domainRef = materialize({
+      schema: 'fake.materialized.v1',
+      kind: childTool,
+      payload: childTool === 'too-large' ? 'x'.repeat(40_000) : 'n'.repeat(24_000),
+    });
+    respond(request.id, toolResult({
+      schema: 'narada.mcp_loader.tool_result.v1',
+      result_bounded: false,
+      result: toolResult(outputPage(domainRef)),
     }));
     continue;
   }
@@ -60,6 +123,28 @@ for await (const line of lines) {
     result_bounded: false,
     result: childResult,
   }));
+}
+
+function materialize(value: JsonRecord): string {
+  const ref = `mcp_output:fake-${++outputCount}`;
+  materializedOutputs.set(ref, value);
+  return ref;
+}
+
+function outputPage(ref: string, readerTool = 'fake_output_show'): JsonRecord {
+  return {
+    schema: 'narada.producer_output_page.v1',
+    status: 'ok',
+    truncated: true,
+    output_ref: ref,
+    ref,
+    result_materialized: true,
+    reader_tool: readerTool,
+  };
+}
+
+function integer(value: unknown, fallback: number): number {
+  return Number.isSafeInteger(value) && (value as number) >= 0 ? value as number : fallback;
 }
 
 function toolResult(structuredContent: JsonRecord, isError = false): JsonRecord {
