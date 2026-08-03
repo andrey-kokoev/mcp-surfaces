@@ -528,6 +528,19 @@ export function putSopTerminalOutbox(
   return requireOutboxEvent(db, eventId);
 }
 
+export function reopenSopTerminalOutboxForRetry(db: DatabaseSync, runId: string): { event_id: string | null; reopened: boolean } {
+  const boundedRunId = boundedString(runId, 'sop_outbox_run_id_required', 512);
+  const existing = db.prepare('SELECT event_id, compacted_at FROM sop_outbox WHERE run_id = ?').get(boundedRunId) as JsonRecord | undefined;
+  if (!existing) return { event_id: null, reopened: false };
+  const eventId = boundedString(existing.event_id, 'sop_outbox_event_id_invalid', 512);
+  const receipt = db.prepare('SELECT 1 FROM sop_outbox_receipts WHERE event_id = ? LIMIT 1').get(eventId) as JsonRecord | undefined;
+  if (receipt || existing.compacted_at !== null) {
+    throw durabilityError('sop_outbox_retry_requires_new_run', { event_id: eventId, run_id: boundedRunId, consumed: Boolean(receipt), compacted: existing.compacted_at !== null });
+  }
+  db.prepare('DELETE FROM sop_outbox WHERE event_id = ? AND run_id = ?').run(eventId, boundedRunId);
+  return { event_id: eventId, reopened: true };
+}
+
 export function registerSopOutboxConsumer(
   db: DatabaseSync,
   input: { topic?: string; consumer_id: string; start_at?: string | null },

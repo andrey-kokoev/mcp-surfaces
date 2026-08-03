@@ -47,6 +47,7 @@ import {
   prepareSopDurabilitySchema,
   publicSopHandoff,
   putSopTerminalOutbox,
+  reopenSopTerminalOutboxForRetry,
   registerSopOutboxConsumer,
   releaseSopHandoff,
   renewSopHandoff,
@@ -328,6 +329,157 @@ export function createServerState(options: JsonRecord = {}): SopState {
   };
   reconcileActiveRuns(state);
   return state;
+}
+
+function sopHandoffRetry(args: JsonRecord, state: SopState): JsonRecord {
+  return inTransaction(state, () => {
+    const handoffId = requiredString(args.handoff_id, 'sop_handoff_id_required');
+    const principal = boundedString(args.principal, 'sop_handoff_retry_principal_required', 512);
+    const reason = boundedString(args.reason, 'sop_handoff_retry_reason_required', 4096);
+    const handoff = getSopHandoff(state.db, handoffId);
+    if (handoff.status === 'pending' || handoff.status === 'leased') {
+      return {
+        ...runResult(getRunById(handoff.run_id, state)),
+        handoff: publicSopHandoff(handoff),
+        retry_replayed: true,
+      };
+    }
+    if (handoff.status !== 'failed') {
+      throw diagnosticError('sop_handoff_retry_requires_failed', `sop_handoff_retry_requires_failed:${handoffId}`, { status: handoff.status });
+    }
+    if (handoff.executor !== 'agent') {
+      throw diagnosticError('sop_handoff_retry_agent_only', `sop_handoff_retry_agent_only:${handoffId}`, { executor: handoff.executor });
+    }
+    const run = getRunById(handoff.run_id, state);
+    if (run.step_states_parse_error) throw diagnosticError('sop_run_corrupt', `sop_run_corrupt:${run.run_id}`, { reason: run.step_states_parse_error });
+    const step = run.step_states.find((candidate) => candidate.step_id === handoff.step_id);
+    if (!step || step.executor !== 'agent' || step.status !== 'failed' || !step.completion_fingerprint) {
+      throw diagnosticError('sop_handoff_retry_state_conflict', `sop_handoff_retry_state_conflict:${handoffId}`, {
+        run_id: run.run_id,
+        step_id: handoff.step_id,
+        run_status: run.status,
+        step_status: step?.status ?? null,
+      });
+    }
+    if (step.completion_fingerprint !== handoff.completion_fingerprint) {
+      throw diagnosticError('sop_handoff_retry_completion_conflict', `sop_handoff_retry_completion_conflict:${handoffId}`, { run_id: run.run_id, step_id: handoff.step_id });
+    }
+    let reopenedOutbox: { event_id: string | null; reopened: boolean };
+    try {
+      reopenedOutbox = reopenSopTerminalOutboxForRetry(state.db, run.run_id);
+    } catch (error) {
+      const diagnostic = errorDiagnostic(error);
+      if (diagnostic.code !== 'sop_outbox_retry_requires_new_run') throw error;
+      return retryFailedHandoffAsNewRun(state, { handoff, run, principal, reason, diagnostic });
+    }
+    const now = nowIso();
+    const resetStepIds = resetRetryableDependentSteps(run, step.step_id);
+    const retryMarker = `worker_retryable:reopened:${reason}`.slice(0, 4096);
+    state.db.prepare(`
+      UPDATE sop_handoffs
+         SET status = 'pending', lease_owner = NULL, lease_token = NULL, lease_expires_at = NULL,
+             completion_key = NULL, completion_fingerprint = NULL, principal = NULL,
+             result_json = '{}', result_ref_json = NULL, error_message = NULL,
+             last_error = ?, updated_at = ?, completed_at = NULL
+       WHERE handoff_id = ? AND status = 'failed'
+    `).run(retryMarker, now, handoffId);
+    step.status = 'running';
+    step.started_at = now;
+    step.completed_at = null;
+    step.result = { handoff_id: handoff.handoff_id, handoff_occurrence_key: handoff.occurrence_key };
+    step.result_ref = null;
+    step.completion_key = null;
+    step.completion_fingerprint = null;
+    step.error_message = null;
+    run.status = 'awaiting_confirmation';
+    run.output = {};
+    run.output_ref = null;
+    run.completed_at = null;
+    persistRunState(run, state);
+    appendRunEvent(state, run.run_id, step.step_id, 'handoff_reopened', {
+      handoff_id: handoff.handoff_id,
+      principal,
+      reason,
+      retry_marker: retryMarker,
+      reset_step_ids: resetStepIds,
+      reopened_outbox_event_id: reopenedOutbox.event_id,
+    });
+    reconcileRunAndAncestors(run.run_id, state);
+    return {
+      ...runResult(getRunById(run.run_id, state)),
+      handoff: publicSopHandoff(getSopHandoff(state.db, handoffId)),
+      retry_replayed: false,
+    };
+  });
+}
+
+function retryFailedHandoffAsNewRun(
+  state: SopState,
+  input: { handoff: ReturnType<typeof getSopHandoff>; run: SopRun; principal: string; reason: string; diagnostic: ReturnType<typeof errorDiagnostic> },
+): JsonRecord {
+  const occurrenceKey = deterministicId('sop_retry_', input.handoff.handoff_id);
+  const admitted = admitRun({
+    sop_id: input.run.sop_id,
+    sop_version: input.run.sop_version,
+    occurrence_key: occurrenceKey,
+    input: input.run.input,
+    input_ref: input.run.input_ref,
+    trigger_source_kind: 'manual',
+    trigger_source_ref: `sop_handoff_retry:${input.handoff.handoff_id}`,
+    triggered_by: 'sop-handoff-retry',
+  }, state, { parent_run_id: null, parent_step_id: null });
+  reconcileRunAndAncestors(admitted.run.run_id, state);
+  const retryRun = getRunById(admitted.run.run_id, state);
+  const retryHandoffRow = state.db.prepare('SELECT handoff_id FROM sop_handoffs WHERE run_id = ? AND step_id = ?').get(retryRun.run_id, input.handoff.step_id) as JsonRecord | undefined;
+  const retryHandoff = retryHandoffRow ? getSopHandoff(state.db, String(retryHandoffRow.handoff_id)) : null;
+  if (admitted.admission === 'created') {
+    appendRunEvent(state, input.run.run_id, input.handoff.step_id, 'handoff_retry_spawned', {
+      handoff_id: input.handoff.handoff_id,
+      principal: input.principal,
+      reason: input.reason,
+      retry_run_id: retryRun.run_id,
+      retry_handoff_id: retryHandoff?.handoff_id ?? null,
+      retry_occurrence_key: occurrenceKey,
+      original_outbox_event_id: input.diagnostic.details.event_id ?? null,
+      original_outbox_preserved: true,
+    });
+  }
+  return {
+    ...runResult(retryRun, admitted.admission),
+    handoff: retryHandoff ? publicSopHandoff(retryHandoff) : null,
+    retry_replayed: admitted.admission === 'replayed',
+    retry_mode: 'new_run',
+    retry_of_run_id: input.run.run_id,
+    retry_of_handoff_id: input.handoff.handoff_id,
+    retry_reason: input.reason,
+    original_outbox_preserved: true,
+  };
+}
+
+function resetRetryableDependentSteps(run: SopRun, rootStepId: string): string[] {
+  const reset = new Set([rootStepId]);
+  let changed = true;
+  while (changed) {
+    changed = false;
+    for (const candidate of run.step_states) {
+      if (reset.has(candidate.step_id) || candidate.status !== 'failed' || !candidate.error_message?.startsWith('failed_dependency:')) continue;
+      if (!candidate.depends_on.some((dependency) => reset.has(dependency))) continue;
+      candidate.status = 'pending';
+      candidate.started_at = null;
+      candidate.completed_at = null;
+      candidate.result = {};
+      candidate.result_ref = null;
+      candidate.completion_key = null;
+      candidate.completion_fingerprint = null;
+      candidate.error_message = null;
+      candidate.child_run_id = null;
+      candidate.action_id = null;
+      candidate.pinned_child_definition_fingerprint = null;
+      reset.add(candidate.step_id);
+      changed = true;
+    }
+  }
+  return [...reset].filter((stepId) => stepId !== rootStepId);
 }
 
 function assertRunStepDefinitionsMatch(runId: string, definition: JsonRecord, stepStates: SopStepState[]): void {
@@ -1011,6 +1163,22 @@ export function listTools() {
       outputSchema: { type: 'object', additionalProperties: true },
     },
     {
+      name: 'sop_handoff_retry',
+      description: 'Reopen one failed agent handoff and its terminal SOP occurrence for a governed retry. Completed handoffs cannot be reopened.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          handoff_id: { type: 'string' },
+          principal: { type: 'string', description: 'Identity authorizing the retry.' },
+          reason: { type: 'string', description: 'Bounded reason the failed handoff is safe to retry.' },
+        },
+        required: ['handoff_id', 'principal', 'reason'],
+        additionalProperties: false,
+      },
+      annotations: { title: 'sop_handoff_retry', readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+      outputSchema: { type: 'object', additionalProperties: true },
+    },
+    {
       name: 'sop_action_list',
       description: 'List bounded summaries of durable domain-action handoffs. Use sop_action_show for exact persisted target arguments.',
       inputSchema: {
@@ -1214,6 +1382,7 @@ async function callTool(params: JsonRecord, state: SopState) {
     case 'sop_handoff_claim': result = sopHandoffClaim(args, state); break;
     case 'sop_handoff_renew': result = sopHandoffRenew(args, state); break;
     case 'sop_handoff_release': result = sopHandoffRelease(args, state); break;
+    case 'sop_handoff_retry': result = sopHandoffRetry(args, state); break;
     case 'sop_action_list': result = sopActionList(args, state); break;
     case 'sop_action_show': result = sopActionShow(args, state); break;
     case 'sop_action_resolve': result = sopActionResolve(args, state); break;

@@ -44,7 +44,7 @@ export function buildGuidanceResult(args: GuidanceRecord = {}): GuidanceRecord {
         'An exact admission retry returns the same run; reusing the key for a different request is refused as sop_occurrence_conflict.',
         'Use sop_run_status for the complete occurrence and sop_run_events for its evidence ledger.',
         'Claim agent/operator work with sop_handoff_claim, renew long work with sop_handoff_renew, and complete it with sop_run_advance using the lease token, principal, outcome, and a stable completion_key.',
-        'Use sop_handoff_release when a consumer stops before producing a result; expired leases are automatically reclaimable.',
+        'Use sop_handoff_release when a consumer stops before producing a result; expired leases are automatically reclaimable. Use sop_handoff_retry only to reopen a failed agent handoff after a governed runtime repair.',
         'Use sop_run_refresh only for explicit repair/readback; it is not required for normal child continuation.'
       ],
       governed_action_handoff: [
@@ -64,7 +64,7 @@ export function buildGuidanceResult(args: GuidanceRecord = {}): GuidanceRecord {
     tool_inventory: {
       templates: ['sop_template_create', 'sop_template_show', 'sop_template_export', 'sop_template_list', 'sop_template_search', 'sop_template_candidate_list', 'sop_template_candidate_show', 'sop_template_update', 'sop_template_deprecate', 'sop_template_unimport', 'sop_template_import_yaml'],
       runs: ['sop_run_start', 'sop_run_status', 'sop_run_refresh', 'sop_run_advance', 'sop_run_list', 'sop_run_coverage_since', 'sop_run_cancel', 'sop_run_events'],
-      handoffs: ['sop_handoff_list', 'sop_handoff_show', 'sop_handoff_claim', 'sop_handoff_renew', 'sop_handoff_release'],
+      handoffs: ['sop_handoff_list', 'sop_handoff_show', 'sop_handoff_claim', 'sop_handoff_renew', 'sop_handoff_release', 'sop_handoff_retry'],
       actions: ['sop_action_list', 'sop_action_show', 'sop_action_resolve'],
       outbox: ['sop_outbox_consumer_register', 'sop_outbox_list', 'sop_outbox_ack', 'sop_outbox_compact']
     },

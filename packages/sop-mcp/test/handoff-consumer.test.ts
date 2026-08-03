@@ -46,11 +46,14 @@ class HandoffFabric implements SopHandoffFabricCaller {
   claimable = true;
   leaseCounter = 0;
   throwAfterAdvanceCommit = false;
+  activeWorkerRuns: JsonRecord[] = [];
+  reapedWorkerRuns: string[] = [];
   worker: JsonRecord = {
     schema: 'narada.worker.run.v1',
     status: 'running',
     run_id: 'worker-run-1',
     idempotency_replayed: false,
+    idempotency_key: 'sop_handoff_agent_1',
   };
 
   constructor(executor: 'agent' | 'operator') {
@@ -80,8 +83,23 @@ class HandoffFabric implements SopHandoffFabricCaller {
         status: 'leased',
         lease_owner: args.consumer_id,
         lease_token: `lease-${this.leaseCounter}`,
+        attempt_count: Number(this.record.attempt_count ?? 0) + 1,
       };
       return { schema: 'narada.sop.handoff_claim.v1', status: 'claimed', handoff: { ...this.record } };
+    }
+    if (tool === 'worker_runs_list') {
+      return {
+        schema: 'narada.worker.runs_list.v1',
+        status: 'ok',
+        count: this.activeWorkerRuns.length,
+        runs: this.activeWorkerRuns,
+      };
+    }
+    if (tool === 'worker_run_reap') {
+      const runId = String(args.run_id);
+      this.reapedWorkerRuns.push(runId);
+      this.activeWorkerRuns = this.activeWorkerRuns.filter((run) => run.run_id !== runId);
+      return { schema: 'narada.worker.run_reap.v1', status: 'reaped', run_id: runId, reaped: true };
     }
     if (tool === 'worker_run') return { ...this.worker };
     if (tool === 'sop_handoff_release') {
@@ -126,14 +144,15 @@ test('agent handoff survives a consumer boundary and reuses one idempotent worke
   assert.equal(firstWorkerCall.args.idempotency_key, 'sop_handoff_agent_1');
   assert.equal((firstWorkerCall.args.constraints as JsonRecord).authority, 'read');
   assert.equal((firstWorkerCall.args.constraints as JsonRecord).invocation_plan_ref, 'invocation-plan:test');
+  assert.equal((firstWorkerCall.args.constraints as JsonRecord).wait_for_completion, true);
   assert.equal(((firstWorkerCall.args.intent as JsonRecord).output_contract as JsonRecord).structured_output_key, 'sop_handoff_result');
-
-  fabric.expireLease();
+  assert.match(String(fabric.record.last_error), /^worker_in_flight:/);
   fabric.worker = {
     schema: 'narada.worker.run.v1',
     status: 'completed',
     run_id: 'worker-run-1',
     idempotency_replayed: true,
+    idempotency_key: 'sop_handoff_agent_1',
     structured_outputs: { sop_handoff_result: { decision: 'draft' } },
   };
   const second = await runSopAgentHandoffConsumerPass(agentOptions, fabric);
@@ -142,11 +161,50 @@ test('agent handoff survives a consumer boundary and reuses one idempotent worke
   assert.equal(second.worker_runs_replayed, 1);
   const workerCalls = fabric.calls.filter((call) => call.tool === 'worker_run');
   assert.equal(workerCalls.length, 2);
-  assert.deepEqual(workerCalls[0]!.args, workerCalls[1]!.args);
+  assert.equal(workerCalls[0]!.args.idempotency_key, workerCalls[1]!.args.idempotency_key);
   const advance = fabric.calls.find((call) => call.tool === 'sop_run_advance')!;
   assert.equal(advance.args.completion_key, 'worker:worker-run-1');
   assert.equal(advance.args.lease_token, 'lease-2');
   assert.deepEqual(advance.args.result, { decision: 'draft' });
+});
+
+test('agent pass defers before claiming while another worker run is live', async () => {
+  const fabric = new HandoffFabric('agent');
+  fabric.activeWorkerRuns = [{
+    run_id: 'run-live',
+    status: 'running',
+    status_liveness: { state: 'active', stale_for_ms: 0, stale_after_ms: 60_000 },
+  }];
+  const report = await runSopAgentHandoffConsumerPass(agentOptions, fabric);
+  assert.equal(report.status, 'completed');
+  assert.equal(report.handoffs_claimed, 0);
+  assert.equal(report.handoffs_deferred, 1);
+  assert.equal(report.worker_runs_blocked, 1);
+  assert.equal(fabric.calls.some((call) => call.tool === 'sop_handoff_claim'), false);
+  assert.equal(fabric.calls.some((call) => call.tool === 'worker_run'), false);
+});
+
+test('agent pass reaps a sufficiently stale run before claiming work', async () => {
+  const fabric = new HandoffFabric('agent');
+  fabric.activeWorkerRuns = [{
+    run_id: 'run-stale',
+    status: 'running',
+    status_liveness: { state: 'stale', stale_for_ms: 120_000, stale_after_ms: 60_000 },
+  }];
+  fabric.worker = {
+    schema: 'narada.worker.run.v1',
+    status: 'completed',
+    run_id: 'worker-run-recovered',
+    idempotency_replayed: false,
+    idempotency_key: 'sop_handoff_agent_1',
+    structured_outputs: { sop_handoff_result: { decision: 'recovered' } },
+  };
+  const report = await runSopAgentHandoffConsumerPass(agentOptions, fabric);
+  assert.equal(report.status, 'completed');
+  assert.equal(report.worker_runs_reaped, 1);
+  assert.deepEqual(fabric.reapedWorkerRuns, ['run-stale']);
+  assert.equal(report.handoffs_claimed, 1);
+  assert.equal(report.handoffs_completed, 1);
 });
 
 test('terminal worker output that violates the handoff contract fails the SOP step instead of spinning', async () => {
@@ -156,6 +214,7 @@ test('terminal worker output that violates the handoff contract fails the SOP st
     status: 'completed',
     run_id: 'worker-run-invalid',
     idempotency_replayed: false,
+    idempotency_key: 'sop_handoff_agent_1',
     structured_outputs: { sop_handoff_result: { wrong: true } },
   };
   const report = await runSopAgentHandoffConsumerPass(agentOptions, fabric);
@@ -167,6 +226,24 @@ test('terminal worker output that violates the handoff contract fails the SOP st
   assert.equal((advance.args.result as JsonRecord).failure_kind, 'result_contract_invalid');
 });
 
+test('worker runtime failure releases the handoff for a fresh idempotent attempt', async () => {
+  const fabric = new HandoffFabric('agent');
+  fabric.worker = {
+    schema: 'narada.worker.run.v1',
+    status: 'failed',
+    run_id: 'worker-run-failed',
+    idempotency_replayed: false,
+    idempotency_key: 'sop_handoff_agent_1',
+    error: 'worker runtime exited with code 1',
+  };
+  const report = await runSopAgentHandoffConsumerPass(agentOptions, fabric);
+  assert.equal(report.status, 'completed');
+  assert.equal(report.handoffs_deferred, 1);
+  assert.equal(fabric.calls.some((call) => call.tool === 'sop_run_advance'), false);
+  const release = fabric.calls.find((call) => call.tool === 'sop_handoff_release')!;
+  assert.match(String(release.args.error_message), /^worker_retryable:/);
+});
+
 test('loss after SOP completion does not launch or complete the agent handoff twice', async () => {
   const fabric = new HandoffFabric('agent');
   fabric.worker = {
@@ -174,6 +251,7 @@ test('loss after SOP completion does not launch or complete the agent handoff tw
     status: 'completed',
     run_id: 'worker-run-commit-gap',
     idempotency_replayed: true,
+    idempotency_key: 'sop_handoff_agent_1',
     structured_outputs: { sop_handoff_result: { decision: 'resolved' } },
   };
   fabric.throwAfterAdvanceCommit = true;

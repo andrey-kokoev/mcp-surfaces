@@ -35,6 +35,7 @@ try {
     'sop_handoff_claim',
     'sop_handoff_renew',
     'sop_handoff_release',
+    'sop_handoff_retry',
     'sop_action_list',
     'sop_action_show',
     'sop_action_resolve',

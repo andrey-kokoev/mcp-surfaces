@@ -11,6 +11,7 @@ import {
 
 const AGENT_RESULT_KEY = 'sop_handoff_result';
 const WORKER_TERMINAL_STATUSES = new Set(['completed', 'completed_with_errors', 'failed', 'cancelled']);
+const WORKER_IN_FLIGHT_PREFIX = 'worker_in_flight:';
 
 export interface SopHandoffFabricCaller {
   call(
@@ -19,6 +20,23 @@ export interface SopHandoffFabricCaller {
     args?: JsonRecord,
     options?: SiteFabricToolCallOptions,
   ): Promise<JsonRecord>;
+}
+
+function retryableWorkerError(error: unknown): string {
+  const detail = boundedError(error);
+  const value = `worker_retryable:${detail}`;
+  return value.length <= 4_096 ? value : value.slice(0, 4_096);
+}
+
+function workerIdempotencyKey(handoff: ClaimedHandoff): string {
+  if (handoff.last_error?.startsWith(WORKER_IN_FLIGHT_PREFIX)) {
+    const inFlightKey = handoff.last_error.slice(WORKER_IN_FLIGHT_PREFIX.length).trim();
+    if (inFlightKey) return inFlightKey;
+  }
+  if (handoff.last_error?.startsWith('worker_retryable:') && handoff.attempt_count > 1) {
+    return `${handoff.occurrence_key}:attempt:${handoff.attempt_count}`;
+  }
+  return handoff.occurrence_key;
 }
 
 export interface SopAgentHandoffConsumerOptions {
@@ -45,6 +63,8 @@ export interface SopAgentHandoffConsumerReport extends JsonRecord {
   handoffs_deferred: number;
   worker_runs_started: number;
   worker_runs_replayed: number;
+  worker_runs_blocked: number;
+  worker_runs_reaped: number;
   errors: JsonRecord[];
 }
 
@@ -69,11 +89,25 @@ export async function runSopAgentHandoffConsumerPass(
     handoffs_deferred: 0,
     worker_runs_started: 0,
     worker_runs_replayed: 0,
+    worker_runs_blocked: 0,
+    worker_runs_reaped: 0,
     errors: [],
   };
 
   try {
     for (let index = 0; index < options.maxHandoffs; index += 1) {
+      try {
+        const workerAdmission = await reconcileWorkerConcurrency(fabric, options);
+        report.worker_runs_reaped += workerAdmission.reaped;
+        if (workerAdmission.blocked) {
+          report.worker_runs_blocked += 1;
+          report.handoffs_deferred += 1;
+          break;
+        }
+      } catch (error) {
+        report.errors.push(errorRecord('worker_admission', error));
+        break;
+      }
       const claimed = await fabric.call(options.sopSurfaceId, 'sop_handoff_claim', {
         consumer_id: options.consumerId,
         executor: 'agent',
@@ -88,7 +122,12 @@ export async function runSopAgentHandoffConsumerPass(
           options.workerSurfaceId,
           'worker_run',
           buildAgentWorkerRequest(handoff, options),
-          { timeoutMs: options.requestTimeoutMs },
+          {
+            timeoutMs: Math.min(
+              300_000,
+              Math.max(options.requestTimeoutMs, Math.min(180_000, options.maxRunMs) + 5_000),
+            ),
+          },
         );
         const workerRun = parseWorkerRun(worker);
         if (workerRun.idempotency_replayed) report.worker_runs_replayed += 1;
@@ -96,10 +135,18 @@ export async function runSopAgentHandoffConsumerPass(
 
         if (workerRun.status === 'running') {
           // The finite consumer intentionally exits without owning a resident cursor.
-          // The SOP lease expires, and the same worker operation is rediscovered by
-          // occurrence key on a later pass.
+          // Release the SOP lease while preserving the exact worker operation key;
+          // a later pass can replay that operation without launching a duplicate.
+          await releaseHandoff(
+            fabric,
+            options.sopSurfaceId,
+            handoff,
+            options.consumerId,
+            `${WORKER_IN_FLIGHT_PREFIX}${workerRun.idempotency_key ?? workerIdempotencyKey(handoff)}`,
+          );
+          settled = true;
           report.handoffs_deferred += 1;
-          continue;
+          break;
         }
 
         if (workerRun.status === 'completed' || workerRun.status === 'completed_with_errors') {
@@ -137,25 +184,21 @@ export async function runSopAgentHandoffConsumerPass(
           continue;
         }
 
-        await advanceHandoff(fabric, options.sopSurfaceId, handoff, {
-          consumerId: options.consumerId,
-          completionKey: `worker:${workerRun.run_id}`,
-          principal: options.principal,
-          outcome: 'failed',
-          result: {
-            schema: 'narada.sop.agent_handoff_failure.v1',
-            worker_run_id: workerRun.run_id,
-            worker_status: workerRun.status,
-          },
-          errorMessage: boundedError(workerRun.raw.error ?? `worker_run_${workerRun.status}`),
-        });
+        await releaseHandoff(
+          fabric,
+          options.sopSurfaceId,
+          handoff,
+          options.consumerId,
+          retryableWorkerError(workerRun.raw.error ?? `worker_run_${workerRun.status}`),
+        );
         settled = true;
-        report.handoffs_failed += 1;
+        report.handoffs_deferred += 1;
+        break;
       } catch (error) {
         report.errors.push(errorRecord('agent_handoff', error, handoff.handoff_id));
         if (!settled) {
           try {
-            await releaseHandoff(fabric, options.sopSurfaceId, handoff, options.consumerId, boundedError(error));
+            await releaseHandoff(fabric, options.sopSurfaceId, handoff, options.consumerId, retryableWorkerError(error));
           } catch (releaseError) {
             report.errors.push(errorRecord('agent_handoff_release', releaseError, handoff.handoff_id));
           }
@@ -176,6 +219,41 @@ export async function runSopAgentHandoffConsumerPass(
   }
   report.status = report.errors.length === 0 ? 'completed' : 'completed_with_errors';
   return report;
+}
+
+async function reconcileWorkerConcurrency(
+  fabric: SopHandoffFabricCaller,
+  options: NormalizedAgentOptions,
+): Promise<{ blocked: boolean; reaped: number }> {
+  const listed = await fabric.call(options.workerSurfaceId, 'worker_runs_list', {
+    site_root: options.siteRoot,
+    limit: 100,
+    include_running: true,
+    include_completed: false,
+    include_summary: false,
+    verbose: false,
+  });
+  if (listed.schema !== 'narada.worker.runs_list.v1') throw new Error('worker_runs_list_schema_invalid');
+  const runs = Array.isArray(listed.runs) ? listed.runs.filter(isRecord) : [];
+  let reaped = 0;
+  for (const run of runs) {
+    if (run.status !== 'running') continue;
+    const liveness = isRecord(run.status_liveness) ? run.status_liveness : {};
+    const staleForMs = typeof liveness.stale_for_ms === 'number' ? liveness.stale_for_ms : null;
+    const staleAfterMs = typeof liveness.stale_after_ms === 'number' ? liveness.stale_after_ms : null;
+    const staleConfirmed = liveness.state === 'stale'
+      && staleForMs !== null
+      && staleAfterMs !== null
+      && staleForMs >= staleAfterMs;
+    if (!staleConfirmed) return { blocked: true, reaped };
+    await fabric.call(options.workerSurfaceId, 'worker_run_reap', {
+      run_id: requiredString(run.run_id, 'worker_run_id_missing'),
+      reason: 'SOP agent handoff consumer recovered a stale cross-process worker run before admitting another run.',
+      site_root: options.siteRoot,
+    });
+    reaped += 1;
+  }
+  return { blocked: false, reaped };
 }
 
 export interface SopOperatorHandoffCompletionOptions {
@@ -263,6 +341,8 @@ type ClaimedHandoff = {
   input_ref: JsonRecord | null;
   result_schema: JsonRecord | null;
   lease_token: string;
+  attempt_count: number;
+  last_error: string | null;
 };
 
 type VisibleHandoff = Omit<ClaimedHandoff, 'lease_token'> & {
@@ -272,6 +352,8 @@ type VisibleHandoff = Omit<ClaimedHandoff, 'lease_token'> & {
   result: JsonRecord;
   result_ref: JsonRecord | null;
   error_message: string | null;
+  attempt_count: number;
+  last_error: string | null;
   raw: JsonRecord;
 };
 
@@ -329,7 +411,7 @@ function normalizeOperatorOptions(input: SopOperatorHandoffCompletionOptions): N
 function buildAgentWorkerRequest(handoff: ClaimedHandoff, options: NormalizedAgentOptions): JsonRecord {
   const resultSchema = handoff.result_schema ?? { type: 'object' };
   return {
-    idempotency_key: handoff.occurrence_key,
+    idempotency_key: workerIdempotencyKey(handoff),
     intent: {
       mode: 'audit_only',
       instruction: [
@@ -363,7 +445,8 @@ function buildAgentWorkerRequest(handoff: ClaimedHandoff, options: NormalizedAge
       invocation_plan_ref: options.invocationPlanRef,
       authority: 'read',
       resumable: false,
-      wait_for_completion: false,
+      wait_for_completion: true,
+      wait_timeout_ms: Math.min(180_000, options.maxRunMs),
       max_run_ms: options.maxRunMs,
       required_mcp_tools: options.requiredMcpTools,
       overrides: {
@@ -404,11 +487,19 @@ function parseVisibleHandoff(value: JsonRecord, executor: 'agent' | 'operator'):
     result: value.result === undefined ? {} : requireRecord(value.result, 'sop_handoff_result_invalid'),
     result_ref: value.result_ref === undefined || value.result_ref === null ? null : requireRecord(value.result_ref, 'sop_handoff_result_ref_invalid'),
     error_message: optionalString(value.error_message),
+    attempt_count: Number.isSafeInteger(Number(value.attempt_count)) ? Number(value.attempt_count) : 0,
+    last_error: optionalString(value.last_error),
     raw: value,
   };
 }
 
-function parseWorkerRun(value: JsonRecord): { raw: JsonRecord; run_id: string; status: string; idempotency_replayed: boolean } {
+function parseWorkerRun(value: JsonRecord): {
+  raw: JsonRecord;
+  run_id: string;
+  status: string;
+  idempotency_replayed: boolean;
+  idempotency_key: string | null;
+} {
   if (value.schema !== 'narada.worker.run.v1') throw new Error('worker_run_schema_invalid');
   const status = requiredString(value.status, 'worker_run_status_missing');
   if (status !== 'running' && !WORKER_TERMINAL_STATUSES.has(status)) throw new Error(`worker_run_status_invalid:${status}`);
@@ -417,6 +508,7 @@ function parseWorkerRun(value: JsonRecord): { raw: JsonRecord; run_id: string; s
     run_id: requiredString(value.run_id, 'worker_run_id_missing'),
     status,
     idempotency_replayed: value.idempotency_replayed === true,
+    idempotency_key: optionalString(value.idempotency_key),
   };
 }
 

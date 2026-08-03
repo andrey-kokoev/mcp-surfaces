@@ -133,6 +133,62 @@ try {
   });
   assert.equal(view(failedHandoffResult).status, 'failed');
 
+  const failedHandoffId = String((view(failedHandoffResult).handoff as JsonRecord).handoff_id);
+  const reopened = view(await call('sop_handoff_retry', {
+    handoff_id: failedHandoffId,
+    principal: 'repair:operating-program',
+    reason: 'worker runtime repaired and output contract recovery deployed',
+  }));
+  assert.equal(reopened.retry_replayed, false);
+  assert.equal(reopened.status, 'awaiting_confirmation');
+  assert.equal((reopened.handoff as JsonRecord).status, 'pending');
+  const reopenedLease = await leaseHandoff(failedRunId, 'process', 'consumer:agent-retry');
+  const reopenedCompleted = view(await call('sop_run_advance', {
+    ...reopenedLease, run_id: failedRunId, step_id: 'process', completion_key: 'agent:m-fail:repaired', outcome: 'completed', principal: 'agent:test', result: { disposition: 'responded' },
+  }));
+  assert.equal(reopenedCompleted.status, 'completed');
+
+  // A terminal event that has already been consumed cannot be mutated. The retry is
+  // idempotently admitted as a fresh occurrence while the original failure remains
+  // an immutable, auditable terminal record.
+  view(await call('sop_outbox_consumer_register', { consumer_id: 'retry-proof', start_at: '1970-01-01T00:00:00.000Z' }));
+  const consumedFailureStart = await call('sop_run_start', {
+    sop_id: 'conditional-procedure', occurrence_key: 'mail:fail-consumed', input: { admitted: true, message_id: 'm-fail-consumed' }, triggered_by: 'test',
+  });
+  const consumedFailureRunId = String(view(consumedFailureStart).run_id);
+  const consumedFailureLease = await leaseHandoff(consumedFailureRunId, 'process', 'consumer:agent-consumed-failure');
+  const consumedFailureResult = view(await call('sop_run_advance', {
+    ...consumedFailureLease, run_id: consumedFailureRunId, step_id: 'process', completion_key: 'agent:m-fail-consumed:failed', outcome: 'failed', principal: 'agent:test', result: {}, error_message: 'processing failed before durable retry',
+  }));
+  const consumedFailureHandoffId = String((consumedFailureResult.handoff as JsonRecord).handoff_id);
+  const consumedEvents = view(await call('sop_outbox_list', { consumer_id: 'retry-proof' }));
+  const consumedEvent = (consumedEvents.items as JsonRecord[]).find((item) => item.run_id === consumedFailureRunId);
+  assert.ok(consumedEvent);
+  view(await call('sop_outbox_ack', { event_id: consumedEvent.event_id, consumer_id: 'retry-proof', receipt: { outcome: 'observed' } }));
+  const spawnedRetry = view(await call('sop_handoff_retry', {
+    handoff_id: consumedFailureHandoffId,
+    principal: 'repair:operating-program',
+    reason: 'terminal event already consumed',
+  }));
+  const spawnedRetryRunId = String(spawnedRetry.run_id);
+  assert.equal(spawnedRetry.retry_mode, 'new_run');
+  assert.equal(spawnedRetry.retry_replayed, false);
+  assert.notEqual(spawnedRetryRunId, consumedFailureRunId);
+  assert.equal(spawnedRetry.retry_of_run_id, consumedFailureRunId);
+  assert.equal((spawnedRetry.handoff as JsonRecord).status, 'pending');
+  const spawnedRetryReplay = view(await call('sop_handoff_retry', {
+    handoff_id: consumedFailureHandoffId,
+    principal: 'repair:another-principal',
+    reason: 'same repair operation replay',
+  }));
+  assert.equal(spawnedRetryReplay.retry_mode, 'new_run');
+  assert.equal(spawnedRetryReplay.retry_replayed, true);
+  assert.equal(spawnedRetryReplay.run_id, spawnedRetryRunId);
+  const spawnedRetryLease = await leaseHandoff(spawnedRetryRunId, 'process', 'consumer:agent-consumed-retry');
+  assert.equal(view(await call('sop_run_advance', {
+    ...spawnedRetryLease, run_id: spawnedRetryRunId, step_id: 'process', completion_key: 'agent:m-fail-consumed:repaired', outcome: 'completed', principal: 'agent:test', result: { disposition: 'responded' },
+  })).status, 'completed');
+
   // Static safety: cycles, non-predecessor reads, and direct commands are refused.
   assert.equal(errorCode(await call('sop_template_create', {
     sop_id: 'cycle', title: 'Cycle', steps: [
