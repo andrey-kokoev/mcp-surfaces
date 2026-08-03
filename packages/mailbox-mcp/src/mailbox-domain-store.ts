@@ -47,6 +47,13 @@ export interface GenerationClaim {
   lease_token: string | null;
 }
 
+export interface FirstObservationCandidate {
+  mailbox_id: string;
+  message_id: string;
+  fact_id: string;
+  conversation_id: string | null;
+}
+
 const LEASE_MS = 30_000;
 
 export class MailboxDomainStore {
@@ -394,6 +401,127 @@ export class MailboxDomainStore {
     return row ? hydrateGeneration(row) : null;
   }
 
+  observedMessageKeys(scopeId: string): Set<string> {
+    const rows = this.db.prepare(`
+      select mailbox_id, message_id
+      from mailbox_message_observations
+      where mailbox_id = ?
+    `).all(scopeId) as JsonRecord[];
+    return new Set(rows.map((row) => `${String(row.mailbox_id)}\u0000${String(row.message_id)}`));
+  }
+
+  reconcileFirstObservations(input: {
+    operation_id: string;
+    idempotency_key: string;
+    request_fingerprint: string;
+    scope_id: string;
+    generation_id: string;
+    candidates: FirstObservationCandidate[];
+    remaining_unobserved: number;
+    has_more: boolean;
+    now: string;
+  }): { result: JsonRecord; replayed: boolean } {
+    return this.transaction(() => {
+      const existing = this.db.prepare(`
+        select request_fingerprint, result_json
+        from mailbox_reconciliation_operations
+        where idempotency_key = ?
+      `).get(input.idempotency_key) as JsonRecord | undefined;
+      if (existing) {
+        if (existing.request_fingerprint !== input.request_fingerprint) {
+          throw new Error(`mailbox_reconciliation_idempotency_conflict:${input.idempotency_key}`);
+        }
+        return { result: parseRecord(existing.result_json), replayed: true };
+      }
+
+      const generation = this.requireGeneration(input.generation_id);
+      if (generation.scope_id !== input.scope_id) {
+        throw new Error(`mailbox_reconciliation_scope_mismatch:${input.scope_id}:${generation.scope_id}`);
+      }
+      if (generation.status !== 'completed') {
+        throw new Error(`mailbox_reconciliation_generation_not_completed:${generation.status}`);
+      }
+
+      let observationsRecorded = 0;
+      let eventsPublished = 0;
+      let skippedExisting = 0;
+      for (const candidate of input.candidates) {
+        const identity = `${candidate.mailbox_id}\u0000${candidate.message_id}`;
+        const observationId = stableId('mobs_', identity);
+        const observation = this.db.prepare(`
+          insert or ignore into mailbox_message_observations(
+            observation_id, mailbox_id, message_id, first_generation_id,
+            first_fact_id, observed_at
+          ) values (?, ?, ?, ?, ?, ?)
+        `).run(
+          observationId,
+          candidate.mailbox_id,
+          candidate.message_id,
+          input.generation_id,
+          candidate.fact_id,
+          input.now,
+        );
+        if (Number(observation.changes) === 1) observationsRecorded += 1;
+        else skippedExisting += 1;
+
+        const eventId = stableId('mbe_', `first-observed\u0000${identity}`);
+        const payload = {
+          schema: 'narada.mailbox.message_first_observed.v1',
+          generation_id: input.generation_id,
+          observation_id: observationId,
+          mailbox_id: candidate.mailbox_id,
+          message_id: candidate.message_id,
+          fact_id: candidate.fact_id,
+          ...(candidate.conversation_id ? { conversation_id: candidate.conversation_id } : {}),
+        };
+        const event = this.db.prepare(`
+          insert or ignore into mailbox_outbox(
+            event_id, topic, aggregate_id, aggregate_revision, schema_version,
+            causation_id, idempotency_key, partition_key, occurred_at, payload_json
+          ) values (?, 'mailbox.message.first_observed', ?, 1, 1, ?, ?, ?, ?, ?)
+        `).run(
+          eventId,
+          observationId,
+          input.generation_id,
+          eventId,
+          observationId,
+          input.now,
+          JSON.stringify(payload),
+        );
+        if (Number(event.changes) === 1) eventsPublished += 1;
+      }
+
+      const result: JsonRecord = {
+        schema: 'narada.mailbox.reconcile_first_observations_receipt.v1',
+        operation_id: input.operation_id,
+        scope_id: input.scope_id,
+        generation_id: input.generation_id,
+        candidates_scanned: input.candidates.length,
+        observations_recorded: observationsRecorded,
+        events_published: eventsPublished,
+        skipped_existing: skippedExisting,
+        remaining_unobserved: input.remaining_unobserved,
+        has_more: input.has_more,
+        status: 'completed',
+      };
+      this.db.prepare(`
+        insert into mailbox_reconciliation_operations(
+          operation_id, idempotency_key, request_fingerprint, scope_id,
+          generation_id, result_json, created_at
+        ) values (?, ?, ?, ?, ?, ?, ?)
+      `).run(
+        input.operation_id,
+        input.idempotency_key,
+        input.request_fingerprint,
+        input.scope_id,
+        input.generation_id,
+        JSON.stringify(result),
+        input.now,
+      );
+      return { result, replayed: false };
+    });
+  }
+
   recordAdmission(input: {
     admission_id: string;
     idempotency_key: string;
@@ -587,6 +715,15 @@ export class MailboxDomainStore {
         fact_id text not null,
         policy_version text not null,
         decision_json text not null,
+        created_at text not null
+      );
+      create table if not exists mailbox_reconciliation_operations(
+        operation_id text primary key,
+        idempotency_key text not null unique,
+        request_fingerprint text not null,
+        scope_id text not null,
+        generation_id text not null references mailbox_sync_generations(generation_id),
+        result_json text not null,
         created_at text not null
       );
       create index if not exists mailbox_outbox_order_idx on mailbox_outbox(occurred_at, event_id);

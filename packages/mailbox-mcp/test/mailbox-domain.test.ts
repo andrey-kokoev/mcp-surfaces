@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
+import { DatabaseSync } from 'node:sqlite';
 import {
   loadControlPlaneRuntime,
   type ControlPlaneRuntime,
@@ -89,6 +90,31 @@ try {
   const replay = await service.syncGeneration({ idempotency_key: 'sync-action-1', scope_id: 'support' });
   assert.equal(record(replay.result).idempotency_replayed, true);
   assert.equal(sourceCalls, 1);
+
+  // Reproduce the historical failure mode: immutable facts and a completed
+  // generation exist, but the new observation/outbox ledger is empty.
+  const domainDb = new DatabaseSync(join(root, '.narada', 'runtime', 'mailbox-domain', 'mailbox-domain.db'));
+  domainDb.exec('delete from mailbox_outbox_receipts; delete from mailbox_outbox; delete from mailbox_message_observations;');
+  domainDb.close();
+  const reconciled = await service.reconcileFirstObservations({
+    idempotency_key: 'reconcile-action-1',
+    generation_id: String(record(first.result).generation_id),
+    scope_id: 'support',
+    limit: 100,
+  });
+  assert.equal(record(reconciled.result).status, 'completed');
+  assert.equal(record(reconciled.result).candidates_scanned, 2);
+  assert.equal(record(reconciled.result).observations_recorded, 2);
+  assert.equal(record(reconciled.result).events_published, 2);
+  assert.equal(record(reconciled.result).remaining_unobserved, 0);
+  const reconciledReplay = await service.reconcileFirstObservations({
+    idempotency_key: 'reconcile-action-1',
+    generation_id: String(record(first.result).generation_id),
+    scope_id: 'support',
+    limit: 100,
+  });
+  assert.equal(record(reconciledReplay.result).idempotency_replayed, true);
+  assert.equal(record(reconciledReplay.result).events_published, 2);
 
   service.outboxConsumerRegister({ consumer_id: 'scheduler', start_at: '2026-07-31T00:00:00.000Z' });
   const listed = service.outboxList({ consumer_id: 'scheduler' });

@@ -3,7 +3,7 @@ export type GuidanceToolDefinition = GuidanceRecord & { name: string; descriptio
 
 const SURFACE_ID = "mailbox";
 const GUIDANCE_TOOL = "mailbox_guidance";
-const PURPOSE = "Read-only synced mailbox projection inspection.";
+const PURPOSE = "Synced mailbox projection inspection plus bounded local fact-ledger reconciliation.";
 
 export function buildGuidanceResult(args: GuidanceRecord = {}): GuidanceRecord {
   const workflow = typeof args.workflow === 'string' && args.workflow.trim() ? args.workflow.trim() : null;
@@ -37,6 +37,8 @@ export function buildGuidanceResult(args: GuidanceRecord = {}): GuidanceRecord {
       'Do not guess hidden state from a tool name; use doctor/status/list/show tools for evidence.',
       'Do not treat assistant text as the durable record when structuredContent is present.',
       'Do not bypass the owning surface with shell scripts when a governed MCP tool exists.',
+      'Use mailbox_reconcile_first_observations only as a durable, bounded repair after a completed mailbox generation; it publishes local first-observation events but never sends, moves, or deletes mail.',
+      'Treat reconciliation receipts and outbox acknowledgements as the durable handoff; do not infer completion from a successful cloud sync alone.',
       'Do not continue after malformed payloads, empty refs, or ambiguous target identifiers; stop and repair the input.'
     ],
     recovery: [

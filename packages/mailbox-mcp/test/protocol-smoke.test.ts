@@ -17,6 +17,7 @@ try {
     'mailbox_guidance',
     'mailbox_doctor',
     'mailbox_sync_generation',
+    'mailbox_reconcile_first_observations',
     'mailbox_message_admit',
     'mailbox_fact_show',
     'mailbox_generation_show',
@@ -32,6 +33,7 @@ try {
   ]);
   const mutationTools = new Set([
     'mailbox_sync_generation',
+    'mailbox_reconcile_first_observations',
     'mailbox_message_admit',
     'mailbox_outbox_consumer_register',
     'mailbox_outbox_ack',

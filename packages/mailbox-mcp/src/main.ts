@@ -130,6 +130,13 @@ export function listTools(): unknown[] {
       scope_id: { type: 'string', description: 'Configured mailbox scope id. Optional only when the config contains one scope.' },
       config_path: { type: 'string', description: 'Site-relative sync config path. Defaults to config/config.json.' },
     }, ['idempotency_key'], false),
+    tool('mailbox_reconcile_first_observations', 'Boundedly repair missing first-observation ledger and outbox entries from immutable local message facts. This never sends, moves, or deletes mail.', {
+      idempotency_key: { type: 'string', description: 'Stable SOP action occurrence key.' },
+      generation_id: { type: 'string', description: 'Completed mailbox sync generation that authorizes this reconciliation.' },
+      scope_id: { type: 'string', description: 'Configured mailbox scope id. Optional only when the config contains one scope.' },
+      config_path: { type: 'string', description: 'Site-relative sync config path. Defaults to config/config.json.' },
+      limit: { type: 'integer', minimum: 1, maximum: 100, default: 100, description: 'Maximum new observations to publish in this bounded operation.' },
+    }, ['idempotency_key', 'generation_id'], false),
     tool('mailbox_message_admit', 'Apply the versioned mechanical admission policy to one durable first-observation fact.', {
       idempotency_key: { type: 'string', description: 'Stable SOP action occurrence key.' },
       fact_id: { type: 'string', description: 'Canonical discovered-message fact id from the mailbox outbox event.' },
@@ -209,6 +216,9 @@ async function callTool(params: MailboxRecord, state: MailboxServerState) {
       break;
     case 'mailbox_sync_generation':
       result = await state.domainService.syncGeneration(args);
+      break;
+    case 'mailbox_reconcile_first_observations':
+      result = await state.domainService.reconcileFirstObservations(args);
       break;
     case 'mailbox_message_admit':
       result = await state.domainService.admitMessage(args);

@@ -17,6 +17,7 @@ import {
   MailboxDomainStore,
   sha256,
   stableId,
+  type FirstObservationCandidate,
   type GenerationRecordRow,
   type JsonRecord,
   type StagedGenerationRecord,
@@ -358,6 +359,73 @@ export class MailboxDomainService {
         store.close();
       }
     } finally {
+      facts.close();
+    }
+  }
+
+  async reconcileFirstObservations(args: JsonRecord): Promise<JsonRecord> {
+    const kernel = await this.runtime();
+    const idempotencyKey = requiredBoundedString(
+      args.idempotency_key,
+      'mailbox_reconciliation_idempotency_key_required',
+      MAX_IDEMPOTENCY_KEY,
+    );
+    const generationId = requiredBoundedString(args.generation_id, 'mailbox_reconciliation_generation_id_required', 128);
+    const loaded = await this.loadScope(args, kernel);
+    const limit = boundedInteger(args.limit, 100, 1, 100);
+    const factDb = new kernel.Database(join(loaded.scope.root_dir, '.narada', 'facts.db'));
+    const facts = new kernel.SqliteFactStore({ db: factDb });
+    facts.initSchema();
+    const store = this.openStore();
+    try {
+      const observed = store.observedMessageKeys(loaded.scope.scope_id);
+      const candidatesByIdentity = new Map<string, FirstObservationCandidate>();
+      for (const fact of facts.getFactsByScope(loaded.scope.scope_id)) {
+        if (fact.fact_type !== 'mail.message.discovered') continue;
+        const metadata = mailMetadata(fact);
+        if (metadata.mailbox_id !== loaded.scope.scope_id) {
+          throw new Error(`mailbox_reconciliation_scope_mismatch:${metadata.mailbox_id}:${loaded.scope.scope_id}`);
+        }
+        const identity = `${metadata.mailbox_id}\u0000${metadata.message_id}`;
+        if (!candidatesByIdentity.has(identity)) {
+          candidatesByIdentity.set(identity, {
+            mailbox_id: metadata.mailbox_id,
+            message_id: metadata.message_id,
+            fact_id: fact.fact_id,
+            conversation_id: metadata.conversation_id,
+          });
+        }
+      }
+      const unobserved = [...candidatesByIdentity.entries()]
+        .filter(([identity]) => !observed.has(identity))
+        .map(([, candidate]) => candidate);
+      const candidates = unobserved.slice(0, limit);
+      const requestFingerprint = fingerprint({
+        schema: 'narada.mailbox.reconcile_first_observations_request.v1',
+        scope_id: loaded.scope.scope_id,
+        generation_id: generationId,
+        limit,
+      });
+      const operationId = stableId('mbr_', idempotencyKey);
+      const recorded = store.reconcileFirstObservations({
+        operation_id: operationId,
+        idempotency_key: idempotencyKey,
+        request_fingerprint: requestFingerprint,
+        scope_id: loaded.scope.scope_id,
+        generation_id: generationId,
+        candidates,
+        remaining_unobserved: Math.max(0, unobserved.length - candidates.length),
+        has_more: unobserved.length > candidates.length,
+        now: this.now(),
+      });
+      return {
+        schema: DOMAIN_SCHEMA,
+        operation_ref: `mailbox-reconcile:${operationId}`,
+        outcome: 'completed',
+        result: { ...recorded.result, idempotency_replayed: recorded.replayed },
+      };
+    } finally {
+      store.close();
       facts.close();
     }
   }
