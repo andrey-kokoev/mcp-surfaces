@@ -1,11 +1,14 @@
 # @narada-core/mailbox-mcp
 
-Read-only MCP surface for site-local synced mailbox projections.
+Mailbox domain surface for finite synchronization, mechanical admission, durable domain events, and bounded reads of site-local mailbox projections.
 
-Use this package when an agent needs to inspect mail that has already been synced by a Narada site. This surface does not talk to Microsoft Graph, Outlook, PowerShell, IMAP, or any remote mailbox service. It only reads bounded JSON/JSONL projections from the local site tree.
+Mailbox owns cloud-to-local synchronization, first-observation identity, admission decisions, and its transactional outbox. Scheduler consumes those events and activates SOPs. Work Lifecycle, not Mailbox, owns tickets.
 
 ## Boundary
 
+- Allowed: run finite idempotent sync generations and reconcile first observations.
+- Allowed: mechanically admit a first-observed immutable fact exactly once and publish the frozen decision.
+- Allowed: consume scoped, topic-filtered mailbox events through durable acknowledgements.
 - Allowed: read site-local synced mailbox projection files.
 - Allowed: list accounts, list messages, show one message, search messages, show a thread.
 - Not allowed: live Microsoft Graph queries.
@@ -71,10 +74,14 @@ The normalized output uses stable fields such as `message_id`, `mailbox_id`, `fo
 - `mailbox_message_show`: shows one message by `message_id`; includes plain text body by default.
 - `mailbox_search`: searches subject/body/address/category text.
 - `mailbox_thread_show`: shows messages in one conversation/thread.
+- `mailbox_sync_generation`: runs one finite durable synchronization generation.
+- `mailbox_message_admit`: freezes one decision for the fact cited by a first-observed event.
+- `mailbox_admission_show`: reads that canonical decision without reevaluating policy.
+- `mailbox_outbox_*`: registers immutable scoped subscriptions, lists matching events, and records bounded effect receipts.
 
 ## Agent Guidance
 
-Agents should prefer this surface for routine mailbox inspection because it is read-only and does not require live mailbox credentials. Use `graph-mail-mcp` only when the local sync is stale, missing required detail, or draft work is required.
+SOP actions are the units of work. A mailbox admission result is a neutral source envelope; downstream SOPs decide whether and how to associate it with a ticket. Site Loop may observe this chain but does not execute mailbox synchronization or ticket reconciliation.
 
 ## Verification
 

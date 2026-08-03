@@ -116,7 +116,12 @@ try {
   assert.equal(record(reconciledReplay.result).idempotency_replayed, true);
   assert.equal(record(reconciledReplay.result).events_published, 2);
 
-  service.outboxConsumerRegister({ consumer_id: 'scheduler', start_at: '2026-07-31T00:00:00.000Z' });
+  service.outboxConsumerRegister({
+    consumer_id: 'scheduler',
+    scope_id: 'support',
+    topics: ['mailbox.message.first_observed'],
+    start_at: '2026-07-31T00:00:00.000Z',
+  });
   const listed = service.outboxList({ consumer_id: 'scheduler' });
   const events = arrayOfRecords(listed.items);
   assert.equal(events.length, 2);
@@ -134,15 +139,31 @@ try {
     idempotency_key: 'admission-action-allowed',
     scope_id: 'support',
     fact_id: String(record(allowedEvent.payload).fact_id),
+    source_event_id: String(allowedEvent.event_id),
   });
   assert.equal(record(admitted.result).decision, 'admitted');
-  assert.equal(record(record(admitted.result).ticket_admit_source_arguments).immutable_source_id, 'message-allowed');
-  const admittedSourceRef = record(record(record(admitted.result).ticket_admit_source_arguments).source_ref);
+  assert.equal(record(record(admitted.result).source).immutable_source_id, 'message-allowed');
+  assert.equal(record(admitted.result).ticket_admit_source_arguments, undefined);
+  const admittedSourceRef = record(record(record(admitted.result).source).source_ref);
   assert.equal(admittedSourceRef.fact_id, record(allowedEvent.payload).fact_id);
   assert.equal(admittedSourceRef.source_version, 'v1');
   assert.equal(admittedSourceRef.scope_id, 'support');
   assert.equal(admittedSourceRef.mailbox_id, 'support@example.test');
   assert.equal(JSON.stringify(admitted).includes('Allowed body must not cross admission receipt'), false);
+  const canonicalReplay = await service.admitMessage({
+    idempotency_key: 'admission-action-allowed-retry',
+    scope_id: 'support',
+    fact_id: String(record(allowedEvent.payload).fact_id),
+    source_event_id: String(allowedEvent.event_id),
+  });
+  assert.equal(record(canonicalReplay.result).admission_id, record(admitted.result).admission_id);
+  assert.equal(record(canonicalReplay.result).idempotency_replayed, true);
+  const shownAdmission = record(service.admissionShow({
+    scope_id: 'support',
+    fact_id: String(record(allowedEvent.payload).fact_id),
+  }).admission);
+  assert.equal(shownAdmission.admission_id, record(admitted.result).admission_id);
+  assert.equal(shownAdmission.idempotency_replayed, undefined);
 
   const immutableFact = await service.factShow({
     fact_id: String(record(allowedEvent.payload).fact_id),
@@ -157,14 +178,36 @@ try {
     idempotency_key: 'admission-action-rejected',
     scope_id: 'support',
     fact_id: String(record(rejectedEvent.payload).fact_id),
+    source_event_id: String(rejectedEvent.event_id),
   });
   assert.equal(record(rejected.result).decision, 'rejected');
   assert.equal(record(rejected.result).reason, 'sender_not_allowed');
   assert.equal(record(rejected.result).ticket_admit_source_arguments, undefined);
 
+  await assert.rejects(service.admitMessage({
+    idempotency_key: 'admission-action-allowed',
+    scope_id: 'support',
+    fact_id: String(record(rejectedEvent.payload).fact_id),
+    source_event_id: String(rejectedEvent.event_id),
+  }), /mailbox_admission_idempotency_conflict/);
+
+  service.outboxConsumerRegister({
+    consumer_id: 'scheduler-decisions',
+    scope_id: 'support',
+    topics: ['mailbox.message.admitted', 'mailbox.message.rejected'],
+    start_at: '2026-07-31T00:00:00.000Z',
+  });
+  const decisionEvents = arrayOfRecords(service.outboxList({ consumer_id: 'scheduler-decisions' }).items);
+  assert.deepEqual(decisionEvents.map((event) => event.topic).sort(), ['mailbox.message.admitted', 'mailbox.message.rejected']);
+  assert.equal(decisionEvents.filter((event) => event.topic === 'mailbox.message.admitted').length, 1);
+
   for (const event of events) {
     const eventId = String(event.event_id);
-    const acknowledgement = { schema: 'fixture.scheduler_receipt.v1', scheduler_event_id: `scheduler:${eventId}` };
+    const acknowledgement = {
+      schema: 'narada.scheduler.domain_outbox_receipt.v2',
+      outcome: 'admitted',
+      effect_ref: `scheduler-event:${eventId}`,
+    };
     const ack = service.outboxAck({ consumer_id: 'scheduler', event_id: eventId, receipt: acknowledgement });
     assert.equal(ack.replayed, false);
     const ackReplay = service.outboxAck({ consumer_id: 'scheduler', event_id: eventId, receipt: acknowledgement });

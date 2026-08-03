@@ -28,6 +28,8 @@ test('domain outbox replay admits one scheduler event across a lost source ackno
     siteRoot: 'D:/fixture',
     profile: 'mailbox',
     consumerId: 'scheduler-mailbox',
+    scopeId: 'support',
+    topics: ['mailbox.message.first_observed'],
     outboxStartAt: '2026-07-31T00:00:00.000Z',
   }, fabric);
 
@@ -40,6 +42,8 @@ test('domain outbox replay admits one scheduler event across a lost source ackno
     siteRoot: 'D:/fixture',
     profile: 'mailbox',
     consumerId: 'scheduler-mailbox',
+    scopeId: 'support',
+    topics: ['mailbox.message.first_observed'],
     outboxStartAt: '2026-07-31T00:00:00.000Z',
   }, fabric);
 
@@ -92,6 +96,8 @@ test('mailbox outbox drains in bounded pages without requiring oversized MCP out
     siteRoot: 'D:/fixture',
     profile: 'mailbox',
     consumerId: 'scheduler-mailbox-paged',
+    scopeId: 'support',
+    topics: ['mailbox.message.first_observed'],
     outboxStartAt: '2026-07-31T00:00:00.000Z',
     maxEvents: 12,
   }, fabric);
@@ -149,6 +155,8 @@ class FixtureFabric implements SchedulerDomainFabricCaller {
         items: this.mailboxEvents
           .filter((event) => !this.mailboxAcknowledgedIds.has(String(event.event_id)))
           .slice(0, limit),
+        has_more: this.mailboxEvents
+          .filter((event) => !this.mailboxAcknowledgedIds.has(String(event.event_id))).length > limit,
       };
     }
     if (surfaceId === 'mailbox' && toolName === 'mailbox_outbox_ack') {

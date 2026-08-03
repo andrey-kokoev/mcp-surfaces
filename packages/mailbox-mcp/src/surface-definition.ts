@@ -5,6 +5,7 @@ const READ_ONLY_TOOLS = [
   'mailbox_guidance', 'mailbox_doctor', 'mailbox_accounts_list',
   'mailbox_messages_list', 'mailbox_message_show', 'mailbox_output_show',
   'mailbox_fact_show',
+  'mailbox_admission_show',
   'mailbox_search', 'mailbox_thread_show', 'mailbox_generation_show',
   'mailbox_outbox_list',
 ] as const;
@@ -12,7 +13,7 @@ const READ_ONLY_TOOLS = [
 export function surfaceDefinition(): DefinedSurface {
   return defineNativeSurface({
     surface_id: 'mailbox',
-    surface_version: '0.1.0',
+    surface_version: '0.2.0',
     package: '@narada-core/mailbox-mcp',
     entrypoint: '{mcp_surfaces_root}/mailbox-mcp/dist/src/main.js',
     tools: listTools() as McpToolDefinition[],

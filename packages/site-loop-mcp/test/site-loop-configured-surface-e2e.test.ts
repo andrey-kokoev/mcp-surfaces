@@ -32,9 +32,6 @@ writeFileSync(join(siteRoot, '.narada', 'capabilities', 'site-loop-config.json')
     agent_id: 'live.e2e.resident',
     role: 'resident',
   },
-  refs: {
-    ticket_projection: { kind: 'ticket_projection', ref: 'configured-e2e' },
-  },
   docs: [
     { path: 'AGENTS.md', description: 'Configured Site Loop E2E instructions.' },
     { path: 'README.md', description: 'Configured Site Loop E2E readme.' },
@@ -189,7 +186,6 @@ try {
     test_authority: true,
     requireLiveCarrier: false,
     ensureResident: false,
-    source_sync: false,
     limit: 1,
   });
   assert.equal(testAuthorityRun.status, 'ok', JSON.stringify(testAuthorityRun));
@@ -212,19 +208,6 @@ try {
   assert.equal(shownRun.dry_run, false, JSON.stringify(shownTestRun));
   assert.equal(shownRun.status, 'ok', JSON.stringify(shownTestRun));
 
-  const refusedTestAuthorityRun = await toolJson(22, 'site_loop_run_once', {
-    dry_run: false,
-    wait_for_completion: true,
-    timeout_ms: 10_000,
-    test_authority: true,
-    source_sync: true,
-    requireLiveCarrier: false,
-    limit: 1,
-  });
-  assert.equal(refusedTestAuthorityRun.status, 'refused', JSON.stringify(refusedTestAuthorityRun));
-  assert.equal((refusedTestAuthorityRun.test_authority as JsonRecord).reason, 'test_authority_binding_refused', JSON.stringify(refusedTestAuthorityRun));
-  assert.equal(((refusedTestAuthorityRun.test_authority as JsonRecord).refused_edges as unknown[]).includes('test_authority_configured_commands_not_allowed'), true, JSON.stringify(refusedTestAuthorityRun));
-
   const unifiedStatus = await toolJson(10, 'site_loop_unified_status', {});
   assert.equal(unifiedStatus.status, 'ok', JSON.stringify(unifiedStatus));
   assert.equal(typeof unifiedStatus.posture, 'string', JSON.stringify(unifiedStatus));
@@ -242,7 +225,7 @@ try {
   assert.equal((readiness.failed_gates as unknown[]).includes('resident_carrier'), true, JSON.stringify(readiness));
   assert.equal((readiness.failed_gates as unknown[]).includes('production_runtime'), true, JSON.stringify(readiness));
 
-  const coherence = await toolJson(13, 'site_loop_coherence', { require_production: false, require_mailbox_chain: false });
+  const coherence = await toolJson(13, 'site_loop_coherence', { require_production: false });
   assert.equal(coherence.status, 'not_coherent', JSON.stringify(coherence));
   assert.equal(coherence.coherent, false, JSON.stringify(coherence));
 

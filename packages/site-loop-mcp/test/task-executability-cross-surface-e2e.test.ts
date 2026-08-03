@@ -223,7 +223,6 @@ function writeSiteDocuments(): void {
     site_id: siteId,
     display_name: 'Live Site Loop task executability E2E',
     resident: { agent_id: agentId, role: 'resident' },
-    refs: { ticket_projection: { kind: 'ticket_projection', ref: 'live-site-loop-e2e' } },
     mcp: {
       task_lifecycle_config_path: '.ai/mcp/task-lifecycle.json',
       task_lifecycle_server_key: 'narada-task-lifecycle',

@@ -34,10 +34,6 @@ export const DEFAULT_SITE_OPERATING_LOOP_POLICY = {
     fallback_enabled: true,
     require_policy_current: true,
   },
-  source_sync: {
-    daemon_default_enabled: true,
-    max_batch_size: 25,
-  },
   rate_limits: {
     max_directives_per_cycle: 25,
     max_restarts_per_window: 3,
@@ -114,7 +110,6 @@ export function validateSiteOperatingLoopPolicy(policy: any, options: ValidateSi
   }
   if (typeof policy?.carrier?.fallback_enabled !== 'boolean') errors.push('invalid_fallback_enabled');
   for (const [path, min] of [
-    ['source_sync.max_batch_size', 1],
     ['rate_limits.max_directives_per_cycle', 1],
     ['rate_limits.max_restarts_per_window', 0],
     ['rate_limits.restart_window_ms', 60_000],
@@ -183,10 +178,6 @@ export function mergeSiteOperatingLoopPolicy(base: any, override: any) {
     carrier: {
       ...base.carrier,
       ...(override?.carrier ?? {}),
-    },
-    source_sync: {
-      ...base.source_sync,
-      ...(override?.source_sync ?? {}),
     },
     rate_limits: {
       ...base.rate_limits,

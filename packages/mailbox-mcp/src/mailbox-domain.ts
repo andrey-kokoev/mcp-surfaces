@@ -38,6 +38,14 @@ export interface MailboxDomainServiceOptions {
   runtime?: ControlPlaneRuntime;
 }
 
+function requiredUniqueStrings(value: unknown, code: string, maxItems: number, maxLength: number): string[] {
+  if (!Array.isArray(value) || value.length === 0 || value.length > maxItems) throw new Error(code);
+  const normalized = value.map((item) => requiredBoundedString(item, code, maxLength));
+  const unique = [...new Set(normalized)].sort();
+  if (unique.length !== normalized.length) throw new Error(`${code}_duplicate`);
+  return unique;
+}
+
 export class MailboxDomainService {
   private readonly siteRoot: string;
   private readonly options: MailboxDomainServiceOptions;
@@ -45,6 +53,20 @@ export class MailboxDomainService {
   constructor(siteRoot: string, options: MailboxDomainServiceOptions = {}) {
     this.siteRoot = resolve(siteRoot);
     this.options = options;
+  }
+
+  admissionShow(args: JsonRecord): JsonRecord {
+    const scopeId = requiredBoundedString(args.scope_id, 'mailbox_admission_scope_id_required', MAX_SCOPE_ID);
+    const factId = requiredBoundedString(args.fact_id, 'mailbox_admission_fact_id_required', 256);
+    const store = this.openStore();
+    try {
+      const admission = store.admissionByFact(scopeId, factId);
+      return admission
+        ? { schema: 'narada.mailbox.admission_show.v1', status: 'ok', scope_id: scopeId, fact_id: factId, admission }
+        : { schema: 'narada.mailbox.admission_show.v1', status: 'not_found', scope_id: scopeId, fact_id: factId };
+    } finally {
+      store.close();
+    }
   }
 
   async syncGeneration(args: JsonRecord): Promise<JsonRecord> {
@@ -260,6 +282,7 @@ export class MailboxDomainService {
     const kernel = await this.runtime();
     const idempotencyKey = requiredBoundedString(args.idempotency_key, 'mailbox_admission_idempotency_key_required', MAX_IDEMPOTENCY_KEY);
     const factId = requiredBoundedString(args.fact_id, 'mailbox_admission_fact_id_required', 256);
+    const sourceEventId = requiredBoundedString(args.source_event_id, 'mailbox_admission_source_event_id_required', 256);
     const loaded = await this.loadScope(args, kernel);
     const policyVersion = admissionPolicyVersion(loaded.scope);
     const expectedPolicyVersion = optionalBoundedString(args.policy_version, 128);
@@ -280,28 +303,26 @@ export class MailboxDomainService {
       if (metadata.mailbox_id !== loaded.scope.scope_id) {
         throw new Error(`mailbox_admission_scope_mismatch:${metadata.mailbox_id}:${loaded.scope.scope_id}`);
       }
+      const store = this.openStore();
+      try {
+        store.requireFirstObservedEvent(sourceEventId, loaded.scope.scope_id, factId);
       const evaluation = kernel.evaluateMailFactAdmission(fact, loaded.scope.admission?.mail);
       const requestFingerprint = fingerprint({
-        schema: 'narada.mailbox.message_admission_request.v1',
+        schema: 'narada.mailbox.message_admission_request.v2',
         scope_id: loaded.scope.scope_id,
         fact_id: factId,
+        source_event_id: sourceEventId,
         policy_version: policyVersion,
       });
-      const admissionId = stableId('mba_', idempotencyKey);
+      const admissionId = stableId('mba_', `${loaded.scope.scope_id}\u0000${factId}`);
       const correlationKeys = trustedCorrelationKeys(metadata);
-      const decision: JsonRecord = {
-        schema: 'narada.mailbox.message_admission_receipt.v1',
-        admission_id: admissionId,
-        decision: evaluation.admitted ? 'admitted' : 'rejected',
-        reason: evaluation.reason,
-        policy_version: policyVersion,
-        fact_id: factId,
+      const source: JsonRecord = {
         source_kind: 'mailbox_message',
         source_scope: metadata.mailbox_id,
         immutable_source_id: metadata.message_id,
         summary: metadata.subject ? `Mailbox message: ${metadata.subject}`.slice(0, 500) : 'Mailbox message',
         source_ref: {
-          schema: 'narada.work_lifecycle.source_ref.v1',
+          schema: 'narada.mailbox.source_ref.v1',
           scope_id: loaded.scope.scope_id,
           mailbox_id: graphMailboxId,
           message_id: metadata.message_id,
@@ -312,33 +333,35 @@ export class MailboxDomainService {
           ...(metadata.internet_message_id ? { internet_message_id: metadata.internet_message_id } : {}),
         },
         correlation_keys: correlationKeys,
+      };
+      const decision: JsonRecord = {
+        schema: 'narada.mailbox.message_admission_receipt.v2',
+        admission_id: admissionId,
+        decision: evaluation.admitted ? 'admitted' : 'rejected',
+        reason: evaluation.reason,
+        policy_version: policyVersion,
+        source_event_id: sourceEventId,
+        scope_id: loaded.scope.scope_id,
+        fact_id: factId,
+        source,
         evaluated_metadata: {
           folder_refs: evaluation.folder_refs,
           sender_email: evaluation.sender_email,
         },
-        ...(evaluation.admitted ? {
-          ticket_admit_source_arguments: {
-            source_kind: 'mailbox_message',
-            source_scope: metadata.mailbox_id,
-            immutable_source_id: metadata.message_id,
-            causation_id: factId,
-            policy_version: policyVersion,
-            summary: metadata.subject ? `Mailbox message: ${metadata.subject}`.slice(0, 500) : 'Mailbox message',
-            source_ref: {
-              scope_id: loaded.scope.scope_id,
-              mailbox_id: graphMailboxId,
-              message_id: metadata.message_id,
-              fact_id: factId,
-              source_record_id: fact.provenance.source_record_id,
-              source_version: fact.provenance.source_version,
-              ...(metadata.conversation_id ? { conversation_id: metadata.conversation_id } : {}),
-            },
-            correlation_keys: correlationKeys,
-          },
-        } : {}),
       };
-      const store = this.openStore();
-      try {
+      const eventPayload: JsonRecord = {
+        schema: evaluation.admitted
+          ? 'narada.mailbox.message_admitted.v1'
+          : 'narada.mailbox.message_rejected.v1',
+        admission_id: admissionId,
+        source_event_id: sourceEventId,
+        scope_id: loaded.scope.scope_id,
+        fact_id: factId,
+        decision: decision.decision,
+        reason: evaluation.reason,
+        policy_version: policyVersion,
+        source,
+      };
         const recorded = store.recordAdmission({
           admission_id: admissionId,
           idempotency_key: idempotencyKey,
@@ -347,6 +370,9 @@ export class MailboxDomainService {
           fact_id: factId,
           policy_version: policyVersion,
           decision,
+          event_topic: evaluation.admitted ? 'mailbox.message.admitted' : 'mailbox.message.rejected',
+          event_payload: eventPayload,
+          source_event_id: sourceEventId,
           now: this.now(),
         });
         return {
@@ -499,12 +525,14 @@ export class MailboxDomainService {
 
   outboxConsumerRegister(args: JsonRecord): JsonRecord {
     const consumerId = requiredBoundedString(args.consumer_id, 'mailbox_outbox_consumer_id_required', 256);
+    const scopeId = requiredBoundedString(args.scope_id, 'mailbox_outbox_scope_id_required', MAX_SCOPE_ID);
+    const topics = requiredUniqueStrings(args.topics, 'mailbox_outbox_topics_required', 16, 256);
     const startAt = timestamp(args.start_at, 'mailbox_outbox_start_at_required');
     const store = this.openStore();
     try {
       return {
-        schema: 'narada.mailbox.outbox_consumer.v1',
-        consumer: store.registerOutboxConsumer(consumerId, startAt, this.now()),
+        schema: 'narada.mailbox.outbox_consumer.v2',
+        consumer: store.registerOutboxConsumer(consumerId, scopeId, topics, startAt, this.now()),
       };
     } finally {
       store.close();
@@ -516,8 +544,8 @@ export class MailboxDomainService {
     const limit = boundedInteger(args.limit, 100, 1, 100);
     const store = this.openStore();
     try {
-      const items = store.listOutbox(consumerId, limit);
-      return { schema: 'narada.mailbox.outbox_list.v1', consumer_id: consumerId, count: items.length, items };
+      const page = store.listOutbox(consumerId, limit);
+      return { schema: 'narada.mailbox.outbox_list.v2', consumer_id: consumerId, count: page.items.length, ...page };
     } finally {
       store.close();
     }
@@ -526,7 +554,15 @@ export class MailboxDomainService {
   outboxAck(args: JsonRecord): JsonRecord {
     const consumerId = requiredBoundedString(args.consumer_id, 'mailbox_outbox_consumer_id_required', 256);
     const eventId = requiredBoundedString(args.event_id, 'mailbox_outbox_event_id_required', 256);
-    const receipt = requireRecord(args.receipt, 'mailbox_outbox_receipt_required');
+    const rawReceipt = requireRecord(args.receipt, 'mailbox_outbox_receipt_required');
+    if (Object.keys(rawReceipt).some((key) => !['schema', 'outcome', 'effect_ref'].includes(key))) {
+      throw new Error('mailbox_outbox_receipt_fields_invalid');
+    }
+    const receipt = {
+      schema: requiredBoundedString(rawReceipt.schema, 'mailbox_outbox_receipt_schema_required', 128),
+      outcome: requiredBoundedString(rawReceipt.outcome, 'mailbox_outbox_receipt_outcome_required', 64),
+      effect_ref: requiredBoundedString(rawReceipt.effect_ref, 'mailbox_outbox_receipt_effect_ref_required', 512),
+    };
     const store = this.openStore();
     try {
       return {

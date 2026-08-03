@@ -22,6 +22,7 @@ export interface SchedulerDomainOutboxOptions {
   siteRoot: string;
   profile: DomainOutboxProfile;
   consumerId: string;
+  scopeId?: string;
   outboxStartAt?: string;
   topics?: string[];
   sourceSurfaceId?: string;
@@ -71,7 +72,8 @@ export async function runSchedulerDomainOutboxDispatcher(
     let remaining = options.maxEvents;
     while (remaining > 0) {
       const pageLimit = Math.min(5, remaining);
-      const listed = await listEvents(fabric, options, pageLimit);
+      const page = await listEvents(fabric, options, pageLimit);
+      const listed = page.events;
       if (listed.length === 0) break;
       let pageFailed = false;
       for (const raw of listed) {
@@ -104,7 +106,7 @@ export async function runSchedulerDomainOutboxDispatcher(
           });
         }
       }
-      if (pageFailed || listed.length < pageLimit) break;
+      if (pageFailed || !page.hasMore) break;
     }
   } finally {
     if (ownedFabric) {
@@ -123,6 +125,7 @@ interface NormalizedOptions {
   siteRoot: string;
   profile: DomainOutboxProfile;
   consumerId: string;
+  scopeId: string | null;
   outboxStartAt: string | null;
   topics: string[];
   sourceSurfaceId: string;
@@ -138,11 +141,15 @@ function normalizeOptions(input: SchedulerDomainOutboxOptions): NormalizedOption
   const startAt = input.outboxStartAt ? normalizeTimestamp(input.outboxStartAt, 'outboxStartAt') : null;
   const topics = [...new Set((input.topics ?? []).map((topic) => requiredString(topic, 'domain_outbox_topic_invalid')))];
   if (profile === 'mailbox' && startAt === null) throw new Error('mailbox_outbox_start_at_required');
+  const scopeId = input.scopeId ? requiredString(input.scopeId, 'scopeId_required') : null;
+  if (profile === 'mailbox' && scopeId === null) throw new Error('mailbox_outbox_scope_id_required');
+  if (profile === 'mailbox' && topics.length === 0) throw new Error('mailbox_outbox_topics_required');
   if (profile === 'work-lifecycle' && topics.length === 0) throw new Error('work_lifecycle_outbox_topics_required');
   return {
     siteRoot: requiredString(input.siteRoot, 'siteRoot_required'),
     profile,
     consumerId: requiredString(input.consumerId, 'consumerId_required'),
+    scopeId,
     outboxStartAt: startAt,
     topics,
     sourceSurfaceId: optionalString(input.sourceSurfaceId) ?? profile,
@@ -157,6 +164,8 @@ async function registerConsumer(fabric: SchedulerDomainFabricCaller, options: No
   if (options.profile === 'mailbox') {
     await fabric.call(options.sourceSurfaceId, 'mailbox_outbox_consumer_register', {
       consumer_id: options.consumerId,
+      scope_id: options.scopeId,
+      topics: options.topics,
       start_at: options.outboxStartAt,
     });
     return;
@@ -173,20 +182,27 @@ async function listEvents(
   fabric: SchedulerDomainFabricCaller,
   options: NormalizedOptions,
   limit: number,
-): Promise<JsonRecord[]> {
+): Promise<{ events: JsonRecord[]; hasMore: boolean }> {
   if (options.profile === 'mailbox') {
     const result = await fabric.call(options.sourceSurfaceId, 'mailbox_outbox_list', {
       consumer_id: options.consumerId,
       limit,
     });
-    return recordArray(result.items, 'mailbox_outbox_items_invalid');
+    if (!Array.isArray(result.items)) {
+      throw new Error(`mailbox_outbox_items_invalid:${JSON.stringify(result).slice(0, 2_000)}`);
+    }
+    return {
+      events: recordArray(result.items, 'mailbox_outbox_items_invalid'),
+      hasMore: result.has_more === true,
+    };
   }
   const result = await fabric.call(options.sourceSurfaceId, 'work_outbox_list', {
     consumer_id: options.consumerId,
     topics: options.topics,
     limit,
   });
-  return recordArray(result.events, 'work_outbox_events_invalid');
+  const events = recordArray(result.events, 'work_outbox_events_invalid');
+  return { events, hasMore: events.length >= limit };
 }
 
 async function acknowledgeEvent(
@@ -198,9 +214,9 @@ async function acknowledgeEvent(
     consumer_id: options.consumerId,
     event_id: event.event_id,
     receipt: {
-      schema: 'narada.scheduler.domain_outbox_receipt.v1',
-      scheduler_event_id: event.event_id,
-      source_profile: options.profile,
+      schema: 'narada.scheduler.domain_outbox_receipt.v2',
+      outcome: 'admitted',
+      effect_ref: `scheduler-event:${event.event_id}`,
     },
   };
   await fabric.call(
@@ -285,7 +301,7 @@ function boundedError(error: unknown): string {
 
 function parseCliArgs(argv: string[]): SchedulerDomainOutboxOptions {
   const values = parseFlagValues(argv, new Set([
-    '--site-root', '--profile', '--consumer-id', '--outbox-start-at', '--topics',
+    '--site-root', '--profile', '--consumer-id', '--scope-id', '--outbox-start-at', '--topics',
     '--source-surface-id', '--scheduler-surface-id', '--max-events',
     '--request-timeout-ms', '--loader-entrypoint',
   ]));
@@ -293,6 +309,7 @@ function parseCliArgs(argv: string[]): SchedulerDomainOutboxOptions {
     siteRoot: requiredString(values.get('--site-root'), 'site_root_required'),
     profile: requiredString(values.get('--profile'), 'profile_required') as DomainOutboxProfile,
     consumerId: requiredString(values.get('--consumer-id'), 'consumer_id_required'),
+    ...(values.has('--scope-id') ? { scopeId: values.get('--scope-id') } : {}),
     ...(values.has('--outbox-start-at') ? { outboxStartAt: values.get('--outbox-start-at') } : {}),
     ...(values.has('--topics') ? { topics: values.get('--topics')!.split(',').map((topic) => topic.trim()).filter(Boolean) } : {}),
     ...(values.has('--source-surface-id') ? { sourceSurfaceId: values.get('--source-surface-id') } : {}),

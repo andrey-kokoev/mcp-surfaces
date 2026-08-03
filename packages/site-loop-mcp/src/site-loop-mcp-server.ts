@@ -103,9 +103,8 @@ export const TOOLS = [
     limit: { type: 'number', description: 'Pending/directive row limit.' },
   }),
   tool('site_loop_proof_status', 'Show proof freshness and configured proof commands without running proof workflows.', {}),
-  tool('site_loop_proof_run', 'Run a controlled resident or mailbox proof workflow through the configured Site Loop proof engine.', {
-    proof_kind: { type: 'string', enum: ['resident_production', 'controlled_mailbox'], description: 'Proof workflow to run.' },
-    controlled_mailbox_source: { type: 'string', description: 'Required for controlled_mailbox proof. Source ref used to identify new controlled mailbox work.' },
+  tool('site_loop_proof_run', 'Run a controlled resident proof workflow through the configured Site Loop proof engine.', {
+    proof_kind: { type: 'string', enum: ['resident_production'], description: 'Proof workflow to run.' },
     wait_for_completion: { type: 'boolean', description: 'Wait synchronously for proof completion. Refused when timeout exceeds the MCP transport budget.' },
     timeout_ms: { type: 'number', description: 'Maximum proof wait time in milliseconds.' },
     poll_ms: { type: 'number', description: 'Polling interval in milliseconds.' },
@@ -126,7 +125,6 @@ export const TOOLS = [
   }),
   tool('site_loop_coherence', 'Evaluate strict coherence blockers for the configured site loop.', {
     require_production: { type: 'boolean', description: 'Require production proof.' },
-    require_mailbox_chain: { type: 'boolean', description: 'Require mailbox-chain proof.' },
   }),
   tool('site_loop_runs_list', 'List recent configured Site Operating Loop runs.', {
     limit: { type: 'number', description: 'Maximum runs to return.' },
@@ -170,7 +168,6 @@ export const TOOLS = [
     test_authority: { type: 'boolean', description: 'Run non-dry work against the configured test authority root instead of production state.' },
     limit: { type: 'number', description: 'Processing limit.' },
     drain: { type: 'boolean', description: 'Drain eligible intake when supported.' },
-    source_sync: { type: 'boolean', description: 'Request source sync before loop processing.' },
     ensureResident: { type: 'boolean', description: 'Ensure the configured resident carrier before dispatch when allowed.' },
     requireLiveCarrier: { type: 'boolean', description: 'Require a live resident carrier for dispatch. Set false for fixture/test-authority runs.' },
   }),
@@ -511,7 +508,7 @@ function siteLoopOperatorAffordances() {
       label: 'Check coherence',
       intent: 'inspect',
       tool: 'site_loop_coherence',
-      arguments: { require_production: false, require_mailbox_chain: false },
+      arguments: { require_production: false },
       description: 'Evaluate strict Site Loop coherence blockers.',
       audience: ['operator', 'agent'],
       danger_level: 'none',
@@ -578,29 +575,6 @@ function siteLoopOperatorAffordances() {
       confirmation: { required: true, message: 'Run a controlled resident production proof.' },
     }),
     affordanceToolAction({
-      id: 'run_mailbox_proof',
-      label: 'Run mailbox proof',
-      intent: 'run',
-      tool: 'site_loop_proof_run',
-      arguments: { proof_kind: 'controlled_mailbox', ensure_resident: true, require_live_carrier: true },
-      description: 'Run the controlled mailbox proof required for strict coherence.',
-      audience: ['operator'],
-      danger_level: 'high',
-      read_only: false,
-      idempotent: false,
-      confirmation: { required: true, message: 'Run a controlled mailbox proof with an operator-approved source ref.' },
-      input_schema: {
-        type: 'object',
-        required: ['proof_kind', 'controlled_mailbox_source'],
-        properties: {
-          proof_kind: { type: 'string', enum: ['controlled_mailbox'] },
-          controlled_mailbox_source: { type: 'string' },
-          timeout_ms: { type: 'number' },
-          poll_ms: { type: 'number' },
-        },
-      },
-    }),
-    affordanceToolAction({
       id: 'pause_loop',
       label: 'Pause loop',
       intent: 'pause',
@@ -665,7 +639,7 @@ function siteLoopOperatorAffordances() {
       title: 'Runs',
       kind: 'runs',
       priority: 30,
-      actions: ['dry_run_once', 'run_resident_proof', 'run_mailbox_proof'],
+      actions: ['dry_run_once', 'run_resident_proof'],
     },
     {
       id: 'controls',
@@ -738,7 +712,6 @@ function normalizeLoopOptions(args: SiteLoopToolArgs = {}) {
     acknowledgedBy: optionalString(args.acknowledged_by) ?? optionalString(args.acknowledgedBy),
     dryRun: args.dry_run === true || args.dryRun === true,
     drain: args.drain === true,
-    sourceSync: args.source_sync === true || args.sourceSync === true,
     testAuthority: args.test_authority === true || args.testAuthority === true,
     ensureResident: args.ensure_resident === true || args.ensureResident === true,
     ownerId: optionalString(args.owner_id) ?? optionalString(args.ownerId),
@@ -750,7 +723,6 @@ function normalizeLoopOptions(args: SiteLoopToolArgs = {}) {
         ? args.requireLiveCarrier
         : undefined,
     requireProduction: args.require_production === true || args.requireProduction === true,
-    requireMailboxChain: args.require_mailbox_chain === true || args.requireMailboxChain === true,
   };
 }
 
@@ -811,17 +783,6 @@ function normalizeProofRunOptions(args: SiteLoopToolArgs = {}) {
     return {
       ...base,
       ackFixture: true,
-      startOnly: !waitForCompletion,
-    };
-  }
-  if (proofKind === 'controlled_mailbox') {
-    const controlledMailboxSource = optionalString(args.controlled_mailbox_source) ?? optionalString(args.controlledMailboxSource);
-    if (!controlledMailboxSource) throw new Error('controlled_mailbox_source_required');
-    return {
-      ...base,
-      mailboxProof: true,
-      controlledMailboxProof: true,
-      controlledMailboxSource,
       startOnly: !waitForCompletion,
     };
   }

@@ -18,9 +18,6 @@ writeFileSync(join(siteRoot, '.narada', 'capabilities', 'site-loop-config.json')
     agent_id: 'resident',
     role: 'resident',
   },
-  refs: {
-    ticket_projection: { kind: 'ticket_projection', ref: 'run-show-test' },
-  },
 }, null, 2), 'utf8');
 
 const store = openSiteLoopStore(siteRoot, { write: true, storeMode: 'prepare' });
@@ -127,7 +124,6 @@ writeFileSync(join(siteRoot, '.narada', 'capabilities', 'site-loop-config.json')
   site_id: 'narada-run-show-test',
   display_name: 'Run show test loop',
   resident: { agent_id: 'resident', role: 'resident' },
-  refs: { ticket_projection: { kind: 'ticket_projection', ref: 'run-show-test' } },
   persistence: { evidence_root: '.ai/other-site-loop-evidence' },
 }, null, 2), 'utf8');
 assert.throws(

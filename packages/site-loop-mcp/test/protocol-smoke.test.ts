@@ -111,7 +111,6 @@ try {
     site_id: 'narada-protocol',
     display_name: 'Protocol loop',
     resident: { agent_id: 'protocol.resident', role: 'resident' },
-    refs: { ticket_projection: { kind: 'ticket_projection', ref: 'protocol' } },
   }, null, 2), 'utf8');
   writeMessage({ jsonrpc: '2.0', id: 3, method: 'tools/call', params: { name: 'site_loop_doctor', arguments: {} } });
   const doctor = await waitFor(3);
@@ -140,7 +139,7 @@ try {
   assert.equal(affordancesPayload.actions.some((action: any) => action.id === 'run_once'), false);
   assert.equal(affordancesPayload.actions.some((action: any) => action.id === 'dry_run_once' && action.tool === 'site_loop_run_once'), true);
   assert.equal(affordancesPayload.actions.some((action: any) => action.id === 'run_resident_proof' && action.tool === 'site_loop_proof_run'), true);
-  assert.equal(affordancesPayload.actions.some((action: any) => action.id === 'run_mailbox_proof' && action.tool === 'site_loop_proof_run'), true);
+  assert.equal(affordancesPayload.actions.some((action: any) => action.id === 'run_mailbox_proof'), false);
   assert.equal(affordancesPayload.panels.some((panel: any) => panel.id === 'controls' && panel.actions.includes('pause_loop')), true);
 
   writeMessage({ jsonrpc: '2.0', id: 8, method: 'tools/call', params: { name: 'site_loop_proof_run', arguments: { proof_kind: 'resident_production', wait_for_completion: true, timeout_ms: 120000 } } });

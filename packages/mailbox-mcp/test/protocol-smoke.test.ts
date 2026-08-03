@@ -19,6 +19,7 @@ try {
     'mailbox_sync_generation',
     'mailbox_reconcile_first_observations',
     'mailbox_message_admit',
+    'mailbox_admission_show',
     'mailbox_fact_show',
     'mailbox_generation_show',
     'mailbox_outbox_consumer_register',

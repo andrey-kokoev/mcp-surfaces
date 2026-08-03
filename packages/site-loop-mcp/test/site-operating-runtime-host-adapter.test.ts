@@ -19,7 +19,6 @@ function makeSiteRoot(prefix: string) {
     site_id: 'canonical-host-test',
     display_name: 'Canonical host test loop',
     resident: { agent_id: 'resident', role: 'resident' },
-    refs: { ticket_projection: { kind: 'ticket_projection', ref: 'test' } },
   }, null, 2), 'utf8');
   const prepared = prepareTaskLifecycleStore(root);
   prepared.db.close();

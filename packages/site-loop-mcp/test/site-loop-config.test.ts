@@ -22,13 +22,11 @@ const boundaries = siteLoopDependencyBoundaries();
 assert.equal(boundaries.some((item: any) => item.surface === 'task-lifecycle' && item.owner.includes('task-lifecycle')), true);
 assert.equal(boundaries.some((item: any) => item.surface === 'structured-command' && item.kind === 'configured_command'), true);
 assert.deepEqual([...DEFAULT_SITE_LOOP_PHASE_PLAN], [
-  'source_sync',
   'scheduled_sop_triggers',
   'inbox_bridge',
   'task_materialization',
   'task_executability_reconciliation',
   'resident_directive_emission',
-  'ticket_task_reconciliation',
   'pre_backlog_outcome_reconciliation',
   'reported_resident_task_state_reconciliation',
   'resident_backlog_recovery_emission',
@@ -40,29 +38,6 @@ assert.deepEqual([...DEFAULT_SITE_LOOP_PHASE_PLAN], [
   'operating_alert_reconciliation',
 ]);
 
-const phasePlanDisabledRoot = mkdtempSync(join(tmpdir(), 'site-loop-phase-plan-disabled-'));
-writeSiteLoopConfig(phasePlanDisabledRoot, {
-  schema: SITE_LOOP_CONFIG_SCHEMA,
-  loop_id: 'phase.plan.disabled.loop',
-  site_id: 'narada-phase-plan-disabled',
-  display_name: 'Phase plan disabled loop',
-  resident: { agent_id: 'phase.plan.disabled.resident', role: 'resident' },
-  refs: { ticket_projection: { kind: 'ticket_projection', ref: 'phase-plan-disabled' } },
-  commands: {
-    source_sync: { enabled: false, execution: 'direct_spawn', command: 'disabled-source-sync', args: [] },
-    ticket_task_reconciliation: { enabled: false, execution: 'direct_spawn', command: 'disabled-ticket-reconcile', args: [] },
-  },
-});
-const phasePlanDisabledStore = prepareTaskLifecycleStore(phasePlanDisabledRoot);
-phasePlanDisabledStore.db.close();
-const phasePlanDisabledRun = await runSiteLoop(phasePlanDisabledRoot, {
-  dryRun: true,
-  sourceSync: true,
-  runId: 'phase-plan-disabled-runtime-test',
-  sourceSyncRunner: () => { throw new Error('disabled source sync must not execute'); },
-});
-assert.equal(phasePlanDisabledRun.steps.find((step: any) => step.step_id === 'source_sync'), undefined);
-assert.equal(phasePlanDisabledRun.steps.find((step: any) => step.step_id === 'ticket_task_reconciliation')?.status, 'skipped');
 assert.deepEqual([...SITE_LOOP_ADAPTER_PHASE_PLAN], [...DEFAULT_SITE_LOOP_PHASE_PLAN]);
 
 assert.deepEqual(processLaunchRequiredEnvironment({
@@ -163,7 +138,6 @@ writeSiteLoopConfig(residentTargetRoot, {
   site_id: 'narada-resident-target',
   display_name: 'Resident target loop',
   resident: { agent_id: 'resident.target', role: 'resident' },
-  refs: { ticket_projection: { kind: 'ticket_projection', ref: 'resident-target' } },
 });
 const residentTargetSessionId = 'carrier_resident_target_test';
 const residentTargetResultsRoot = join(residentTargetRoot, '.ai', 'runtime', 'agent-start-results');
@@ -258,7 +232,6 @@ writeSiteLoopConfig(residentCommandRoot, {
   site_id: 'narada-resident-command',
   display_name: 'Resident command loop',
   resident: { agent_id: 'operator', role: 'operator' },
-  refs: { ticket_projection: { kind: 'ticket_projection', ref: 'resident-command' } },
 });
 assert.equal(renderResidentAgentCliCommand(residentCommandRoot), '.\\narada-site.ps1 agent-start -Agent operator -Carrier agent-cli -Runtime narada-agent-runtime-server -Exec');
 
@@ -269,23 +242,18 @@ writeSiteLoopConfig(phasePlanRoot, {
   site_id: 'narada-phase-plan',
   display_name: 'Phase plan loop',
   resident: { agent_id: 'phase.plan.resident', role: 'resident' },
-  refs: { ticket_projection: { kind: 'ticket_projection', ref: 'phase-plan' } },
 });
 const phasePlanStore = prepareTaskLifecycleStore(phasePlanRoot);
 phasePlanStore.db.close();
 const phasePlanRun = await runSiteLoop(phasePlanRoot, {
   dryRun: true,
-  sourceSync: true,
   runId: 'phase-plan-runtime-test',
-  sourceSyncRunner: () => ({ status: 'ok', schema: 'narada.site_loop.source_sync.v1', cursor_path: '.ai/state/source.cursor' }),
 });
 assert.deepEqual(phasePlanRun.steps.map((step: any) => step.step_id), [
-  'source_sync',
   'inbox_bridge',
   'task_materialization',
   'task_executability_reconciliation',
   'resident_directive_emission',
-  'ticket_task_reconciliation',
   'pre_backlog_outcome_reconciliation',
   'reported_resident_task_state_reconciliation',
   'resident_backlog_recovery_emission',
@@ -303,7 +271,6 @@ writeSiteLoopConfig(testAuthorityRoot, {
   site_id: 'narada-test-authority',
   display_name: 'Test authority loop',
   resident: { agent_id: 'test.authority.resident', role: 'resident' },
-  refs: { ticket_projection: { kind: 'ticket_projection', ref: 'test-authority' } },
   test_authority: {
     enabled: true,
     state_root: '.ai/test-authority/site-loop',
@@ -325,7 +292,6 @@ testAuthorityPreparation.db.close();
 const testAuthorityRun = await runSiteLoop(testAuthorityRoot, {
   test_authority: true,
   dry_run: false,
-  source_sync: false,
   ensureResident: false,
   requireLiveCarrier: false,
   limit: 1,
@@ -338,17 +304,6 @@ assert.equal(testAuthorityRun.test_authority.production_site_root, testAuthority
 assert.match(testAuthorityRun.test_authority.execution_site_root, /site-loop-test-authority-/);
 assert.equal(existsSync(join(testAuthorityRoot, '.ai', 'task-lifecycle.db')), false);
 assert.equal(existsSync(join(testAuthorityRoot, '.ai', 'test-authority', 'site-loop', '.ai', 'task-lifecycle.db')), true);
-const testAuthorityRefusal = await runSiteLoop(testAuthorityRoot, {
-  test_authority: true,
-  dry_run: false,
-  source_sync: true,
-  requireLiveCarrier: false,
-  runId: 'test-authority-refusal-test',
-});
-assert.equal(testAuthorityRefusal.status, 'refused');
-assert.equal(testAuthorityRefusal.authority_mode, 'test');
-assert.equal(testAuthorityRefusal.test_authority.reason, 'test_authority_binding_refused');
-assert.equal(testAuthorityRefusal.test_authority.refused_edges.includes('test_authority_configured_commands_not_allowed'), true);
 
 const defaultLoad = loadSiteLoopConfig(siteRoot);
 assert.equal(defaultLoad.status, 'missing');
@@ -365,20 +320,7 @@ const minimalSiteLoopConfig = {
     agent_id: 'example.resident',
     role: 'operator',
   },
-  refs: {
-    ticket_projection: { kind: 'ticket_projection', ref: 'example' },
-  },
   commands: {
-    source_sync: {
-      execution: 'direct_spawn',
-      enabled: true,
-      command: 'example-sync',
-      args: ['--json'],
-      working_directory: 'D:/code/narada',
-      dry_run_arg: '--dry-run',
-      limit_arg: '--limit',
-      preferred_role_arg: '--preferred-role',
-    },
     status: 'example status',
   },
   schemas: {
@@ -440,14 +382,6 @@ assert.equal(overrideLoad.config.site_id, 'narada-example');
 assert.equal(overrideLoad.config.resident.agent_id, 'example.resident');
 assert.equal(overrideLoad.config.resident.role, 'operator');
 assert.equal(overrideLoad.config.resident.required_task_tools.length, DEFAULT_SITE_LOOP_CONFIG.resident.required_task_tools.length);
-assert.deepEqual(overrideLoad.config.refs.ticket_projection, { kind: 'ticket_projection', ref: 'example' });
-assert.equal(overrideLoad.config.commands.source_sync.command, 'example-sync');
-assert.equal(overrideLoad.config.commands.source_sync.enabled, true);
-assert.deepEqual(overrideLoad.config.commands.source_sync.args, ['--json']);
-assert.equal(overrideLoad.config.commands.source_sync.working_directory, 'D:/code/narada');
-assert.equal(overrideLoad.config.commands.source_sync.dry_run_arg, '--dry-run');
-assert.equal(overrideLoad.config.commands.source_sync.limit_arg, '--limit');
-assert.equal(overrideLoad.config.commands.source_sync.preferred_role_arg, '--preferred-role');
 assert.equal(overrideLoad.config.commands.status, 'example status');
 assert.equal(overrideLoad.config.scheduler.default_task_name, '\\Example-Site-Loop');
 assert.deepEqual(overrideLoad.config.scheduler.pid_files, ['example-loop.pid']);
@@ -509,7 +443,6 @@ writeSiteLoopConfig(invalidUnknownRoot, {
   site_id: 'narada-bad',
   display_name: 'Bad loop',
   resident: { agent_id: 'bad.resident', role: 'resident' },
-  refs: { ticket_projection: { kind: 'ticket_projection', ref: 'bad' } },
   unexpected_root_key: true,
 });
 const unknownRootLoad = loadSiteLoopConfig(invalidUnknownRoot);
@@ -523,7 +456,6 @@ writeSiteLoopConfig(invalidMissingSchemaRoot, {
   site_id: 'narada-missing-schema',
   display_name: 'Missing schema loop',
   resident: { agent_id: 'missing.resident', role: 'resident' },
-  refs: { ticket_projection: { kind: 'ticket_projection', ref: 'missing' } },
 });
 const invalidMissingSchemaLoad = loadSiteLoopConfig(invalidMissingSchemaRoot);
 assert.equal(invalidMissingSchemaLoad.status, 'invalid');
@@ -536,7 +468,6 @@ writeSiteLoopConfig(invalidPathRoot, {
   site_id: 'narada-bad-path',
   display_name: 'Bad path loop',
   resident: { agent_id: 'bad.resident', role: 'resident' },
-  refs: { ticket_projection: { kind: 'ticket_projection', ref: 'bad' } },
   mcp: { task_lifecycle_config_path: '../outside.json' },
 });
 const invalidPathLoad = loadSiteLoopConfig(invalidPathRoot);
@@ -550,12 +481,11 @@ writeSiteLoopConfig(invalidCommandRoot, {
   site_id: 'narada-bad-command',
   display_name: 'Bad command loop',
   resident: { agent_id: 'bad.resident', role: 'resident' },
-  refs: { ticket_projection: { kind: 'ticket_projection', ref: 'bad' } },
   commands: { source_sync: { execution: 'direct_spawn', command: 'bad-sync', args: '--json' } },
 });
 const invalidCommandLoad = loadSiteLoopConfig(invalidCommandRoot);
 assert.equal(invalidCommandLoad.status, 'invalid');
-assert.equal(invalidCommandLoad.errors.some((error: any) => error.includes('commands.source_sync.args')), true);
+assert.equal(invalidCommandLoad.errors.some((error: any) => error.includes('source_sync')), true);
 
 const invalidExecutionRoot = mkdtempSync(join(tmpdir(), 'site-loop-config-invalid-execution-'));
 writeSiteLoopConfig(invalidExecutionRoot, {
@@ -564,12 +494,11 @@ writeSiteLoopConfig(invalidExecutionRoot, {
   site_id: 'narada-bad-execution',
   display_name: 'Bad execution loop',
   resident: { agent_id: 'bad.resident', role: 'resident' },
-  refs: { ticket_projection: { kind: 'ticket_projection', ref: 'bad' } },
   commands: { source_sync: { execution: 'shell_string', command: 'bad-sync', args: ['--json'] } },
 });
 const invalidExecutionLoad = loadSiteLoopConfig(invalidExecutionRoot);
 assert.equal(invalidExecutionLoad.status, 'invalid');
-assert.equal(invalidExecutionLoad.errors.some((error: any) => error.includes('commands.source_sync.execution_direct_spawn_required')), true);
+assert.equal(invalidExecutionLoad.errors.some((error: any) => error.includes('source_sync')), true);
 
 const invalidRuntimeRoot = mkdtempSync(join(tmpdir(), 'site-loop-config-invalid-runtime-'));
 writeSiteLoopConfig(invalidRuntimeRoot, {
@@ -578,7 +507,6 @@ writeSiteLoopConfig(invalidRuntimeRoot, {
   site_id: 'narada-bad-runtime',
   display_name: 'Bad runtime loop',
   resident: { agent_id: 'bad.resident', role: 'resident' },
-  refs: { ticket_projection: { kind: 'ticket_projection', ref: 'bad' } },
   resident_runtime: { process_probe_patterns: 'agent-cli' },
 });
 const invalidRuntimeLoad = loadSiteLoopConfig(invalidRuntimeRoot);

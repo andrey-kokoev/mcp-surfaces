@@ -2,10 +2,8 @@ import { schemaName, type SiteLoopConfig } from './site-loop-config.js';
 import { DEFAULT_SITE_LOOP_PHASE_PLAN, type SiteLoopPayload, type SiteLoopPhaseAdapter, type SiteLoopPhaseContext, type SiteLoopStep } from './site-loop-kernel.js';
 
 export type SiteLoopPhaseState = SiteLoopPayload & {
-  sourceSyncRequested: boolean;
   residentAgentId: string;
   residentRole: string;
-  ticketProjectionRef: { kind: string; ref: string };
   operatingPolicy: SiteLoopPayload;
   preBacklogOutcome?: unknown;
   backlogRecovery?: unknown;
@@ -14,10 +12,8 @@ export type SiteLoopPhaseState = SiteLoopPayload & {
 };
 
 type SiteLoopPhaseDeps = {
-  runSourceSync: (siteRoot: string, options: SiteLoopPayload) => Promise<unknown> | unknown;
   emitScheduledSopTriggers: (siteRoot: string, config: SiteLoopConfig, options: SiteLoopPayload) => unknown;
   runInboxBridge: (siteRoot: string, options: SiteLoopPayload) => Promise<unknown> | unknown;
-  runTicketTaskReconcile: (siteRoot: string, options: SiteLoopPayload) => Promise<unknown> | unknown;
   runTaskExecutabilityReconciliation: (siteRoot: string, options: SiteLoopPayload) => Promise<unknown> | unknown;
   getResidentStatus: (siteRoot: string) => unknown;
   runAgentOutcomeReconciliation: (siteRoot: string, options: SiteLoopPayload) => unknown;
@@ -27,23 +23,18 @@ type SiteLoopPhaseDeps = {
   dispatchPendingDirectives: (options: unknown) => Promise<unknown> | unknown;
   reconcileLoopEscalations: (siteRoot: string, store: unknown, outcome: unknown, options: SiteLoopPayload) => unknown;
   persistOperatingLayerAlerts: (siteRoot: string, store: unknown, options: SiteLoopPayload) => unknown;
-  sourceSyncRefs: (result: unknown) => unknown[];
   bridgeOutputRefs: (result: unknown) => unknown[];
-  ticketTaskRefs: (result: unknown) => unknown[];
   materializedTaskRefs: (result: unknown) => unknown[];
   residentDirectiveRefs: (result: unknown) => SiteLoopPayload[];
   residentBacklogRecoveryDirectiveRefs: (result: unknown) => unknown[];
   dispatchedDirectiveRefs: (result: unknown) => unknown[];
   receiptRefs: (result: unknown) => unknown[];
-  summarizeSourceSync: (result: unknown, siteLoopConfig: SiteLoopConfig) => unknown;
   summarizeBridgeResult: (result: unknown) => unknown;
   summarizeTaskMaterialization: (result: unknown) => unknown;
   summarizeResidentDirectiveEmission: (result: unknown) => unknown;
-  summarizeTicketTaskReconciliation: (result: unknown, siteLoopConfig: SiteLoopConfig) => unknown;
   summarizeResidentBacklogRecovery: (result: unknown, siteLoopConfig: SiteLoopConfig) => unknown;
   summarizeDirectiveDispatch: (result: unknown) => SiteLoopPayload;
   summarizeReceiptReconciliation: (result: unknown) => unknown;
-  outputRefsForStep: (steps: SiteLoopPayload[], stepId: string) => unknown[];
 };
 
 export const SITE_LOOP_ADAPTER_PHASE_PLAN = DEFAULT_SITE_LOOP_PHASE_PLAN;
@@ -108,22 +99,6 @@ function fixtureDirectiveDispatch(context: SiteLoopPhaseContext<SiteLoopPhaseSta
 
 export function createSiteLoopPhaseAdapters(deps: SiteLoopPhaseDeps): SiteLoopPhaseAdapter<SiteLoopPhaseState>[] {
   return [
-    {
-      id: 'source_sync',
-      shouldRun: (context: SiteLoopPhaseContext<SiteLoopPhaseState>) => context.state.sourceSyncRequested
-        && context.siteLoopConfig.commands.source_sync.enabled !== false
-        && !context.drain,
-      inputRefs: (context: SiteLoopPhaseContext<SiteLoopPhaseState>) => [{ kind: 'site_root', ref: context.siteRoot }],
-      execute: (context: SiteLoopPhaseContext<SiteLoopPhaseState>) => deps.runSourceSync(context.siteRoot, {
-        dryRun: context.dryRun,
-        runner: context.options.sourceSyncRunner,
-        commandConfig: context.siteLoopConfig.commands.source_sync,
-        schema: schemaName(context.siteLoopConfig, 'source_sync'),
-        timeoutMs: context.options.sourceSyncTimeoutMs ?? context.options.source_sync_timeout_ms,
-      }),
-      outputRefs: (result: unknown) => deps.sourceSyncRefs(result),
-      evidence: (result: unknown, context: SiteLoopPhaseContext<SiteLoopPhaseState>) => deps.summarizeSourceSync(result, context.siteLoopConfig),
-    },
     {
       id: 'scheduled_sop_triggers',
       shouldRun: (context: SiteLoopPhaseContext<SiteLoopPhaseState>) => !context.drain && context.siteLoopConfig.scheduled_sops.length > 0,
@@ -196,46 +171,6 @@ export function createSiteLoopPhaseAdapters(deps: SiteLoopPhaseDeps): SiteLoopPh
       execute: (context: SiteLoopPhaseContext<SiteLoopPhaseState>) => bridgeResult(context),
       outputRefs: (result: unknown) => deps.residentDirectiveRefs(result),
       evidence: (result: unknown) => deps.summarizeResidentDirectiveEmission(result),
-    },
-    {
-      id: 'ticket_task_reconciliation',
-      shouldRun: (context: SiteLoopPhaseContext<SiteLoopPhaseState>) => !context.dryRun
-        && !context.drain
-        && context.state.sourceSyncRequested
-        && context.siteLoopConfig.commands.ticket_task_reconciliation.enabled !== false,
-      skipStep: (context: SiteLoopPhaseContext<SiteLoopPhaseState>) => {
-        const result = {
-          schema: schemaName(context.siteLoopConfig, 'ticket_task_reconciliation'),
-          status: 'skipped',
-          reason: context.dryRun ? 'dry_run' : context.drain ? 'drain' : 'source_sync_not_run',
-          created: 0,
-          existing: 0,
-          planned: 0,
-          results: [],
-        };
-        return {
-          stepId: 'ticket_task_reconciliation',
-          status: 'skipped',
-          inputRefs: [context.state.ticketProjectionRef],
-          outputRefs: deps.ticketTaskRefs(result),
-          evidence: deps.summarizeTicketTaskReconciliation(result, context.siteLoopConfig),
-        };
-      },
-      inputRefs: (context: SiteLoopPhaseContext<SiteLoopPhaseState>) => [
-        ...deps.outputRefsForStep(context.steps, 'source_sync'),
-        context.state.ticketProjectionRef,
-      ],
-      execute: (context: SiteLoopPhaseContext<SiteLoopPhaseState>) => deps.runTicketTaskReconcile(context.siteRoot, {
-        dryRun: context.dryRun,
-        limit: context.limit,
-        preferredRole: context.state.residentRole,
-        runner: context.options.ticketTaskReconcileRunner,
-        commandConfig: context.siteLoopConfig.commands.ticket_task_reconciliation,
-        schema: schemaName(context.siteLoopConfig, 'ticket_task_reconciliation'),
-        timeoutMs: context.options.ticketTaskReconciliationTimeoutMs ?? context.options.ticket_task_reconciliation_timeout_ms,
-      }),
-      outputRefs: (result: unknown) => deps.ticketTaskRefs(result),
-      evidence: (result: unknown, context: SiteLoopPhaseContext<SiteLoopPhaseState>) => deps.summarizeTicketTaskReconciliation(result, context.siteLoopConfig),
     },
     {
       id: 'pre_backlog_outcome_reconciliation',

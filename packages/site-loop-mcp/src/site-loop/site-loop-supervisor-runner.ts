@@ -21,15 +21,12 @@ export function parseSiteLoopSupervisorArgs(argv: string[], defaultCwd = process
     const arg = argv[index];
     if (arg === '--dry-run') parsed.dryRun = true;
     else if (arg === '--supervise') parsed.supervise = true;
-    else if (arg === '--source-sync') parsed.sourceSync = true;
     else if (arg === '--ensure-resident') parsed.ensureResident = true;
     else if (arg === '--cycles') parsed.cycles = numberValue(argv[++index]);
     else if (arg === '--interval-ms' || arg === '--intervalMs') parsed.intervalMs = numberValue(argv[++index]);
     else if (arg === '--jitter-ms' || arg === '--jitterMs') parsed.jitterMs = numberValue(argv[++index]);
     else if (arg === '--supervisor-heartbeat-path' || arg === '--supervisorHeartbeatPath') parsed.supervisorHeartbeatPath = argv[++index];
     else if (arg === '--supervisor-heartbeat-interval-ms' || arg === '--supervisorHeartbeatIntervalMs') parsed.supervisorHeartbeatIntervalMs = numberValue(argv[++index]);
-    else if (arg === '--source-sync-timeout-ms' || arg === '--sourceSyncTimeoutMs') parsed.sourceSyncTimeoutMs = numberValue(argv[++index]);
-    else if (arg === '--ticket-task-reconciliation-timeout-ms' || arg === '--ticketTaskReconciliationTimeoutMs') parsed.ticketTaskReconciliationTimeoutMs = numberValue(argv[++index]);
     else if (arg === '--limit') parsed.limit = numberValue(argv[++index]);
     else if (arg === '--threshold') parsed.threshold = numberValue(argv[++index]);
     else if (arg === '--owner-id' || arg === '--ownerId') parsed.ownerId = argv[++index];

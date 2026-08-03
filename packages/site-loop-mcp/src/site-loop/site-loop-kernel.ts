@@ -87,13 +87,11 @@ type SiteLoopPhasePlanInput<TState extends SiteLoopPayload> = {
 };
 
 export const DEFAULT_SITE_LOOP_PHASE_PLAN = [
-  'source_sync',
   'scheduled_sop_triggers',
   'inbox_bridge',
   'task_materialization',
   'task_executability_reconciliation',
   'resident_directive_emission',
-  'ticket_task_reconciliation',
   'pre_backlog_outcome_reconciliation',
   'reported_resident_task_state_reconciliation',
   'resident_backlog_recovery_emission',

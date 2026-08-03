@@ -15,9 +15,6 @@ writeFileSync(join(siteRoot, '.narada', 'capabilities', 'site-loop-config.json')
     agent_id: 'resident',
     role: 'resident',
   },
-  refs: {
-    ticket_projection: { kind: 'ticket_projection', ref: 'db-health-test' },
-  },
 }, null, 2), 'utf8');
 
 try {

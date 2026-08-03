@@ -5,14 +5,13 @@
   "description": "Schema for .narada/capabilities/site-loop-config.json. This file is a site-owned override merged onto the neutral site-loop defaults; root identity fields are required so active site-loop behavior is explicitly site-bound.",
   "type": "object",
   "additionalProperties": false,
-  "required": ["schema", "loop_id", "site_id", "display_name", "resident", "refs"],
+  "required": ["schema", "loop_id", "site_id", "display_name", "resident"],
   "properties": {
     "schema": { "const": "narada.site_loop.config.v2" },
     "loop_id": { "$ref": "#/$defs/nonEmptyString" },
     "site_id": { "$ref": "#/$defs/nonEmptyString" },
     "display_name": { "$ref": "#/$defs/nonEmptyString" },
     "resident": { "$ref": "#/$defs/resident" },
-    "refs": { "$ref": "#/$defs/refs" },
     "mcp": { "$ref": "#/$defs/mcp" },
     "scheduler": { "$ref": "#/$defs/scheduler" },
     "scheduled_sops": { "$ref": "#/$defs/scheduledSops" },
@@ -22,7 +21,7 @@
     "schemas": { "$ref": "#/$defs/stringMap" },
     "commands": { "$ref": "#/$defs/commands" },
     "policy": { "$ref": "#/$defs/policy" },
-    "mailbox_proof": { "$ref": "#/$defs/mailboxProof" },
+    "production_proof": { "$ref": "#/$defs/productionProof" },
     "persistence": { "$ref": "#/$defs/persistence" },
     "test_authority": { "$ref": "#/$defs/testAuthority" },
     "docs": { "$ref": "#/$defs/docs" },
@@ -67,22 +66,6 @@
         "role": { "$ref": "#/$defs/nonEmptyString" },
         "required_task_tools": { "$ref": "#/$defs/stringArray" },
         "required_mutating_task_tools": { "$ref": "#/$defs/stringArray" }
-      }
-    },
-    "refs": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": ["ticket_projection"],
-      "properties": {
-        "ticket_projection": {
-          "type": "object",
-          "additionalProperties": false,
-          "required": ["kind", "ref"],
-          "properties": {
-            "kind": { "$ref": "#/$defs/nonEmptyString" },
-            "ref": { "$ref": "#/$defs/nonEmptyString" }
-          }
-        }
       }
     },
     "mcp": {
@@ -178,27 +161,10 @@
         "preferred_role_arg": { "$ref": "#/$defs/nonEmptyString" }
       }
     },
-    "executableCommand": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": ["execution", "command", "args"],
-      "properties": {
-        "execution": { "const": "direct_spawn" },
-        "enabled": { "type": "boolean" },
-        "command": { "$ref": "#/$defs/nonEmptyString" },
-        "args": { "$ref": "#/$defs/stringArray" },
-        "working_directory": { "$ref": "#/$defs/nonEmptyString" },
-        "dry_run_arg": { "$ref": "#/$defs/nonEmptyString" },
-        "limit_arg": { "$ref": "#/$defs/nonEmptyString" },
-        "preferred_role_arg": { "$ref": "#/$defs/nonEmptyString" }
-      }
-    },
     "commands": {
       "type": "object",
       "additionalProperties": false,
       "properties": {
-        "source_sync": { "$ref": "#/$defs/executableCommand" },
-        "ticket_task_reconciliation": { "$ref": "#/$defs/executableCommand" },
         "status": { "$ref": "#/$defs/nonEmptyString" },
         "readiness": { "$ref": "#/$defs/nonEmptyString" },
         "projection_drift": { "$ref": "#/$defs/nonEmptyString" },
@@ -206,7 +172,6 @@
         "supervise": { "$ref": "#/$defs/nonEmptyString" },
         "agent_cli_resident": { "$ref": "#/$defs/nonEmptyString" },
         "live_fixture_proof": { "$ref": "#/$defs/nonEmptyString" },
-        "mailbox_proof": { "$ref": "#/$defs/nonEmptyString" },
         "background_agent_cli": { "$ref": "#/$defs/nonEmptyString" }
       }
     },
@@ -220,12 +185,10 @@
         "attention": { "$ref": "#/$defs/stringMap" }
       }
     },
-    "mailboxProof": {
+    "productionProof": {
       "type": "object",
       "additionalProperties": false,
       "properties": {
-        "schema": { "$ref": "#/$defs/nonEmptyString" },
-        "status_schema": { "$ref": "#/$defs/nonEmptyString" },
         "freshness_ms": { "$ref": "#/$defs/positiveNumber" }
       }
     },

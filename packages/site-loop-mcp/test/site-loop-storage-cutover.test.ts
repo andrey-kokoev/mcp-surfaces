@@ -31,7 +31,6 @@ writeFileSync(join(siteRoot, '.narada', 'capabilities', 'site-loop-config.json')
   site_id: 'narada-cutover-test',
   display_name: 'Cutover test loop',
   resident: { agent_id: 'resident', role: 'resident' },
-  refs: { ticket_projection: { kind: 'ticket_projection', ref: 'cutover-test' } },
 }, null, 2), 'utf8');
 
 const store = openTaskLifecycleStoreWithDiscipline(siteRoot, { write: true, storeMode: 'prepare' });
@@ -264,7 +263,6 @@ writeFileSync(join(partialRoot, '.narada', 'capabilities', 'site-loop-config.jso
   site_id: 'narada-partial-test',
   display_name: 'Partial test loop',
   resident: { agent_id: 'resident', role: 'resident' },
-  refs: { ticket_projection: { kind: 'ticket_projection', ref: 'partial-test' } },
 }, null, 2), 'utf8');
 const partialStore = openTaskLifecycleStoreWithDiscipline(partialRoot, { write: true, storeMode: 'prepare' });
 partialStore.db.exec(`

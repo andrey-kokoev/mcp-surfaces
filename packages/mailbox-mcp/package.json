@@ -1,9 +1,9 @@
 {
   "name": "@narada-core/mailbox-mcp",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "license": "Apache-2.0",
   "type": "module",
-  "description": "Read-only MCP surface for site-local synced mailbox projections.",
+  "description": "Mailbox synchronization, mechanical admission, durable events, and bounded local projection reads.",
   "bin": {
     "mailbox-mcp": "./dist/src/main.js"
   },
@@ -21,7 +21,7 @@
   "scripts": {
     "build": "tsc -b",
     "typecheck": "tsc -b --pretty false",
-    "test": "pnpm build && node --disable-warning=ExperimentalWarning dist/test/mailbox-mcp.test.js && node --disable-warning=ExperimentalWarning dist/test/mailbox-domain.test.js && node --disable-warning=ExperimentalWarning dist/test/protocol-smoke.test.js && node --disable-warning=ExperimentalWarning dist/test/site-fabric-mailbox-e2e.test.js"
+    "test": "pnpm build && node --disable-warning=ExperimentalWarning dist/test/mailbox-mcp.test.js && node --disable-warning=ExperimentalWarning dist/test/mailbox-domain.test.js && node --disable-warning=ExperimentalWarning dist/test/mailbox-domain-migration.test.js && node --disable-warning=ExperimentalWarning dist/test/protocol-smoke.test.js && node --disable-warning=ExperimentalWarning dist/test/site-fabric-mailbox-e2e.test.js"
   },
   "dependencies": {
     "@narada-core/mcp-fabric-contracts": "workspace:*",

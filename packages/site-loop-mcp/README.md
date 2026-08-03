@@ -94,9 +94,9 @@ Configured site loop:
 
 ## Site Loop Notes
 
-`site_loop_run_once` runs a bounded configured site loop pass. It can request configured `source_sync`, bridge inbox envelopes to task lifecycle work, reconcile configured ticket projection refs, reconcile pending Task Executability Assessment requests, and dispatch configured resident directives through the site loop logic. Source sync delegates to the configured command; this package does not itself implement mailbox sync.
+`site_loop_run_once` runs a bounded configured Site operating pass over already-admitted Site work. It reconciles pending Task Executability Assessment requests and dispatches resident directives. Mailbox sync, admission, SOP activation, and ticket association remain owned by Mailbox, Scheduler, SOP, and Work Lifecycle respectively; Site Loop does not execute or prove those domain workflows.
 
-Production non-dry execution remains refused through MCP and belongs to the scheduler/supervisor path. An explicitly declared `test_authority` may opt into a non-dry MCP run only with `wait_for_completion: true`, `requireLiveCarrier: false`, no live resident/source-sync edge, and `timeout_ms <= 10000`; the result identifies the isolated authority roots. Pass `test_authority: true` to `site_loop_runs_list` or `site_loop_run_show` to read that isolated run store explicitly.
+Production non-dry execution remains refused through MCP and belongs to the scheduler/supervisor path. An explicitly declared `test_authority` may opt into a non-dry MCP run only with `wait_for_completion: true`, `requireLiveCarrier: false`, no live resident edge, and `timeout_ms <= 10000`; the result identifies the isolated authority roots. Pass `test_authority: true` to `site_loop_runs_list` or `site_loop_run_show` to read that isolated run store explicitly.
 
 The `task_executability_reconciliation` phase is a recovery coordinator, not a second authority. Task Lifecycle owns request, lease, attempt, and assessment state; the Site Loop only leases a bounded batch and invokes the shared task-executability orchestrator. The phase is capped at ten requests per pass, reclaims expired leases after restart, and uses the same Task Lifecycle database as the other task phases. Its result is `deferred` with warning attention when the store/orchestrator binding is absent, `ok` when work is idle/progressing without execution failures, and `attention` when bounded evaluator/delegation failures require review. It never turns evaluator execution failure into a task verdict and never hardcodes a provider or model.
 
@@ -108,16 +108,13 @@ Core config fields:
 
 - `loop_id`, `site_id`, `display_name`
 - `resident.agent_id`, `resident.role`, required resident task tools
-- `refs.ticket_projection`
 - `schemas` for result packet names
-- `commands` for source sync, ticket reconciliation, status/readiness/proof operator hints
+- `commands` for status, readiness, and resident-proof operator hints
 - `policy` carrier admission and attention defaults
-- `mailbox_proof` schema and freshness window
+- `production_proof` freshness window
 - `docs` and `tests` allowlists
 
-Configured executable commands use an explicit `execution: "direct_spawn"` mode. The surface accepts argv-shaped command config only for the bounded source-sync and ticket-reconciliation slots; it rejects shell-string execution modes. Broader command execution remains owned by the structured-command surface.
-
-Readiness/coherence tools report whether operating prerequisites are satisfied, including optional mailbox-chain proof checks when requested.
+Readiness/coherence tools report whether Site operating prerequisites and resident production proof are satisfied. Domain-workflow readiness belongs to the surfaces that own those workflows.
 
 ## Canonical Site Operating Runtime Host migration
 

@@ -25,9 +25,6 @@ function writeFixtureSite(prefix: any, configPatch : any= {}) {
       agent_id: `${prefix}.resident`,
       role: 'resident',
     },
-    refs: {
-      ticket_projection: { kind: 'ticket_projection', ref: prefix },
-    },
     docs: [
       { path: 'README.md', description: `${prefix} readme.` },
       { path: 'AGENTS.md', description: `${prefix} agents.` },
@@ -50,7 +47,6 @@ function writeFixtureSite(prefix: any, configPatch : any= {}) {
 
 for (const fixture of [writeFixtureSite('alpha'), writeFixtureSite('beta', {
   resident: { agent_id: 'beta.operator', role: 'operator' },
-  refs: { ticket_projection: { kind: 'board_projection', ref: 'beta-board' } },
 })]) {
   const loaded = loadSiteLoopConfig(fixture.root);
   assert.equal(loaded.status, 'ok');
@@ -66,7 +62,6 @@ for (const fixture of [writeFixtureSite('alpha'), writeFixtureSite('beta', {
 
 const beta = writeFixtureSite('gamma', {
   display_name: 'Gamma non-sonar loop',
-  refs: { ticket_projection: { kind: 'ticket_projection', ref: 'gamma-tickets' } },
 });
 
 const proc = spawn(process.execPath, ['--no-warnings', serverPath, '--site-root', beta.root], {

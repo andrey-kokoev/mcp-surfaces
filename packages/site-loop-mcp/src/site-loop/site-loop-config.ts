@@ -5,17 +5,6 @@ import { SITE_LOOP_CONFIG_JSON_SCHEMA } from './site-loop-config-schema.js';
 
 type JsonObject = Record<string, unknown>;
 
-export type SiteLoopCommandConfig = {
-  execution: 'direct_spawn';
-  enabled?: boolean;
-  command: string;
-  args: string[];
-  working_directory?: string;
-  dry_run_arg?: string;
-  limit_arg?: string;
-  preferred_role_arg?: string;
-};
-
 export type SiteLoopScheduledSop = {
   id: string;
   sop_id: string;
@@ -37,9 +26,6 @@ export type SiteLoopConfig = {
     role: string;
     required_task_tools: string[];
     required_mutating_task_tools: string[];
-  };
-  refs: {
-    ticket_projection: { kind: string; ref: string };
   };
   mcp: {
     task_lifecycle_config_path: string;
@@ -87,8 +73,6 @@ export type SiteLoopConfig = {
   };
   schemas: Record<string, string>;
   commands: {
-    source_sync: SiteLoopCommandConfig;
-    ticket_task_reconciliation: SiteLoopCommandConfig;
     status: string;
     readiness: string;
     projection_drift: string;
@@ -96,7 +80,6 @@ export type SiteLoopConfig = {
     supervise: string;
     agent_cli_resident: string;
     live_fixture_proof: string;
-    mailbox_proof: string;
     background_agent_cli: string;
   };
   policy: {
@@ -105,9 +88,7 @@ export type SiteLoopConfig = {
     allowed_fallback_carriers: string[];
     attention: Record<string, string>;
   };
-  mailbox_proof: {
-    schema: string;
-    status_schema: string;
+  production_proof: {
     freshness_ms: number;
   };
   persistence: {
@@ -210,9 +191,6 @@ export const DEFAULT_SITE_LOOP_CONFIG: SiteLoopConfig = {
       'task_lifecycle_submit_report',
     ],
   },
-  refs: {
-    ticket_projection: { kind: 'ticket_projection', ref: 'site' },
-  },
   mcp: {
     task_lifecycle_config_path: '.ai/mcp/task-lifecycle-mcp.json',
     task_lifecycle_server_key: 'task-lifecycle',
@@ -283,8 +261,6 @@ export const DEFAULT_SITE_LOOP_CONFIG: SiteLoopConfig = {
   },
   schemas: {
     site_loop_run: 'narada.site_loop.run.v2',
-    source_sync: 'narada.site_loop.source_sync.v1',
-    ticket_task_reconciliation: 'narada.site_loop.ticket_task_reconciliation.v1',
     agent_outcome_reconciliation: 'narada.site_loop.agent_outcome_reconciliation.v1',
     reported_resident_task_state_reconciliation: 'narada.site_loop.reported_resident_task_state_reconciliation.v1',
     resident_backlog_recovery: 'narada.site_loop.resident_backlog_recovery.v1',
@@ -295,8 +271,6 @@ export const DEFAULT_SITE_LOOP_CONFIG: SiteLoopConfig = {
     operating_layer_readiness: 'narada.site_loop.operating_layer_readiness.v1',
     operating_layer_coherence: 'narada.site_loop.operating_layer_coherence.v1',
     surface_policy_noise: 'narada.site_loop.surface_policy_noise.v1',
-    resident_mailbox_proof: 'narada.site_loop.resident_mailbox_proof.v1',
-    resident_mailbox_proof_status: 'narada.site_loop.resident_mailbox_proof_status.v1',
     resident_status: 'narada.site_loop.resident_status.v1',
     resident_carrier_state: 'narada.site_loop.resident_carrier_state.v1',
     resident_host_evidence: 'narada.site_loop.resident_host_evidence.v1',
@@ -338,29 +312,8 @@ export const DEFAULT_SITE_LOOP_CONFIG: SiteLoopConfig = {
     resident_task_backlog_attention: 'narada.site_loop.resident_task_backlog_attention.v1',
     loop_escalation_reconciliation: 'narada.site_loop.escalation_reconciliation.v1',
     resident_carrier_retirement: 'narada.site_loop.resident_carrier_retirement.v1',
-    controlled_mailbox_source_status: 'narada.site_loop.controlled_mailbox_source_status.v1',
   },
   commands: {
-    source_sync: {
-      execution: 'direct_spawn',
-      enabled: true,
-      command: 'pnpm',
-      args: ['cli', '--', '--json', 'sync'],
-      working_directory: undefined,
-      dry_run_arg: '--dry-run',
-      limit_arg: undefined,
-      preferred_role_arg: undefined,
-    },
-    ticket_task_reconciliation: {
-      execution: 'direct_spawn',
-      enabled: true,
-      command: 'pnpm',
-      args: ['cli', '--', '--json', 'ticket', 'task', 'reconcile'],
-      working_directory: undefined,
-      preferred_role_arg: '--preferred-role',
-      limit_arg: '--limit',
-      dry_run_arg: '--dry-run',
-    },
     status: 'pnpm cli -- ops loop',
     readiness: 'pnpm cli -- ops readiness',
     projection_drift: 'not_available: task projection drift check is not configured; provide a typed MCP/site-loop check before enabling this readiness gate',
@@ -368,7 +321,6 @@ export const DEFAULT_SITE_LOOP_CONFIG: SiteLoopConfig = {
     supervise: 'pnpm cli -- loop supervise site.loop --ensure-resident',
     agent_cli_resident: '.\\narada-site.ps1 agent-start -Agent {resident_agent_id} -Carrier agent-cli -Runtime narada-agent-runtime-server -Exec',
     live_fixture_proof: 'MCP site_loop_proof_run({ proof_kind: "resident_production", ensure_resident: true, require_live_carrier: true, wait_for_completion: false })',
-    mailbox_proof: 'MCP site_loop_proof_run({ proof_kind: "controlled_mailbox", controlled_mailbox_source: "<ref>", ensure_resident: true, require_live_carrier: true, wait_for_completion: false })',
     background_agent_cli: 'pnpm cli -- resident summon --background --json',
   },
   policy: {
@@ -387,9 +339,7 @@ export const DEFAULT_SITE_LOOP_CONFIG: SiteLoopConfig = {
       duplicates_only: 'info',
     },
   },
-  mailbox_proof: {
-    schema: 'narada.site_loop.resident_mailbox_proof.v1',
-    status_schema: 'narada.site_loop.resident_mailbox_proof_status.v1',
+  production_proof: {
     freshness_ms: 24 * 60 * 60_000,
   },
   persistence: {
@@ -507,8 +457,6 @@ function validateSiteLoopConfig(config: SiteLoopConfig) {
   requireNonEmptyString(errors, config.resident?.role, 'resident.role');
   requireStringArray(errors, config.resident?.required_task_tools, 'resident.required_task_tools');
   requireStringArray(errors, config.resident?.required_mutating_task_tools, 'resident.required_mutating_task_tools');
-  requireNonEmptyString(errors, config.refs?.ticket_projection?.kind, 'refs.ticket_projection.kind');
-  requireNonEmptyString(errors, config.refs?.ticket_projection?.ref, 'refs.ticket_projection.ref');
   requireSafeRelativePath(errors, config.mcp?.task_lifecycle_config_path, 'mcp.task_lifecycle_config_path');
   requireNonEmptyString(errors, config.mcp?.task_lifecycle_server_key, 'mcp.task_lifecycle_server_key');
   requireNonEmptyString(errors, config.mcp?.task_lifecycle_entrypoint_hint, 'mcp.task_lifecycle_entrypoint_hint');
@@ -522,18 +470,14 @@ function validateSiteLoopConfig(config: SiteLoopConfig) {
   validateResidentRuntime(errors, config.resident_runtime);
   validateRecoveryPlan(errors, config.recovery_plan);
   validateSchemaMap(errors, config.schemas);
-  validateExecutableCommand(errors, config.commands?.source_sync, 'commands.source_sync');
-  validateExecutableCommand(errors, config.commands?.ticket_task_reconciliation, 'commands.ticket_task_reconciliation');
-  for (const key of ['status', 'readiness', 'projection_drift', 'run_once', 'supervise', 'agent_cli_resident', 'live_fixture_proof', 'mailbox_proof', 'background_agent_cli']) {
+  for (const key of ['status', 'readiness', 'projection_drift', 'run_once', 'supervise', 'agent_cli_resident', 'live_fixture_proof', 'background_agent_cli']) {
     requireNonEmptyString(errors, (config.commands as Record<string, unknown> | undefined)?.[key], `commands.${key}`);
   }
   requireNonEmptyString(errors, config.policy?.schema, 'policy.schema');
   requireStringArray(errors, config.policy?.allowed_preferred_carriers, 'policy.allowed_preferred_carriers');
   requireStringArray(errors, config.policy?.allowed_fallback_carriers, 'policy.allowed_fallback_carriers');
   validateStringMap(errors, config.policy?.attention, 'policy.attention');
-  requireNonEmptyString(errors, config.mailbox_proof?.schema, 'mailbox_proof.schema');
-  requireNonEmptyString(errors, config.mailbox_proof?.status_schema, 'mailbox_proof.status_schema');
-  if (!Number.isFinite(config.mailbox_proof?.freshness_ms) || config.mailbox_proof.freshness_ms <= 0) errors.push('mailbox_proof.freshness_ms_positive_number_required');
+  if (!Number.isFinite(config.production_proof?.freshness_ms) || config.production_proof.freshness_ms <= 0) errors.push('production_proof.freshness_ms_positive_number_required');
   validatePersistence(errors, config.persistence);
   validateTestAuthority(errors, config.test_authority);
   validateDocs(errors, config.docs);
@@ -632,13 +576,6 @@ function validateCommand(errors: string[], command: unknown, path: string) {
   for (const key of ['working_directory', 'dry_run_arg', 'limit_arg', 'preferred_role_arg']) {
     if (record?.[key] != null) requireNonEmptyString(errors, record[key], `${path}.${key}`);
   }
-}
-
-function validateExecutableCommand(errors: string[], command: unknown, path: string) {
-  const record: any = isPlainObject(command) ? command : null;
-  if (record?.execution !== 'direct_spawn') errors.push(`${path}.execution_direct_spawn_required`);
-  if (record?.enabled != null && typeof record.enabled !== 'boolean') errors.push(`${path}.enabled_boolean_required`);
-  validateCommand(errors, command, path);
 }
 
 function validateStringMap(errors: string[], value: unknown, path: string) {

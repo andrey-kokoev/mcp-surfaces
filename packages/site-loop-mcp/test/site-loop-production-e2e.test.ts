@@ -14,21 +14,19 @@ import {
 
 const TEST_ID = 'site-loop.production-scheduler-resident-recovery';
 const PRODUCTION_E2E_DEADLINE_MS = 150_000;
-const PRODUCTION_E2E_POLL_MS = 5_000;
 const resultPath = join(fileURLToPath(new URL('../..', import.meta.url)), '.tmp', 'e2e-results', `${TEST_ID}.json`);
 const evidence = installE2eArtifactRecorder(resultPath, {
   test_id: TEST_ID,
   authority: 'A1',
   authority_scope: 'explicitly_admitted_site_root',
   external_authority: 'declared_production_site_when_opted_in',
-  provider_boundary: 'configured_production_scheduler_resident_and_connector',
+  provider_boundary: 'configured_production_scheduler_and_resident',
 });
 const authorityEnabled = process.env.NARADA_E2E_SITE_LOOP_PRODUCTION === '1';
 const configuredSiteRoot = process.env.NARADA_E2E_SITE_LOOP_SITE_ROOT
   ? resolve(process.env.NARADA_E2E_SITE_LOOP_SITE_ROOT)
   : null;
 const declaredTaskName = process.env.NARADA_E2E_SITE_LOOP_TASK_NAME?.trim() || null;
-const controlledMailboxSource = process.env.NARADA_E2E_SITE_LOOP_CONTROLLED_MAILBOX_SOURCE?.trim() || null;
 const configPath = configuredSiteRoot
   ? join(configuredSiteRoot, '.narada', 'capabilities', 'site-loop-config.json')
   : null;
@@ -88,7 +86,7 @@ function notRun(reasonCode: string, details: JsonRecord = {}): void {
     authority: 'A1',
     authority_scope: 'explicitly_admitted_site_root',
     external_authority: 'not_run',
-    provider_boundary: 'configured_production_scheduler_resident_and_connector',
+    provider_boundary: 'configured_production_scheduler_and_resident',
     artifact_path: resultPath,
     reason_code: reasonCode,
     ...details,
@@ -98,43 +96,11 @@ function notRun(reasonCode: string, details: JsonRecord = {}): void {
   process.exitCode = 2;
 }
 
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolveSleep) => setTimeout(resolveSleep, ms));
-}
-
-async function waitForControlledMailboxProof(
-  client: ReturnType<typeof spawnContentLengthMcpServer>['client'],
-  requestId: string,
-  deadline: number,
-): Promise<JsonRecord> {
-  let last: JsonRecord = {};
-  for (let attempt = 0; Date.now() < deadline; attempt += 1) {
-    last = await toolJson(client, 80 + attempt, 'site_loop_proof_status', {});
-    const mailbox = (last.mailbox_proof ?? {}) as JsonRecord;
-    const request = (mailbox.request ?? {}) as JsonRecord;
-    if (String(request.request_id ?? '') === requestId && request.status === 'failed') {
-      throw new Error(`controlled_mailbox_proof_failed: ${JSON.stringify(last)}`);
-    }
-    if (
-      String(request.request_id ?? '') === requestId
-      && request.status === 'passed'
-      && request.result_status === 'passed'
-      && mailbox.status === 'fresh'
-      && mailbox.fresh === true
-    ) {
-      return last;
-    }
-    const remaining = deadline - Date.now();
-    if (remaining <= 0) break;
-    await sleep(Math.min(PRODUCTION_E2E_POLL_MS, remaining));
-  }
-  throw new Error(`controlled_mailbox_proof_timeout: ${JSON.stringify(last)}`);
-}
-
 let activeServer: ReturnType<typeof spawnContentLengthMcpServer> | null = null;
 let deadlineExceeded = false;
 
 async function main(): Promise<void> {
+  const deadline = Date.now() + PRODUCTION_E2E_DEADLINE_MS;
   if (!authorityEnabled) {
     notRun('production_authority_opt_in_required:NARADA_E2E_SITE_LOOP_PRODUCTION=1');
     return;
@@ -145,13 +111,6 @@ async function main(): Promise<void> {
   }
   if (!declaredTaskName) {
     notRun('task_name_required:NARADA_E2E_SITE_LOOP_TASK_NAME', { site_root: configuredSiteRoot });
-    return;
-  }
-  if (!controlledMailboxSource) {
-    notRun('controlled_mailbox_source_required:NARADA_E2E_SITE_LOOP_CONTROLLED_MAILBOX_SOURCE', {
-      site_root: configuredSiteRoot,
-      task_name: declaredTaskName,
-    });
     return;
   }
   if (!existsSync(configPath)) {
@@ -166,14 +125,13 @@ async function main(): Promise<void> {
   let observations: JsonRecord = {
     site_root: configuredSiteRoot,
     task_name: declaredTaskName,
-    controlled_mailbox_source: controlledMailboxSource,
   };
   try {
     const serverPath = fileURLToPath(new URL('../src/site-loop-mcp-server.js', import.meta.url));
     server = spawnContentLengthMcpServer(process.execPath, ['--no-warnings', serverPath, '--site-root', configuredSiteRoot], {
       cwd: configuredSiteRoot,
       label: 'site-loop production scheduler/resident/recovery e2e',
-      timeoutMs: 130_000,
+      timeoutMs: Math.max(1, deadline - Date.now()),
       closeTimeoutMs: 5_000,
     });
     activeServer = server;
@@ -255,43 +213,8 @@ async function main(): Promise<void> {
     assert.ok(String(afterCarrier.carrierSessionId), JSON.stringify(recoveryDrill));
     assert.notEqual(afterCarrier.carrierSessionId, beforeCarrier.carrierSessionId, JSON.stringify(recoveryDrill));
 
-    const mailboxProofStart = await toolJson(server.client, 8, 'site_loop_proof_run', {
-      proof_kind: 'controlled_mailbox',
-      controlled_mailbox_source: controlledMailboxSource,
-      ensure_resident: true,
-      require_live_carrier: true,
-      timeout_ms: 120_000,
-      poll_ms: PRODUCTION_E2E_POLL_MS,
-      wait_for_completion: false,
-    });
-    assert.equal(mailboxProofStart.status, 'started', JSON.stringify(mailboxProofStart));
-    assert.ok(String(mailboxProofStart.request_id), JSON.stringify(mailboxProofStart));
-    const mailboxProof = await waitForControlledMailboxProof(
-      server.client,
-      String(mailboxProofStart.request_id),
-      Date.now() + PRODUCTION_E2E_DEADLINE_MS,
-    );
-    const mailboxProofStatus = (mailboxProof.mailbox_proof ?? {}) as JsonRecord;
-    const mailboxRequest = (mailboxProofStatus.request ?? {}) as JsonRecord;
-    assert.equal(mailboxRequest.status, 'passed', JSON.stringify(mailboxProof));
-    assert.equal(mailboxRequest.result_status, 'passed', JSON.stringify(mailboxProof));
-    assert.equal(mailboxProofStatus.status, 'fresh', JSON.stringify(mailboxProof));
-    assert.equal(mailboxProofStatus.fresh, true, JSON.stringify(mailboxProof));
-
     const operatingAfter = await toolJson(server.client, 9, 'site_loop_operating_status', { limit: 25 });
-    const operatingMailboxProof = (operatingAfter.mailbox_proof ?? {}) as JsonRecord;
-    const mailboxRecord = (operatingMailboxProof.proof ?? {}) as JsonRecord;
-    assert.equal(mailboxRecord.status, 'passed', JSON.stringify(operatingAfter));
-    assert.equal(mailboxRecord.mode, 'mailbox_live_unattended', JSON.stringify(operatingAfter));
-    assert.equal(mailboxRecord.mailbox_proof, true, JSON.stringify(operatingAfter));
-    assert.equal(mailboxRecord.live_unattended_proven, true, JSON.stringify(operatingAfter));
-    assert.equal(mailboxRecord.production_proof, true, JSON.stringify(operatingAfter));
-    const mailboxMaterialization = (mailboxRecord.mailbox_materialization ?? {}) as JsonRecord;
-    assert.equal(mailboxMaterialization.controlled_source, controlledMailboxSource, JSON.stringify(operatingAfter));
-    const controlledSourceStatus = (mailboxMaterialization.controlled_source_status ?? {}) as JsonRecord;
-    assert.equal(controlledSourceStatus.status, 'matched_new_directive', JSON.stringify(operatingAfter));
-    assert.equal(Number(mailboxMaterialization.new_directive_count) > 0, true, JSON.stringify(operatingAfter));
-    assert.equal(Number(mailboxMaterialization.bridge_errors ?? 0), 0, JSON.stringify(operatingAfter));
+    assert.equal(operatingAfter.status, 'ok', JSON.stringify(operatingAfter));
 
     const unifiedAfter = await toolJson(server.client, 10, 'site_loop_unified_status', statusArgs);
     assert.equal(unifiedAfter.status, 'ok', JSON.stringify(unifiedAfter));
@@ -301,19 +224,13 @@ async function main(): Promise<void> {
     assert.equal(gate(readiness, 'resident_carrier').status, 'ok', JSON.stringify(readiness));
     assert.equal(gate(readiness, 'production_runtime').status, 'ok', JSON.stringify(readiness));
 
-    const coherence = await toolJson(server.client, 12, 'site_loop_coherence', {
-      require_production: true,
-      require_mailbox_chain: true,
-    });
+    const coherence = await toolJson(server.client, 12, 'site_loop_coherence', { require_production: true });
     assert.equal(coherence.status, 'coherent', JSON.stringify(coherence));
     assert.equal((coherence.required as JsonRecord).production_runtime, true, JSON.stringify(coherence));
-    assert.equal((coherence.required as JsonRecord).mailbox_proof, true, JSON.stringify(coherence));
 
     const proofAfter = await toolJson(server.client, 13, 'site_loop_proof_status', {});
     assert.equal((proofAfter.production_proof as JsonRecord).status, 'fresh', JSON.stringify(proofAfter));
     assert.equal((proofAfter.production_proof as JsonRecord).fresh, true, JSON.stringify(proofAfter));
-    assert.equal((proofAfter.mailbox_proof as JsonRecord).status, 'fresh', JSON.stringify(proofAfter));
-    assert.equal((proofAfter.mailbox_proof as JsonRecord).fresh, true, JSON.stringify(proofAfter));
 
     const recoveryPlanAfter = await toolJson(server.client, 14, 'site_loop_recovery_plan', { ...statusArgs, include_commands: true });
     assert.equal(recoveryPlanAfter.status, 'ok', JSON.stringify(recoveryPlanAfter));
@@ -325,7 +242,6 @@ async function main(): Promise<void> {
     observations = {
       site_root: configuredSiteRoot,
       task_name: declaredTaskName,
-      controlled_mailbox_source: controlledMailboxSource,
       validation,
       scheduler_before: unifiedBefore.scheduled_task,
       scheduler_after: unifiedAfter.scheduled_task,
@@ -333,8 +249,6 @@ async function main(): Promise<void> {
       recovery_plan_after: recoveryPlanAfter,
       proof_before: proofBefore,
       recovery_drill: recoveryDrill,
-      mailbox_proof_start: mailboxProofStart,
-      mailbox_proof: mailboxProof,
       operating_after: operatingAfter,
       readiness,
       coherence,
@@ -343,7 +257,7 @@ async function main(): Promise<void> {
     evidence.update({
       status,
       external_authority: 'declared_production_site',
-      provider_boundary: 'configured_production_scheduler_resident_and_connector',
+      provider_boundary: 'configured_production_scheduler_and_resident',
       ...observations,
     });
   } catch (error) {
@@ -372,7 +286,7 @@ async function main(): Promise<void> {
       authority: 'A1',
       authority_scope: 'explicitly_admitted_site_root',
       external_authority: status === 'not_run' ? 'not_run' : 'declared_production_site',
-      provider_boundary: 'configured_production_scheduler_resident_and_connector',
+      provider_boundary: 'configured_production_scheduler_and_resident',
       artifact_path: resultPath,
       failure_reason: failureReason,
       reason_code: status === 'not_run' ? observations.reason_code ?? null : null,

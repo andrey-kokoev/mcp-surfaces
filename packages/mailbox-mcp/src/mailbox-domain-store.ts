@@ -26,6 +26,11 @@ export interface SyncGenerationRow {
   completed_at: string | null;
 }
 
+export interface OutboxPage {
+  items: JsonRecord[];
+  has_more: boolean;
+}
+
 export interface StagedGenerationRecord {
   record_id: string;
   ordinal: string | null;
@@ -63,7 +68,12 @@ export class MailboxDomainStore {
     mkdirSync(dirname(path), { recursive: true });
     this.db = new DatabaseSync(path);
     this.db.exec('pragma journal_mode = WAL; pragma foreign_keys = ON; pragma busy_timeout = 5000;');
-    this.initSchema();
+    try {
+      this.initSchema();
+    } catch (error) {
+      this.db.close();
+      throw error;
+    }
   }
 
   close(): void {
@@ -326,11 +336,12 @@ export class MailboxDomainStore {
         };
         this.db.prepare(`
           insert into mailbox_outbox(
-            event_id, topic, aggregate_id, aggregate_revision, schema_version,
+            event_id, scope_id, topic, aggregate_id, aggregate_revision, schema_version,
             causation_id, idempotency_key, partition_key, occurred_at, payload_json
-          ) values (?, 'mailbox.message.first_observed', ?, 1, 1, ?, ?, ?, ?, ?)
+          ) values (?, ?, 'mailbox.message.first_observed', ?, 1, 1, ?, ?, ?, ?, ?)
         `).run(
           eventId,
+          generation.scope_id,
           observationId,
           generationId,
           eventId,
@@ -476,11 +487,12 @@ export class MailboxDomainStore {
         };
         const event = this.db.prepare(`
           insert or ignore into mailbox_outbox(
-            event_id, topic, aggregate_id, aggregate_revision, schema_version,
+            event_id, scope_id, topic, aggregate_id, aggregate_revision, schema_version,
             causation_id, idempotency_key, partition_key, occurred_at, payload_json
-          ) values (?, 'mailbox.message.first_observed', ?, 1, 1, ?, ?, ?, ?, ?)
+          ) values (?, ?, 'mailbox.message.first_observed', ?, 1, 1, ?, ?, ?, ?, ?)
         `).run(
           eventId,
+          input.scope_id,
           observationId,
           input.generation_id,
           eventId,
@@ -530,19 +542,27 @@ export class MailboxDomainStore {
     fact_id: string;
     policy_version: string;
     decision: JsonRecord;
+    event_topic: 'mailbox.message.admitted' | 'mailbox.message.rejected';
+    event_payload: JsonRecord;
+    source_event_id: string;
     now: string;
   }): { decision: JsonRecord; replayed: boolean } {
     return this.transaction(() => {
       const existing = this.db.prepare(`
-        select request_fingerprint, decision_json from mailbox_admission_receipts
+        select scope_id, fact_id, decision_json from mailbox_admission_receipts
         where idempotency_key = ?
       `).get(input.idempotency_key) as JsonRecord | undefined;
       if (existing) {
-        if (existing.request_fingerprint !== input.request_fingerprint) {
+        if (existing.scope_id !== input.scope_id || existing.fact_id !== input.fact_id) {
           throw new Error(`mailbox_admission_idempotency_conflict:${input.idempotency_key}`);
         }
         return { decision: parseRecord(existing.decision_json), replayed: true };
       }
+      const canonical = this.db.prepare(`
+        select decision_json from mailbox_admission_receipts
+        where scope_id = ? and fact_id = ?
+      `).get(input.scope_id, input.fact_id) as JsonRecord | undefined;
+      if (canonical) return { decision: parseRecord(canonical.decision_json), replayed: true };
       this.db.prepare(`
         insert into mailbox_admission_receipts(
           admission_id, idempotency_key, request_fingerprint, scope_id, fact_id,
@@ -558,42 +578,102 @@ export class MailboxDomainStore {
         JSON.stringify(input.decision),
         input.now,
       );
+      const eventId = stableId('mbe_', `admission\u0000${input.scope_id}\u0000${input.fact_id}`);
+      this.db.prepare(`
+        insert into mailbox_outbox(
+          event_id, scope_id, topic, aggregate_id, aggregate_revision, schema_version,
+          causation_id, idempotency_key, partition_key, occurred_at, payload_json
+        ) values (?, ?, ?, ?, 1, 1, ?, ?, ?, ?, ?)
+      `).run(
+        eventId,
+        input.scope_id,
+        input.event_topic,
+        input.admission_id,
+        input.source_event_id,
+        eventId,
+        input.admission_id,
+        input.now,
+        JSON.stringify(input.event_payload),
+      );
       return { decision: input.decision, replayed: false };
     });
   }
 
-  registerOutboxConsumer(consumerId: string, startAt: string, now: string): JsonRecord {
+  admissionByFact(scopeId: string, factId: string): JsonRecord | null {
+    const row = this.db.prepare(`
+      select decision_json from mailbox_admission_receipts where scope_id = ? and fact_id = ?
+    `).get(scopeId, factId) as JsonRecord | undefined;
+    return row ? parseRecord(row.decision_json) : null;
+  }
+
+  requireFirstObservedEvent(eventId: string, scopeId: string, factId: string): JsonRecord {
+    const row = this.db.prepare(`
+      select scope_id, topic, payload_json from mailbox_outbox where event_id = ?
+    `).get(eventId) as JsonRecord | undefined;
+    if (!row) throw new Error(`mailbox_admission_source_event_not_found:${eventId}`);
+    const payload = parseRecord(row.payload_json);
+    if (row.topic !== 'mailbox.message.first_observed'
+      || row.scope_id !== scopeId
+      || payload.fact_id !== factId
+      || payload.mailbox_id !== scopeId) {
+      throw new Error(`mailbox_admission_source_event_mismatch:${eventId}`);
+    }
+    return payload;
+  }
+
+  registerOutboxConsumer(consumerId: string, scopeId: string, topics: string[], startAt: string, now: string): JsonRecord {
+    const topicsJson = canonicalJson(topics);
     return this.transaction(() => {
       const existing = this.db.prepare('select * from mailbox_outbox_consumers where consumer_id = ?').get(consumerId) as JsonRecord | undefined;
       if (existing) {
-        if (existing.start_at !== startAt) throw new Error(`mailbox_outbox_consumer_conflict:${consumerId}`);
+        if (existing.scope_id === null && existing.topics_json === null) {
+          this.db.prepare(`
+            update mailbox_outbox_consumers set scope_id = ?, topics_json = ? where consumer_id = ?
+          `).run(scopeId, topicsJson, consumerId);
+          return this.db.prepare('select * from mailbox_outbox_consumers where consumer_id = ?').get(consumerId) as JsonRecord;
+        }
+        if (existing.start_at !== startAt || existing.scope_id !== scopeId || existing.topics_json !== topicsJson) {
+          throw new Error(`mailbox_outbox_consumer_conflict:${consumerId}`);
+        }
         return existing;
       }
       this.db.prepare(`
-        insert into mailbox_outbox_consumers(consumer_id, start_at, created_at)
-        values (?, ?, ?)
-      `).run(consumerId, startAt, now);
+        insert into mailbox_outbox_consumers(consumer_id, scope_id, topics_json, start_at, created_at)
+        values (?, ?, ?, ?, ?)
+      `).run(consumerId, scopeId, topicsJson, startAt, now);
       return this.db.prepare('select * from mailbox_outbox_consumers where consumer_id = ?').get(consumerId) as JsonRecord;
     });
   }
 
-  listOutbox(consumerId: string, limit: number): JsonRecord[] {
-    const consumer = this.db.prepare('select start_at from mailbox_outbox_consumers where consumer_id = ?').get(consumerId) as JsonRecord | undefined;
+  listOutbox(consumerId: string, limit: number): OutboxPage {
+    const consumer = this.db.prepare('select scope_id, topics_json, start_at from mailbox_outbox_consumers where consumer_id = ?').get(consumerId) as JsonRecord | undefined;
     if (!consumer) throw new Error(`mailbox_outbox_consumer_not_registered:${consumerId}`);
+    if (typeof consumer.scope_id !== 'string' || typeof consumer.topics_json !== 'string') {
+      throw new Error(`mailbox_outbox_consumer_v2_registration_required:${consumerId}`);
+    }
+    const topics = JSON.parse(consumer.topics_json) as unknown;
+    if (!Array.isArray(topics) || topics.length === 0 || topics.some((topic) => typeof topic !== 'string')) {
+      throw new Error(`mailbox_outbox_consumer_topics_invalid:${consumerId}`);
+    }
+    const placeholders = topics.map(() => '?').join(', ');
     const rows = this.db.prepare(`
-      select event_id, topic, aggregate_id, aggregate_revision, schema_version,
+      select event_id, scope_id, topic, aggregate_id, aggregate_revision, schema_version,
              causation_id, idempotency_key, partition_key, occurred_at, payload_json
       from mailbox_outbox event
       where event.occurred_at >= ?
+        and event.scope_id = ?
+        and event.topic in (${placeholders})
         and not exists (
           select 1 from mailbox_outbox_receipts receipt
           where receipt.consumer_id = ? and receipt.event_id = event.event_id
         )
       order by event.occurred_at asc, event.event_id asc limit ?
-    `).all(String(consumer.start_at), consumerId, limit) as JsonRecord[];
-    return rows.map((row) => ({
+    `).all(String(consumer.start_at), String(consumer.scope_id), ...topics, consumerId, limit + 1) as JsonRecord[];
+    const hasMore = rows.length > limit;
+    const items = rows.slice(0, limit).map((row) => ({
       schema: 'narada.mailbox.outbox_event.v1',
       event_id: String(row.event_id),
+      scope_id: String(row.scope_id),
       topic: String(row.topic),
       aggregate_id: String(row.aggregate_id),
       aggregate_revision: Number(row.aggregate_revision),
@@ -604,14 +684,22 @@ export class MailboxDomainStore {
       occurred_at: String(row.occurred_at),
       payload: parseRecord(row.payload_json),
     }));
+    return { items, has_more: hasMore };
   }
 
   ackOutbox(consumerId: string, eventId: string, receipt: JsonRecord, now: string): JsonRecord {
     return this.transaction(() => {
-      const consumer = this.db.prepare('select consumer_id from mailbox_outbox_consumers where consumer_id = ?').get(consumerId);
+      const consumer = this.db.prepare('select scope_id, topics_json from mailbox_outbox_consumers where consumer_id = ?').get(consumerId) as JsonRecord | undefined;
       if (!consumer) throw new Error(`mailbox_outbox_consumer_not_registered:${consumerId}`);
-      const event = this.db.prepare('select event_id from mailbox_outbox where event_id = ?').get(eventId);
+      if (typeof consumer.scope_id !== 'string' || typeof consumer.topics_json !== 'string') {
+        throw new Error(`mailbox_outbox_consumer_v2_registration_required:${consumerId}`);
+      }
+      const topics = JSON.parse(consumer.topics_json) as unknown;
+      const event = this.db.prepare('select event_id, scope_id, topic from mailbox_outbox where event_id = ?').get(eventId) as JsonRecord | undefined;
       if (!event) throw new Error(`mailbox_outbox_event_not_found:${eventId}`);
+      if (event.scope_id !== consumer.scope_id || !Array.isArray(topics) || !topics.includes(event.topic)) {
+        throw new Error(`mailbox_outbox_event_not_subscribed:${consumerId}:${eventId}`);
+      }
       const fingerprint = sha256(canonicalJson(receipt));
       const existing = this.db.prepare(`
         select receipt_fingerprint, receipt_json from mailbox_outbox_receipts
@@ -684,6 +772,7 @@ export class MailboxDomainStore {
       );
       create table if not exists mailbox_outbox(
         event_id text primary key,
+        scope_id text not null,
         topic text not null,
         aggregate_id text not null,
         aggregate_revision integer not null,
@@ -696,6 +785,8 @@ export class MailboxDomainStore {
       );
       create table if not exists mailbox_outbox_consumers(
         consumer_id text primary key,
+        scope_id text,
+        topics_json text,
         start_at text not null,
         created_at text not null
       );
@@ -729,6 +820,51 @@ export class MailboxDomainStore {
       create index if not exists mailbox_outbox_order_idx on mailbox_outbox(occurred_at, event_id);
       create index if not exists mailbox_generation_scope_idx on mailbox_sync_generations(scope_id, created_at);
     `);
+    this.migrateSchemaV2();
+  }
+
+  private migrateSchemaV2(): void {
+    this.transaction(() => {
+      const outboxColumns = this.tableColumns('mailbox_outbox');
+      if (!outboxColumns.has('scope_id')) this.db.exec('alter table mailbox_outbox add column scope_id text;');
+      this.db.exec(`
+        update mailbox_outbox
+        set scope_id = coalesce(json_extract(payload_json, '$.mailbox_id'), json_extract(payload_json, '$.scope_id'))
+        where scope_id is null
+      `);
+      const missingScope = this.db.prepare('select event_id from mailbox_outbox where scope_id is null limit 1').get() as JsonRecord | undefined;
+      if (missingScope) throw new Error(`mailbox_outbox_scope_migration_failed:${String(missingScope.event_id)}`);
+
+      const consumerColumns = this.tableColumns('mailbox_outbox_consumers');
+      if (!consumerColumns.has('scope_id')) this.db.exec('alter table mailbox_outbox_consumers add column scope_id text;');
+      if (!consumerColumns.has('topics_json')) this.db.exec('alter table mailbox_outbox_consumers add column topics_json text;');
+
+      const duplicates = this.db.prepare(`
+        select scope_id, fact_id from mailbox_admission_receipts
+        group by scope_id, fact_id having count(*) > 1
+      `).all() as JsonRecord[];
+      for (const duplicate of duplicates) {
+        const rows = this.db.prepare(`
+          select rowid, decision_json from mailbox_admission_receipts
+          where scope_id = ? and fact_id = ? order by rowid
+        `).all(String(duplicate.scope_id), String(duplicate.fact_id)) as JsonRecord[];
+        if (rows.some((row) => row.decision_json !== rows[0]?.decision_json)) {
+          throw new Error(`mailbox_admission_migration_divergent_duplicate:${String(duplicate.scope_id)}:${String(duplicate.fact_id)}`);
+        }
+        for (const row of rows.slice(1)) this.db.prepare('delete from mailbox_admission_receipts where rowid = ?').run(Number(row.rowid));
+      }
+      this.db.exec(`
+        create unique index if not exists mailbox_admission_scope_fact_idx
+        on mailbox_admission_receipts(scope_id, fact_id);
+        create index if not exists mailbox_outbox_subscription_idx
+        on mailbox_outbox(scope_id, topic, occurred_at, event_id);
+        pragma user_version = 2;
+      `);
+    });
+  }
+
+  private tableColumns(table: string): Set<string> {
+    return new Set((this.db.prepare(`pragma table_info(${table})`).all() as JsonRecord[]).map((row) => String(row.name)));
   }
 
   private transaction<T>(fn: () => T): T {
