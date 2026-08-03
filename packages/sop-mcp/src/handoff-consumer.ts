@@ -111,7 +111,7 @@ export async function runSopAgentHandoffConsumerPass(
       const claimed = await fabric.call(options.sopSurfaceId, 'sop_handoff_claim', {
         consumer_id: options.consumerId,
         executor: 'agent',
-        lease_ms: options.leaseMs,
+        lease_ms: handoffLeaseMs(options),
       });
       if (claimed.status === 'empty' || claimed.handoff === null || claimed.handoff === undefined) break;
       const handoff = parseClaimedHandoff(requireRecord(claimed.handoff, 'sop_handoff_claim_invalid'), 'agent');
@@ -377,6 +377,11 @@ function normalizeAgentOptions(input: SopAgentHandoffConsumerOptions): Normalize
     requestTimeoutMs: boundedInteger(input.requestTimeoutMs, 30_000, 1_000, 300_000, 'requestTimeoutMs'),
     ...(input.loaderEntrypoint ? { loaderEntrypoint: input.loaderEntrypoint } : {}),
   };
+}
+
+function handoffLeaseMs(options: NormalizedAgentOptions): number {
+  const boundedWorkerCallMs = Math.min(180_000, options.maxRunMs) + options.requestTimeoutMs + 5_000;
+  return Math.min(300_000, Math.max(options.leaseMs, boundedWorkerCallMs));
 }
 
 type NormalizedOperatorOptions = Required<Omit<SopOperatorHandoffCompletionOptions, 'loaderEntrypoint' | 'resultRef' | 'errorMessage'>> & {

@@ -436,19 +436,22 @@ export function createWorkLifecycleRuntime(options: {
   env?: NodeJS.ProcessEnv;
   stderr?: NodeJS.WritableStream;
 }): WorkLifecycleRuntime {
+  const ownsStore = options.store === undefined;
   const store = options.store ?? openPreparedWorkLifecycleStore(options.siteRoot);
-  configureTaskLifecycleMcpRuntime({
-    argv: ['--site-root', options.siteRoot],
-    cwd: options.siteRoot,
-    env: options.env ?? process.env,
-    stderr: options.stderr ?? process.stderr,
-    storeOverride: store.taskStore,
-  });
-  return {
-    siteRoot: options.siteRoot,
-    store,
-    ownsStore: options.store === undefined,
-  };
+  try {
+    configureTaskLifecycleMcpRuntime({
+      argv: ['--site-root', options.siteRoot],
+      cwd: options.siteRoot,
+      env: options.env ?? process.env,
+      stderr: options.stderr ?? process.stderr,
+      storeOverride: store.taskStore,
+    });
+    store.startWriterAuthorityHeartbeat();
+    return { siteRoot: options.siteRoot, store, ownsStore };
+  } catch (error) {
+    if (ownsStore) store.close();
+    throw error;
+  }
 }
 
 export async function handleWorkLifecycleMcpRequest(

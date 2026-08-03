@@ -133,6 +133,9 @@ const agentOptions = {
   invocationPlanRef: 'invocation-plan:test',
   requiredMcpTools: ['work_lifecycle_ticket_show', 'mailbox_message_show'],
   maxHandoffs: 1,
+  leaseMs: 60_000,
+  maxRunMs: 120_000,
+  requestTimeoutMs: 15_000,
 };
 
 test('agent handoff survives a consumer boundary and reuses one idempotent worker run', async () => {
@@ -141,6 +144,8 @@ test('agent handoff survives a consumer boundary and reuses one idempotent worke
   assert.equal(first.status, 'completed');
   assert.equal(first.handoffs_deferred, 1);
   const firstWorkerCall = fabric.calls.find((call) => call.tool === 'worker_run')!;
+  const firstClaim = fabric.calls.find((call) => call.tool === 'sop_handoff_claim')!;
+  assert.equal(firstClaim.args.lease_ms, 140_000);
   assert.equal(firstWorkerCall.args.idempotency_key, 'sop_handoff_agent_1');
   assert.equal((firstWorkerCall.args.constraints as JsonRecord).authority, 'read');
   assert.equal((firstWorkerCall.args.constraints as JsonRecord).invocation_plan_ref, 'invocation-plan:test');
