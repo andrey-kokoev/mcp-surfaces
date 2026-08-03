@@ -152,6 +152,34 @@ The intended e2e is a non-dry `site_loop_run_once` that mutates only the
 declared test authority roots, verifies run records and expected fixture
 processing, and proves no production state changed.
 
+## Closure-Gate Mechanics
+
+Site Loop has two distinct end-to-end gates:
+
+- The isolated gate is deterministic and non-production. It uses real spawned
+  Site Loop, Mailbox, Task Lifecycle, Work Lifecycle, Scheduler, supervisor,
+  and NARS processes. Only the external mailbox and model-provider boundaries
+  are contract fixtures.
+- The production gate is explicitly admitted against a declared Site root and
+  real scheduler/resident/connector boundaries. Missing prerequisites produce
+  `status: "not_run"` and must never be reported as a pass.
+
+The isolated gate is complete only when all six durable interruption boundaries
+have been exercised and replayed: mailbox cursor commit, mailbox observation
+receipt, ticket source projection, scheduler activation admission, agent
+decision receipt, and terminal proposal projection. Every scenario must prove
+durable receipts, cursor advancement, both terminal routes, exactly-once
+projection, and absence of skipped phases. Partial boundary selection is
+diagnostic coverage, not a passing closure result.
+
+Scenario roots are isolated and may run concurrently. NARS turns within one
+Site are serialized because they share the Site's SQLite intelligence registry;
+parallel turns on that registry are not a valid optimization. The ambient NARS
+MCP gateway may be disabled in the isolated harness only when the supervisor
+and bridge explicitly spawn and exercise the mechanical MCP surfaces. Cleanup
+waits for every scenario worker and descendant to settle before deleting roots;
+any remaining temporary root fails the gate.
+
 ## Minimal Site Config
 
 ```json

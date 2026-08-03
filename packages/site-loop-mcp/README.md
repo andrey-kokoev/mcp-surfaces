@@ -242,6 +242,27 @@ fixtures:
 pnpm --filter @narada-core/site-loop-mcp test:e2e:isolated
 ```
 
+The isolated gate is a complete closure proof, not a smoke test. Every run
+must execute all six interruption boundaries:
+
+- mailbox generation cursor committed
+- mailbox observation receipt
+- ticket source projection
+- scheduler activation admitted
+- agent decision receipt
+- terminal proposal projection
+
+Each boundary uses an isolated Site root and proves interruption, replay,
+durable receipts, cursor advancement, both terminal routes (response draft and
+follow-up task), exactly-once projection, and no silent phase skips. The gate
+deadline is 180 seconds. Scenarios may run concurrently because their roots
+are isolated, but NARS decisions within one Site remain serialized because
+they share that Site's SQLite intelligence registry. NARS is a real child
+process; its ambient MCP bootstrap is disabled only because the supervisor and
+bridge separately spawn and exercise the real mechanical MCP surfaces. Cleanup
+runs after every scenario worker has settled and any remaining temporary root
+fails the gate.
+
 The production gate is opt-in and never substitutes a default Site, scheduler
 task, or mailbox source. It returns `status: "not_run"` with exit code 2 until
 all four declarations are present:
