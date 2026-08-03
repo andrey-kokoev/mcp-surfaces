@@ -9,6 +9,7 @@ export interface SiteFabricClientOptions {
   allowedSurfaceIds?: readonly string[];
   requestTimeoutMs?: number;
   closeTimeoutMs?: number;
+  detachTimeoutMs?: number;
   maxConnections?: number;
   maxMaterializedResultChars?: number;
   materializedResultPageChars?: number;
@@ -64,7 +65,11 @@ export class SiteFabricClient {
     const siteRoot = requiredString(options.siteRoot, 'siteRoot');
     const allowedSurfaceIds = normalizeSurfaceIds(options.allowedSurfaceIds);
     const maxConnections = positiveInteger(options.maxConnections, Math.max(8, allowedSurfaceIds?.size ?? 0), 'maxConnections');
-    const detachTimeoutMs = positiveInteger(options.closeTimeoutMs, 5_000, 'closeTimeoutMs');
+    const detachTimeoutMs = positiveInteger(
+      options.detachTimeoutMs,
+      options.closeTimeoutMs ?? 5_000,
+      'detachTimeoutMs',
+    );
     const maxMaterializedResultChars = positiveInteger(
       options.maxMaterializedResultChars,
       DEFAULT_MAX_MATERIALIZED_RESULT_CHARS,
@@ -247,15 +252,17 @@ export class SiteFabricClient {
     let firstError: Error | null = null;
     const connections = [...this.#connections.values()].reverse();
     this.#connections.clear();
-    for (const connection of connections) {
-      try {
-        await this.#client.callTool(
-          'mcp_loader_detach',
-          { connection_id: connection.connectionId },
-          this.#detachTimeoutMs,
-        );
-      } catch (error) {
-        firstError ??= toError(error);
+    const detachResults = await Promise.allSettled(connections.map((connection) => this.#client.callTool(
+      'mcp_loader_detach',
+      { connection_id: connection.connectionId },
+      this.#detachTimeoutMs,
+    )));
+    for (let index = 0; index < detachResults.length; index += 1) {
+      const result = detachResults[index]!;
+      if (result.status === 'rejected') {
+        const connection = connections[index]!;
+        const reason = toError(result.reason);
+        firstError ??= new Error(`mcp_loader_detach_failed:${connection.surfaceId}:${reason.message}`);
       }
     }
     await this.#client.close();

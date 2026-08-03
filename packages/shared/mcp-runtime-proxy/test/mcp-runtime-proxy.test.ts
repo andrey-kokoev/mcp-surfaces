@@ -582,8 +582,8 @@ try {
     assert.equal(typeof cycleRecord.supervisor_pid, 'number');
     assert.equal(typeof cycleRecord.managed_child_pid, 'number');
     assert.equal(typeof cycleRecord.generation_id, 'string');
-    const identityPath = join(cycleDiagnostics, `supervisor-${cycleRecord.proxy_pid}.json`);
-    const identity = JSON.parse(readFileSync(identityPath, 'utf8')) as Record<string, any>;
+    assert.equal(typeof cycleRecord.supervisor_identity_path, 'string');
+    const identity = JSON.parse(readFileSync(String(cycleRecord.supervisor_identity_path), 'utf8')) as Record<string, any>;
     assert.equal(identity.schema, 'narada.process_supervisor.identity.v1');
     assert.equal(identity.supervisor_pid, cycleRecord.supervisor_pid);
     assert.equal(identity.managed_child_pid, cycleRecord.managed_child_pid);

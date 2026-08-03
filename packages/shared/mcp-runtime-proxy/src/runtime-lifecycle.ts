@@ -46,6 +46,7 @@ export type RuntimeInstanceRecord = {
   artifact_manifest_path?: string | null;
   artifact_manifest_fingerprint?: string | null;
   generation_id?: string | null;
+  supervisor_identity_path?: string | null;
   closed_at?: string | null;
 };
 

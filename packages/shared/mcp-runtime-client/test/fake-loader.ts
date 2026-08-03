@@ -36,7 +36,13 @@ for await (const line of lines) {
     continue;
   }
   if (name === 'mcp_loader_detach') {
-    respond(request.id, toolResult({ schema: 'narada.mcp_loader.detached.v1', status: 'detached' }));
+    const delayMs = Number(process.env.FAKE_LOADER_DETACH_DELAY_MS ?? 0);
+    const finish = () => respond(
+      request.id,
+      toolResult({ schema: 'narada.mcp_loader.detached.v1', status: 'detached' }),
+    );
+    if (Number.isSafeInteger(delayMs) && delayMs > 0) setTimeout(finish, delayMs);
+    else finish();
     continue;
   }
   if (name === 'mcp_loader_read_result') {

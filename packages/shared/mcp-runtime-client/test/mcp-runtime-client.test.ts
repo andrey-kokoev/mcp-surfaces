@@ -13,7 +13,9 @@ const client = await SiteFabricClient.open({
   loaderEntrypoint: fakeLoader,
   allowedSurfaceIds: ['alpha', 'beta'],
   requestTimeoutMs: 1_000,
-  closeTimeoutMs: 250,
+  closeTimeoutMs: 50,
+  detachTimeoutMs: 250,
+  env: { FAKE_LOADER_DETACH_DELAY_MS: '150' },
   maxMaterializedResultChars: 30_000,
   materializedResultPageChars: 4_000,
 });

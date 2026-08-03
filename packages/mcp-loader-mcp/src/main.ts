@@ -579,10 +579,21 @@ export async function runStdioServer(options: JsonRecord = {}): Promise<void> {
     sawFramedInput ||= drained.framed;
     buffer = drained.remaining;
     for (const request of drained.requests) {
+      if (isParallelSafeRequest(request)) {
+        void handleRequest(request, state).then((response) => {
+          if (response) writeJsonRpcResponse(response, { framed: sawFramedInput });
+        });
+        continue;
+      }
       const response = await handleRequest(request, state);
       if (response) writeJsonRpcResponse(response, { framed: sawFramedInput });
     }
   }
+}
+
+function isParallelSafeRequest(request: JsonRecord): boolean {
+  return request.method === 'tools/call'
+    && asRecord(request.params).name === 'mcp_loader_detach';
 }
 
 async function dispatchMethod(method: string, params: JsonRecord, state: LoaderState): Promise<JsonRecord> {

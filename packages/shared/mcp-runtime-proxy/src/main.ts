@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { createHash } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { basename, dirname, join, resolve } from 'node:path';
@@ -559,6 +559,7 @@ export async function runProxy(argv = process.argv.slice(2)): Promise<void> {
       artifact_manifest_path: options.artifactManifestPath,
       artifact_manifest_fingerprint: artifactPreflight.manifest_fingerprint,
       generation_id: `${options.surfaceId ?? 'surface'}:${freshnessTracker.started_at}`,
+      supervisor_identity_path: childLaunch.supervisorIdentityPath,
       closed_at: closedAt,
     };
     writeRuntimeInstance(instancePath, record);
@@ -1086,7 +1087,7 @@ function spawnProxyChild(options: ProxyOptions, supervisorPath: string | null): 
   if (process.platform === 'win32' && supervisorPath) {
     const supervisorIdentityPath = join(
       options.diagnosticsDir ?? defaultDiagnosticsDir(),
-      `supervisor-${process.pid}.json`,
+      `supervisor-${process.pid}-${randomUUID()}.json`,
     );
     return {
       child: spawn(supervisorPath, [
