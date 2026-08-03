@@ -1,4 +1,4 @@
-import { appendFileSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { appendFileSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { randomBytes } from 'node:crypto';
 export { writeWorkerOutputSchema } from './output-contract.js';
@@ -18,6 +18,15 @@ export type RunRecordPaths = {
   lastMessagePath: string;
   resultPath: string;
   schemaPath: string;
+};
+
+export type ActiveRunMarker = {
+  schema: 'narada.worker.active_run.v1';
+  run_id: string;
+  run_dir: string;
+  started_at: string;
+  owner_pid: number;
+  registered_at: string;
 };
 
 export type WorkerSessionRecord = {
@@ -60,6 +69,29 @@ export function writeJson(path: string, value: unknown): void {
 export function writeText(path: string, value: string): void {
   writeFileSync(path, value, 'utf8');
 }
+
+export function activeRunDirectory(policy: Pick<WorkerPolicy, 'runRoot'>): string {
+  return join(policy.runRoot, '.active');
+}
+
+export function activeRunMarkerPath(policy: Pick<WorkerPolicy, 'runRoot'>, runId: string): string {
+  return join(activeRunDirectory(policy), `${encodeURIComponent(runId)}.json`);
+}
+
+export function registerActiveRun(policy: WorkerPolicy, marker: ActiveRunMarker): void {
+  mkdirSync(activeRunDirectory(policy), { recursive: true });
+  writeFileSync(activeRunMarkerPath(policy, marker.run_id), `${JSON.stringify(marker, null, 2)}\n`, { encoding: 'utf8', flag: 'wx' });
+}
+
+export function unregisterActiveRun(policy: WorkerPolicy, runId: string): void {
+  try {
+    rmSync(activeRunMarkerPath(policy, runId), { force: true });
+  } catch {
+    // Terminal cleanup is best effort; a leftover marker is recoverable by
+    // the next worker_runs_list pass.
+  }
+}
+
 export function audit(policy: WorkerPolicy, payload: unknown): void {
   if (!policy.auditLogDir) return;
   mkdirSync(policy.auditLogDir, { recursive: true });

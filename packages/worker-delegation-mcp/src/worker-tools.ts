@@ -12,8 +12,8 @@ import { CanonicalInvocationPlanError, readCanonicalInvocationPlan, type Canonic
 import { publicCognitionDefaults, publicProviderRegistryDiagnostics, updateCognitionDefault } from './cognition-defaults.js';
 import { projectCanonicalProviderCredentialEnvironment, resolveWorkerProviderRuntimeBinding } from './provider-runtime-binding.js';
 import { buildWorkerPrompt } from './prompt.js';
-import { audit, createRunRecord, readWorkerSessionRecord, writeJson, writeText, writeWorkerOutputSchema, writeWorkerSessionRecord } from './run-record.js';
-import { candidateRunRoots, listRunIds, locateRunResult, readRunResult, resolveRunInspectionSiteRoot, runArtifacts } from './run-store.js';
+import { audit, createRunRecord, registerActiveRun, readWorkerSessionRecord, unregisterActiveRun, writeJson, writeText, writeWorkerOutputSchema, writeWorkerSessionRecord } from './run-record.js';
+import { candidateRunRoots, listActiveRunIds, listRunIds, locateRunResult, readRunResult, resolveRunInspectionSiteRoot, runArtifacts } from './run-store.js';
 import { reapEvidence } from './recovery.js';
 import { extractSessionEventEvidence } from './runtime-events.js';
 import { normalizeBatchRequests, normalizeOptionalRunIds, normalizeRunIds } from './tool-handlers/batch.js';
@@ -765,6 +765,14 @@ async function workerRunInner(args: Record<string, unknown>, state: WorkerMcpSta
     metadata: buildRunMetadata({ requestedMode, preflight, status: 'running', output: null, error: null }),
   });
   writeJson(runRecord.resultPath, runningPayload);
+  registerActiveRun(state.policy, {
+    schema: 'narada.worker.active_run.v1',
+    run_id: runRecord.runId,
+    run_dir: runRecord.runDir,
+    started_at: startedAt.toISOString(),
+    owner_pid: process.pid,
+    registered_at: new Date().toISOString(),
+  });
   const runAbortController = new AbortController();
   const abortFromParent = () => runAbortController.abort();
   if (context.abortSignal?.aborted) runAbortController.abort();
@@ -774,6 +782,7 @@ async function workerRunInner(args: Record<string, unknown>, state: WorkerMcpSta
   state.activeRunCancellationRequests ??= new Set();
   state.activeRunControllers.set(runRecord.runId, runAbortController);
   const cleanupActiveRun = () => {
+    unregisterActiveRun(state.policy, runRecord.runId);
     if (context.abortSignal) context.abortSignal.removeEventListener('abort', abortFromParent);
     state.activeRunControllers?.delete(runRecord.runId);
     state.activeRunCompletions?.delete(runRecord.runId);
@@ -1150,7 +1159,10 @@ function workerRunsList(args: Record<string, unknown>, state: WorkerMcpState): R
   const includeSummary = Boolean(args.include_summary) || verbose;
   const requestedSiteRoot = resolveRunInspectionSiteRoot(state, args.site_root);
 
-  const runs = listRunIds(state, requestedSiteRoot ?? undefined)
+  const runIds = includeCompleted
+    ? listRunIds(state, requestedSiteRoot ?? undefined)
+    : listActiveRunIds(state, requestedSiteRoot ?? undefined);
+  const runs = runIds
     .map((runId) => readRunResult(state, runId, false, requestedSiteRoot ?? undefined))
     .filter((run): run is Record<string, unknown> => Boolean(run))
     .filter((run) => includeRunByStatus(String(run.status ?? ''), { includeCompleted, includeRunning }))
@@ -1832,7 +1844,37 @@ function replayIdempotentWorkerRun(state: WorkerMcpState, expected: WorkerRunIde
       remediation: 'Retry the same request; no second worker run was launched.',
     });
   }
-  return { ...run, idempotency_replayed: true };
+  const recovered = parseLastMessage(join(runDir, 'last_message.json'));
+  if (!recovered.ok || !recovered.data.structured_outputs || Object.keys(recovered.data.structured_outputs).length === 0) {
+    return { ...run, idempotency_replayed: true };
+  }
+  const existingStructuredOutputs = run.structured_outputs && typeof run.structured_outputs === 'object' && !Array.isArray(run.structured_outputs)
+    ? run.structured_outputs as Record<string, unknown>
+    : {};
+  if (canonicalJson(existingStructuredOutputs) === canonicalJson(recovered.data.structured_outputs)) {
+    return { ...run, idempotency_replayed: true };
+  }
+  const repaired = {
+    ...run,
+    summary: recovered.data.summary,
+    deliverables: recovered.data.deliverables,
+    open_questions: recovered.data.open_questions,
+    next_actions: recovered.data.next_actions,
+    changes: recovered.data.changes,
+    structured_outputs: recovered.data.structured_outputs,
+    verification_results: recovered.data.verification,
+    verification_budget_respected: recovered.data.verification_budget_respected,
+    broad_unrelated_failures: recovered.data.broad_unrelated_failures,
+    exit_interview: recovered.data.exit_interview,
+    review_verdict: recovered.data.review_verdict,
+    acceptance_verdict: recovered.data.acceptance_verdict,
+    verdict: recovered.data.verdict,
+    worker_output_state: 'available',
+    worker_authored_output_present: true,
+    worker_output_recovered_from_last_message: true,
+  };
+  writeJson(join(runDir, 'result.json'), repaired);
+  return { ...repaired, idempotency_replayed: true };
 }
 
 function optionalIdempotencyKey(value: unknown): string | null {

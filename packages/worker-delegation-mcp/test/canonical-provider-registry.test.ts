@@ -99,7 +99,7 @@ writeFileSync(join(root, '.narada', 'worker-cognition-defaults.json'), `${JSON.s
   },
 }, null, 2)}\n`, 'utf8');
 
-const state = createServerState({ siteRoot: root, allowedRoot: root, defaultRuntime: 'codex', codexCommand: process.execPath }, { PATH: process.env.PATH, NARADA_PROVIDER_SECRET_STORE: 'disabled' });
+const state = createServerState({ siteRoot: root, userSiteRoot: root, allowedRoot: root, defaultRuntime: 'codex', codexCommand: process.execPath }, { PATH: process.env.PATH, NARADA_PROVIDER_SECRET_STORE: 'disabled' });
 assert.equal(state.providerRegistryDiagnostics!.status, 'available');
 assert.equal(state.providerRegistryDiagnostics!.source, 'canonical_sqlite');
 assert.equal(state.providerRegistryDiagnostics!.path, databasePath);

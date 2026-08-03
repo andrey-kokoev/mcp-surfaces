@@ -1,9 +1,10 @@
-import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { basename, isAbsolute, relative, resolve } from 'node:path';
 import { diagnosticError } from './errors.js';
 import { enrichFailedRunDiagnostics, readDiagnosticTail, readJsonPreview, readTextTail, withFreshProgress, withProgressObservability, withRunningLiveness } from './diagnostics.js';
 import { recoverCompletedRunFromEvents, recoverExpiredRunningRun, recoverOrphanedRunningRun } from './recovery.js';
 import type { RunRecordPaths } from './run-record.js';
+import { activeRunDirectory } from './run-record.js';
 import type { WorkerMcpState } from './state.js';
 
 export type LocatedRunResult = { runRoot: string; runDir: string; resultPath: string; primary: boolean };
@@ -13,11 +14,40 @@ function siteControlRoot(siteRoot: string): string {
   return basename(root).toLowerCase() === '.narada' ? root : resolve(root, '.narada');
 }
 
+/**
+ * Return only currently active runs from the small per-run marker directory.
+ * Historical run directories are intentionally not scanned for admission
+ * checks: they are an append-only artifact store and may contain thousands of
+ * entries.
+ */
+export function listActiveRunIds(state: WorkerMcpState, requestedSiteRoot?: string): string[] {
+  return uniqueStrings(candidateRunRoots(state, requestedSiteRoot).flatMap((root) => {
+    const activeRoot = activeRunDirectory({ runRoot: root });
+    if (!existsSync(activeRoot)) return [];
+    try {
+      return readdirSync(activeRoot, { withFileTypes: true })
+        .filter((entry) => entry.isFile() && entry.name.endsWith('.json'))
+        .flatMap((entry) => {
+          try {
+            const runId = decodeURIComponent(entry.name.slice(0, -'.json'.length));
+            return /^run-[A-Za-z0-9TZ-]+$/.test(runId) ? [runId] : [];
+          } catch {
+            return [];
+          }
+        });
+    } catch {
+      return [];
+    }
+  }));
+}
+
 export function listRunIds(state: WorkerMcpState, requestedSiteRoot?: string): string[] {
   return uniqueStrings(candidateRunRoots(state, requestedSiteRoot).flatMap((root) => {
     if (!existsSync(root)) return [];
     try {
-      return readdirSync(root).filter((entry) => entry.startsWith('run-') && statSync(resolve(root, entry)).isDirectory());
+      return readdirSync(root, { withFileTypes: true })
+        .filter((entry) => entry.name.startsWith('run-') && entry.isDirectory())
+        .map((entry) => entry.name);
     } catch {
       return [];
     }

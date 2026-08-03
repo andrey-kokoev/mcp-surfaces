@@ -243,11 +243,38 @@ function normalizeWorkerOutput(value: unknown, options: { strict: boolean }): Wo
       review_verdict: reviewVerdict,
       acceptance_verdict: acceptanceVerdict,
       verdict,
-      structured_outputs: record.structured_outputs && typeof record.structured_outputs === 'object' && !Array.isArray(record.structured_outputs)
-        ? record.structured_outputs as Record<string, unknown>
-        : undefined,
+      structured_outputs: structuredOutputsFromRecord(record, summary),
     },
   };
+}
+
+function structuredOutputsFromRecord(record: Record<string, unknown>, summary: string): Record<string, unknown> | undefined {
+  const direct = record.structured_outputs;
+  if (direct && typeof direct === 'object' && !Array.isArray(direct) && Object.keys(direct).length > 0) {
+    return direct as Record<string, unknown>;
+  }
+  return recoverExplicitStructuredOutputs(summary);
+}
+
+function recoverExplicitStructuredOutputs(summary: string): Record<string, unknown> | undefined {
+  const embeddedJson = extractJsonObject(summary);
+  if (!embeddedJson) return undefined;
+  let embedded: unknown;
+  try {
+    embedded = JSON.parse(embeddedJson);
+  } catch {
+    return undefined;
+  }
+  if (!embedded || typeof embedded !== 'object' || Array.isArray(embedded)) return undefined;
+  const record = embedded as Record<string, unknown>;
+  const key = typeof record.structured_output_key === 'string' ? record.structured_output_key.trim() : '';
+  if (!key) return undefined;
+  const declared = record.structured_outputs;
+  if (declared && typeof declared === 'object' && !Array.isArray(declared) && Object.hasOwn(declared, key)) {
+    return { [key]: (declared as Record<string, unknown>)[key] };
+  }
+  if (!Object.hasOwn(record, key)) return undefined;
+  return { [key]: record[key] };
 }
 
 function verificationInput(value: unknown, options: { strict: boolean }): unknown[] | null {

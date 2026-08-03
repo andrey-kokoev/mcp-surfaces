@@ -87,6 +87,17 @@ assert.deepEqual(structuredWorkerOutput.structured_outputs, {
   task_executability_assessment_v1: structuredAssessment,
 });
 
+const embeddedStructuredWorkerOutput = workerOutputFromAgentMessage(JSON.stringify({
+  summary: JSON.stringify({
+    schema: 'narada.sop.agent_handoff_output.v1',
+    structured_output_key: 'sop_handoff_result',
+    sop_handoff_result: { disposition: 'draft_response' },
+  }),
+}));
+assert.deepEqual(embeddedStructuredWorkerOutput.structured_outputs, {
+  sop_handoff_result: { disposition: 'draft_response' },
+});
+
 const plainWorkerOutput = workerOutputFromAgentMessage('plain assistant fallback');
 assert.equal(plainWorkerOutput.summary, 'plain assistant fallback');
 assert.equal(plainWorkerOutput.edits_performed, false);

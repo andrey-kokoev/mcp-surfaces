@@ -2,7 +2,8 @@ import assert from 'node:assert/strict';
 import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { candidateRunRoots, locateRunResult, runArtifacts, withArtifactReadback } from '../src/run-store.js';
+import { activeRunDirectory, registerActiveRun, unregisterActiveRun } from '../src/run-record.js';
+import { candidateRunRoots, listActiveRunIds, locateRunResult, runArtifacts, withArtifactReadback } from '../src/run-store.js';
 import type { WorkerMcpState } from '../src/state.js';
 
 const root = mkdtempSync(join(tmpdir(), 'worker-run-store-'));
@@ -72,3 +73,17 @@ const scopedState = {
 assert.ok(candidateRunRoots(scopedState, scopedSiteRoot).includes(scopedRunRoot));
 assert.ok(candidateRunRoots(scopedState).includes(join(root, '.narada', 'runtime', 'worker-delegation')));
 assert.equal(locateRunResult(scopedState, scopedRunId, scopedSiteRoot)?.runRoot, scopedRunRoot);
+
+const activeRunId = 'run-20260626T180000Z-active';
+registerActiveRun(scopedState.policy, {
+  schema: 'narada.worker.active_run.v1',
+  run_id: activeRunId,
+  run_dir: join(scopedRunRoot, activeRunId),
+  started_at: '2026-06-26T18:00:00.000Z',
+  owner_pid: 123,
+  registered_at: '2026-06-26T18:00:00.000Z',
+});
+assert.equal(activeRunDirectory(scopedState.policy), join(scopedState.policy.runRoot, '.active'));
+assert.deepEqual(listActiveRunIds(scopedState), [activeRunId]);
+unregisterActiveRun(scopedState.policy, activeRunId);
+assert.deepEqual(listActiveRunIds(scopedState), []);
