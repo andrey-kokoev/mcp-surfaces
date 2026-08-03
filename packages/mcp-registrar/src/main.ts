@@ -1856,6 +1856,7 @@ function emitCodexConfig(carrier: CarrierDef, configPath?: string): { content: s
       command: launch.command,
       args: launch.args,
       approval_mode: 'approve',
+      ...(overridden.env_vars === undefined ? {} : { env_vars: overridden.env_vars }),
       ...(startupTimeoutSec === undefined ? {} : { startup_timeout_sec: startupTimeoutSec }),
     };
   }
@@ -2190,18 +2191,17 @@ function registrarSiteMcpFabricValidate(args: JsonRecord): JsonRecord {
 function registrarCarrierDiff(args: JsonRecord): JsonRecord {
   const carrierId = requiredString(args.carrier_id, 'registrar_requires_carrier_id');
   const carrier = lookupCarrier(carrierId);
-  let generated: { content: string; structured: JsonRecord };
-  switch (carrier.kind) {
-    case 'opencode': generated = emitOpencodeConfig(carrier); break;
-    case 'kimi': generated = emitKimiConfig(carrier); break;
-    case 'codex': generated = emitCodexConfig(carrier); break;
-    default: throw diagnosticError('registrar_unknown_carrier_kind', `registrar_unknown_carrier_kind:${carrier.kind}`);
-  }
-  const materializationValidation = validateCarrierMaterialization(carrier, generated).validation;
-
   const currentPath = carrier.config_path;
   const currentContent = existsSync(currentPath) ? readFileSync(currentPath, 'utf8') : null;
   const currentStructured = currentContent ? parseCarrierConfig(carrier.kind, currentContent) : null;
+  let generated: { content: string; structured: JsonRecord };
+  switch (carrier.kind) {
+    case 'opencode': generated = emitOpencodeConfig(carrier, currentPath); break;
+    case 'kimi': generated = emitKimiConfig(carrier, currentPath); break;
+    case 'codex': generated = emitCodexConfig(carrier, currentPath); break;
+    default: throw diagnosticError('registrar_unknown_carrier_kind', `registrar_unknown_carrier_kind:${carrier.kind}`);
+  }
+  const materializationValidation = validateCarrierMaterialization(carrier, generated).validation;
 
   return {
     ...compareCarrierProjection({
