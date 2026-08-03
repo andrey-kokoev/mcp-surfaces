@@ -14,6 +14,18 @@ import {
 
 type AnyRecord = Record<string, any>;
 
+const CHILD_MCP_REQUEST_TIMEOUT_MS = 40_000;
+
+function narsSessionId(messageId: string): string {
+  const siteId = String(process.env.NARADA_SITE_ID ?? 'site-loop-e2e').replace(/[^a-z0-9_-]+/gi, '_');
+  return `${siteId}-${messageId}`;
+}
+
+function residentAgentId(): string {
+  const siteId = String(process.env.NARADA_SITE_ID ?? 'site-loop-e2e').trim();
+  return `${siteId}.resident`;
+}
+
 const BUILD_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const SITE_LOOP_PACKAGE_ROOT = resolve(BUILD_ROOT, '..');
 const PACKAGES_ROOT = resolve(SITE_LOOP_PACKAGE_ROOT, '..');
@@ -118,7 +130,7 @@ async function openMcp(
     env: childEnvironment(siteRoot),
     label,
     scope,
-    timeoutMs: 25_000,
+    timeoutMs: CHILD_MCP_REQUEST_TIMEOUT_MS,
     closeTimeoutMs: 2_000,
   });
   await runMcpProtocolSmoke(server.client, {
@@ -139,15 +151,23 @@ function evidencePath(siteRoot: string): string {
 function recordEvidence(siteRoot: string, value: JsonRecord): void {
   const evidenceFile = evidencePath(siteRoot);
   const payload = {
+    ...value,
     schema: TEST_SCHEMA,
     recorded_at: new Date().toISOString(),
-    ...value,
   };
   const serialized = JSON.stringify(payload, null, 2);
   writeFileSync(evidenceFile, serialized, 'utf8');
   if (typeof value.phase === 'string' && value.phase.trim()) {
     const phase = value.phase.replace(/[^a-z0-9_-]+/gi, '_');
     writeFileSync(join(dirname(evidenceFile), `bridge-${phase}.json`), serialized, 'utf8');
+  }
+}
+
+function readRecordedEvidence(siteRoot: string): JsonRecord {
+  try {
+    return JSON.parse(readFileSync(evidencePath(siteRoot), 'utf8')) as JsonRecord;
+  } catch {
+    return {};
   }
 }
 
@@ -207,6 +227,7 @@ async function runSource(siteRoot: string): Promise<JsonRecord> {
   const scope = createTestProcessScope({ label: 'isolated Site Loop source bridge', closeTimeoutMs: 2_000 });
   const servers: Array<ReturnType<typeof spawnJsonlMcpServer>> = [];
   const executed: string[] = [];
+  let mailboxOutboxAckCount = 0;
   try {
     const mailbox = await openMcp(MAILBOX_ENTRYPOINT, siteRoot, 'isolated mailbox source', 'narada-mailbox-mcp', [
       'mailbox_doctor', 'mailbox_sync_generation', 'mailbox_reconcile_first_observations',
@@ -228,7 +249,24 @@ async function runSource(siteRoot: string): Promise<JsonRecord> {
     executed.push('mailbox_sync_generation');
     const generationId = requiredString(record(sync.result).generation_id ?? stringAt(sync, 'generation_id'), 'mailbox_generation_id');
     const generation = await call(mailbox.client, 'mailbox_generation_show', { generation_id: generationId });
-    checkpoint(siteRoot, 'mailbox_generation_cursor_committed', { generation_id: generationId, generation });
+    const generationRecord = record(generation.generation);
+    const generationRows = arrayAt(generation, 'records');
+    const generationMessageIds = generationRows.map((row) => String(row.message_id ?? '')).filter(Boolean);
+    const parentCursorSha256 = typeof generationRecord.parent_cursor_sha256 === 'string' ? generationRecord.parent_cursor_sha256 : null;
+    const nextCursorSha256 = typeof generationRecord.next_cursor_sha256 === 'string' ? generationRecord.next_cursor_sha256 : null;
+    if (generationRecord.status !== 'completed') throw new Error(`isolated_bridge_generation_not_completed:${generationId}`);
+    if (generationMessageIds.length !== MESSAGE_IDS.length || new Set(generationMessageIds).size !== MESSAGE_IDS.length
+      || MESSAGE_IDS.some((messageId) => !generationMessageIds.includes(messageId))) {
+      throw new Error(`isolated_bridge_generation_message_set:${JSON.stringify(generationRows)}`);
+    }
+    if (!nextCursorSha256 || nextCursorSha256 === parentCursorSha256) {
+      throw new Error(`isolated_bridge_cursor_not_advanced:${JSON.stringify(generationRecord)}`);
+    }
+    checkpoint(siteRoot, 'mailbox_generation_cursor_committed', {
+      generation_id: generationId,
+      generation,
+      cursor: { parent_cursor_sha256: parentCursorSha256, next_cursor_sha256: nextCursorSha256, advanced: true },
+    });
 
     const observation = await call(mailbox.client, 'mailbox_reconcile_first_observations', {
       idempotency_key: 'site-loop-e2e:mailbox-observations',
@@ -238,7 +276,15 @@ async function runSource(siteRoot: string): Promise<JsonRecord> {
       limit: 10,
     });
     executed.push('mailbox_reconcile_first_observations');
-    checkpoint(siteRoot, 'mailbox_observation_receipt', { generation_id: generationId, observation });
+    const observationResult = record(observation.result);
+    if (typeof observationResult.idempotency_replayed !== 'boolean') {
+      throw new Error(`isolated_bridge_observation_replay_marker_missing:${JSON.stringify(observation)}`);
+    }
+    checkpoint(siteRoot, 'mailbox_observation_receipt', {
+      generation_id: generationId,
+      observation,
+      observation_result: observationResult,
+    });
 
     await call(mailbox.client, 'mailbox_outbox_consumer_register', {
       consumer_id: 'site-loop-e2e:mail-admission-audit',
@@ -253,7 +299,10 @@ async function runSource(siteRoot: string): Promise<JsonRecord> {
       limit: 20,
     });
     const events = mailboxEvents(listed).filter((event) => MESSAGE_IDS.includes(eventMessageId(event) as typeof MESSAGE_IDS[number]));
-    if (events.length !== MESSAGE_IDS.length) throw new Error(`isolated_bridge_mailbox_event_count:${events.length}`);
+    const listedMessageIds = events.map(eventMessageId);
+    if (events.length !== MESSAGE_IDS.length || new Set(listedMessageIds).size !== MESSAGE_IDS.length) {
+      throw new Error(`isolated_bridge_mailbox_event_set:${JSON.stringify(listedMessageIds)}`);
+    }
     const admissions: JsonRecord[] = [];
     for (const event of events) {
       const messageId = eventMessageId(event);
@@ -266,7 +315,7 @@ async function runSource(siteRoot: string): Promise<JsonRecord> {
         config_path: MAILBOX_CONFIG,
       });
       const sourceArgs = admissionArguments(admitted);
-      await call(mailbox.client, 'mailbox_outbox_ack', {
+      const admissionAck = await call(mailbox.client, 'mailbox_outbox_ack', {
         consumer_id: 'site-loop-e2e:mail-admission',
         event_id: requiredString(event.event_id, 'mailbox_event_id'),
         receipt: {
@@ -276,7 +325,16 @@ async function runSource(siteRoot: string): Promise<JsonRecord> {
           message_id: messageId,
         },
       });
-      admissions.push({ message_id: messageId, fact_id: factId, event_id: event.event_id, source_args: sourceArgs, fact_ref: fact.fact });
+      mailboxOutboxAckCount += 1;
+      admissions.push({
+        message_id: messageId,
+        fact_id: factId,
+        event_id: event.event_id,
+        source_args: sourceArgs,
+        fact_ref: fact.fact,
+        admission_result: record(admitted.result),
+        acknowledgment_result: admissionAck,
+      });
     }
     executed.push('mailbox_message_admit');
     executed.push('mailbox_outbox_ack');
@@ -285,9 +343,15 @@ async function runSource(siteRoot: string): Promise<JsonRecord> {
       status: 'ok',
       interruption_requested: requestedInterruption(),
       generation_id: generationId,
-      cursor_advanced: true,
+      cursor: { parent_cursor_sha256: parentCursorSha256, next_cursor_sha256: nextCursorSha256, advanced: nextCursorSha256 !== parentCursorSha256 },
+      cursor_advanced: nextCursorSha256 !== parentCursorSha256,
+      generation_record_count: generationRows.length,
+      generation_message_ids: generationMessageIds,
+      sync_result: record(sync.result),
       observation_receipt: observation,
+      observation_result: observationResult,
       mailbox_event_count: events.length,
+      mailbox_outbox_ack_count: mailboxOutboxAckCount,
       admissions,
       task_lifecycle_doctor: taskDoctor,
       mailbox_doctor: doctor,
@@ -360,7 +424,8 @@ function persistedSessionEvents(siteRoot: string, sessionId: string): JsonRecord
 }
 
 async function runNarsDecision(siteRoot: string, messageId: string, expectedRoute: NarsDecision['route']): Promise<{ decision: NarsDecision; session_id: string; events: number; spawned: boolean }> {
-  const sessionId = `site-loop-e2e-${messageId}`;
+  const sessionId = narsSessionId(messageId);
+  const agentId = residentAgentId();
   const existing = persistedSessionEvents(siteRoot, sessionId);
   const reused = existing.map((event) => findDecision(event, messageId)).find(Boolean) as NarsDecision | undefined;
   if (reused) {
@@ -373,15 +438,19 @@ async function runNarsDecision(siteRoot: string, messageId: string, expectedRout
     NARS_ENTRYPOINT,
     '--raw-jsonl',
     '--authority', 'read',
-    '--identity', 'site-loop-e2e.resident',
+    '--identity', agentId,
     '--session', sessionId,
   ], {
     cwd: siteRoot,
     env: siteFabricChildEnv(siteRoot, {
       ...childEnvironment(siteRoot),
-      NARADA_AGENT_ID: 'site-loop-e2e.resident',
+      NARADA_AGENT_ID: agentId,
       NARADA_CARRIER_SESSION_ID: sessionId,
-      NARADA_MCP_SCOPE: 'local-site',
+      // The mechanical MCP surfaces are exercised by the supervisor and
+      // bridge below. This NARS turn only returns the decision; disabling its
+      // ambient MCP gateway keeps the agent decision boundary deterministic
+      // and prevents unrelated MCP bootstrap from delaying carrier completion.
+      NARADA_MCP_SCOPE: 'none',
     }),
     stdio: ['pipe', 'pipe', 'pipe'],
   });
@@ -478,6 +547,7 @@ async function runTickets(siteRoot: string): Promise<JsonRecord> {
   const scope = createTestProcessScope({ label: 'isolated Site Loop ticket bridge', closeTimeoutMs: 2_000 });
   const servers: Array<ReturnType<typeof spawnJsonlMcpServer>> = [];
   const executed: string[] = [];
+  let mailboxOutboxAckCount = 0;
   try {
     const mailbox = await openMcp(MAILBOX_ENTRYPOINT, siteRoot, 'isolated mailbox ticket', 'narada-mailbox-mcp', [
       'mailbox_message_admit', 'mailbox_outbox_consumer_register', 'mailbox_outbox_list', 'mailbox_outbox_ack',
@@ -554,6 +624,7 @@ async function runTickets(siteRoot: string): Promise<JsonRecord> {
           source_projection_key: `site-loop-e2e:ticket-source:${messageId}`,
         },
       });
+      mailboxOutboxAckCount += 1;
     }
     executed.push('mailbox_message_admit');
     executed.push('ticket_admit_source');
@@ -572,9 +643,15 @@ async function runTickets(siteRoot: string): Promise<JsonRecord> {
       ticketByMessage.set(messageId, { ticket: shown, source: refs.sources[0] });
     }
     for (const messageId of MESSAGE_IDS) if (!ticketByMessage.has(messageId)) throw new Error(`isolated_bridge_ticket_missing:${messageId}`);
+    const ticketIds = [...ticketByMessage.values()].map((entry) => requiredString(stringAt(entry.ticket, 'ticket_id'), 'ticket_id'));
+    const sourceIds = [...ticketByMessage.values()].map((entry) => requiredString(entry.source.source_id, 'ticket_source_id'));
+    if (new Set(ticketIds).size !== MESSAGE_IDS.length || new Set(sourceIds).size !== MESSAGE_IDS.length) {
+      throw new Error(`isolated_bridge_ticket_identity_duplicates:${JSON.stringify({ ticketIds, sourceIds })}`);
+    }
     checkpoint(siteRoot, 'ticket_source_projection', {
       ticket_count: tickets.length,
-      ticket_ids: [...ticketByMessage.values()].map((entry) => stringAt(entry.ticket, 'ticket_id')),
+      ticket_ids: ticketIds,
+      source_ids: sourceIds,
     });
 
     const workOutbox = await call(work.client, 'work_outbox_list', {
@@ -601,7 +678,7 @@ async function runTickets(siteRoot: string): Promise<JsonRecord> {
     });
     executed.push('scheduler_binding_upsert');
 
-    const processing: Array<{ messageId: string; sourceId: string; ticketId: string; eventId: string; sopRunId: string; activationId: string; expectedRevision: number; route: NarsDecision['route']; decision: NarsDecision; proposal: JsonRecord }> = [];
+    const processing: Array<{ messageId: string; sourceId: string; ticketId: string; eventId: string; sopRunId: string; activationId: string; expectedRevision: number; route: NarsDecision['route']; decision: NarsDecision; proposal: JsonRecord; schedulerEventStatus: string }> = [];
     for (const dueEvent of dueEvents) {
       const payload = eventPayload(dueEvent);
       const ticketId = requiredString(payload.ticket_id ?? stringAt(dueEvent, 'ticket_id'), 'work_due_ticket_id');
@@ -682,14 +759,20 @@ async function runTickets(siteRoot: string): Promise<JsonRecord> {
         route: messageId === 'message-response' ? 'response_draft' : 'followup_task',
         decision: {} as NarsDecision,
         proposal: {},
+        schedulerEventStatus: String(eventAdmission.status ?? ''),
       });
     }
     executed.push('ticket_processing_context_load');
     executed.push('scheduler_event_admit');
     executed.push('scheduler_activation_claim');
     executed.push('scheduler_activation_admit_sop');
-    checkpoint(siteRoot, 'scheduler_activation_admitted', { activations: processing.map((item) => ({ ticket_id: item.ticketId, activation_id: item.activationId, sop_run_id: item.sopRunId })) });
+    checkpoint(siteRoot, 'scheduler_activation_admitted', {
+      activations: processing.map((item) => ({ ticket_id: item.ticketId, activation_id: item.activationId, sop_run_id: item.sopRunId })),
+      scheduler_event_statuses: processing.map((item) => ({ message_id: item.messageId, status: item.schedulerEventStatus })),
+    });
 
+    let workOutboxAckCount = 0;
+    const projectionChecks: JsonRecord[] = [];
     for (const item of processing) {
       const nars = await runNarsDecision(siteRoot, item.messageId, item.route);
       item.decision = nars.decision;
@@ -706,7 +789,7 @@ async function runTickets(siteRoot: string): Promise<JsonRecord> {
             route: 'response_draft',
             idempotency_key: `site-loop-e2e:terminal-proposal:${item.messageId}`,
             causation_id: item.sopRunId,
-            actor_id: 'site-loop-e2e.resident',
+            actor_id: residentAgentId(),
             summary: 'Deterministic response draft proposed by the real NARS process.',
             draft: { source_id: item.sourceId, reply_mode: 'reply', body_text: `Deterministic response for ${item.messageId}.` },
           }
@@ -716,7 +799,7 @@ async function runTickets(siteRoot: string): Promise<JsonRecord> {
             route: 'followup_task',
             idempotency_key: `site-loop-e2e:terminal-proposal:${item.messageId}`,
             causation_id: item.sopRunId,
-            actor_id: 'site-loop-e2e.resident',
+            actor_id: residentAgentId(),
             summary: 'Deterministic follow-up task proposed by the real NARS process.',
             task: {
               title: `Follow up ${item.messageId}`,
@@ -732,6 +815,7 @@ async function runTickets(siteRoot: string): Promise<JsonRecord> {
     executed.push('ticket_admit_proposal');
     checkpoint(siteRoot, 'terminal_proposal_projection', { proposals: processing.map((item) => ({ ticket_id: item.ticketId, route: item.route, result: item.proposal.result })) });
 
+    let draftReceiptCount = 0;
     for (const item of processing.filter((candidate) => candidate.route === 'response_draft')) {
       const proposal = record(item.proposal.result);
       const mailboxId = requiredString(proposal.mailbox_id, 'draft_receipt_mailbox_id');
@@ -758,6 +842,7 @@ async function runTickets(siteRoot: string): Promise<JsonRecord> {
       });
       if (draftReceipt.outcome !== 'completed') throw new Error(`isolated_bridge_draft_receipt_not_completed:${item.messageId}`);
       (item as AnyRecord).draftReceipt = draftReceipt;
+      draftReceiptCount += 1;
     }
     executed.push('ticket_draft_receipt_record');
 
@@ -785,17 +870,28 @@ async function runTickets(siteRoot: string): Promise<JsonRecord> {
           outcome: item.route,
         },
       });
+      workOutboxAckCount += 1;
       const shown = await call(work.client, 'ticket_show', { ticket_id: item.ticketId });
       const refs = ticketRefs(shown);
       if (item.route === 'response_draft' && refs.drafts.length !== 1) throw new Error(`isolated_bridge_draft_projection_count:${item.ticketId}`);
       if (item.route === 'followup_task' && refs.tasks.length !== 1) throw new Error(`isolated_bridge_task_projection_count:${item.ticketId}`);
+      projectionChecks.push({ ticket_id: item.ticketId, route: item.route, draft_count: refs.drafts.length, task_count: refs.tasks.length });
     }
     executed.push('scheduler_activation_resolve');
     executed.push('work_outbox_ack');
     const finalActivations = await call(scheduler.client, 'scheduler_activation_list', { limit: 20 });
     const terminal = activationRows(finalActivations).filter((activation) => processing.some((item) => item.sopRunId === activation.sop_run_id));
-    if (terminal.length !== MESSAGE_IDS.length || terminal.some((activation) => activation.status !== 'terminal')) {
+    const terminalSopRunIds = new Set(terminal.map((activation) => String(activation.sop_run_id ?? '')));
+    if (terminal.length !== MESSAGE_IDS.length || terminalSopRunIds.size !== MESSAGE_IDS.length || terminal.some((activation) => activation.status !== 'terminal')) {
       throw new Error(`isolated_bridge_terminal_activation_count:${JSON.stringify(terminal)}`);
+    }
+    const noDuplicateProjection = projectionChecks.length === MESSAGE_IDS.length
+      && new Set(projectionChecks.map((check) => String(check.ticket_id))).size === MESSAGE_IDS.length
+      && projectionChecks.every((check) => check.route === 'response_draft'
+        ? check.draft_count === 1 && check.task_count === 0
+        : check.route === 'followup_task' && check.draft_count === 0 && check.task_count === 1);
+    if (!noDuplicateProjection || mailboxOutboxAckCount !== MESSAGE_IDS.length || workOutboxAckCount !== MESSAGE_IDS.length || draftReceiptCount !== 1) {
+      throw new Error(`isolated_bridge_projection_receipts_incomplete:${JSON.stringify({ projectionChecks, mailboxOutboxAckCount, workOutboxAckCount, draftReceiptCount })}`);
     }
     const output = {
       schema: 'narada.site_loop.ticket_task_reconciliation.v1',
@@ -804,8 +900,17 @@ async function runTickets(siteRoot: string): Promise<JsonRecord> {
       exactly_once_scope: 'stable_idempotency_keys_and_canonical_work_lifecycle_projection',
       ticket_count: tickets.length,
       routes: processing.map((item) => ({ message_id: item.messageId, ticket_id: item.ticketId, route: item.route, sop_run_id: item.sopRunId, nars: (item as AnyRecord).nars })),
-      receipts: { scheduler_terminal_count: terminal.length, work_outbox_acknowledged: true, mailbox_cursor_acknowledged: true },
-      no_duplicate_projection: true,
+      receipts: {
+        scheduler_terminal_count: terminal.length,
+        scheduler_terminal_receipt_count: terminal.length,
+        work_outbox_ack_count: workOutboxAckCount,
+        work_outbox_acknowledged: workOutboxAckCount === MESSAGE_IDS.length,
+        mailbox_outbox_ack_count: mailboxOutboxAckCount,
+        mailbox_outbox_acknowledged: mailboxOutboxAckCount === MESSAGE_IDS.length,
+        draft_receipt_count: draftReceiptCount,
+      },
+      projection_checks: projectionChecks,
+      no_duplicate_projection: noDuplicateProjection,
       work_lifecycle_doctor: workDoctor,
       task_lifecycle_doctor: taskDoctor,
       mailbox_doctor: mailboxDoctor,
@@ -840,7 +945,9 @@ try {
   else await runTickets(siteRoot);
 } catch (error) {
   const interrupted = error instanceof InjectedInterruption;
+  const previous = readRecordedEvidence(siteRoot);
   const result = {
+    ...previous,
     schema: TEST_SCHEMA,
     status: interrupted ? 'interrupted' : 'failed',
     phase: mode,

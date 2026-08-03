@@ -1,11 +1,12 @@
 import assert from 'node:assert/strict';
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import {
   createTestProcessScope,
   readMcpOutputText,
+  removeTemporaryE2eRoot,
   runBoundedProcess,
   runMcpProtocolSmoke,
   siteFabricChildEnv,
@@ -21,7 +22,9 @@ import { openSiteLoopStore } from '../src/site-loop/site-loop-store.js';
 type AnyRecord = Record<string, any>;
 
 export const ISOLATED_E2E_DEADLINE_MS = 180_000;
-const ISOLATED_E2E_CONCURRENCY = 2;
+// Each boundary owns an isolated Site root and fixture. Three workers keep
+// the six-boundary matrix inside the contract without sharing SQLite state.
+const ISOLATED_E2E_CONCURRENCY = 3;
 export const ISOLATED_INTERRUPTION_BOUNDARIES = [
   'mailbox_generation_cursor_committed',
   'mailbox_observation_receipt',
@@ -48,9 +51,14 @@ const BRIDGE_ENTRYPOINT = join(BUILD_ROOT, 'test', 'site-loop-mail-ticket-bridge
 const NARS_ENTRYPOINT = process.env.NARADA_E2E_RUNTIME_SERVER_ENTRYPOINT
   ?? join(NARADA_ROOT, 'packages', 'agent-runtime-server', 'dist', 'bin', 'narada-agent-runtime-server.js');
 const RESULT_PATH = join(SITE_LOOP_PACKAGE_ROOT, '.tmp', 'e2e-results', `${TEST_ID}.json`);
+const temporaryScenarioRoots = new Set<string>();
 
 function record(value: unknown): JsonRecord {
   return value && typeof value === 'object' && !Array.isArray(value) ? value as JsonRecord : {};
+}
+
+function narsSessionId(siteId: string, messageId: string): string {
+  return `${siteId.replace(/[^a-z0-9_-]+/gi, '_')}-${messageId}`;
 }
 
 function records(value: unknown): JsonRecord[] {
@@ -64,6 +72,12 @@ function arrayAt(value: unknown, ...keys: string[]): JsonRecord[] {
     if (Array.isArray(candidate)) return records(candidate);
   }
   return [];
+}
+
+function stringArrayAt(value: unknown, key: string): string[] {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return [];
+  const candidate = (value as JsonRecord)[key];
+  return Array.isArray(candidate) ? candidate.map((item) => String(item)).filter(Boolean) : [];
 }
 
 function stringAt(value: unknown, key: string): string | null {
@@ -129,6 +143,49 @@ function readPhaseEvidence(siteRoot: string, phase: string): JsonRecord {
   const path = join(siteRoot, '.ai', 'runtime', 'site-loop-e2e', `bridge-${phase}.json`);
   assert.equal(existsSync(path), true, `bridge phase evidence missing: ${path}`);
   return JSON.parse(readFileSync(path, 'utf8')) as JsonRecord;
+}
+
+function assertDurableBoundaryEvidence(boundary: Boundary, evidence: JsonRecord): void {
+  const durable = record(evidence.durable_boundary_evidence);
+  assert.equal(Object.keys(durable).length > 0, true, JSON.stringify(evidence));
+  switch (boundary) {
+    case 'mailbox_generation_cursor_committed': {
+      const generation = record(durable.generation);
+      const generationRecord = record(generation.generation);
+      const cursor = record(durable.cursor);
+      assert.equal(generationRecord.status, 'completed', JSON.stringify(evidence));
+      assert.equal(typeof generationRecord.next_cursor_sha256, 'string', JSON.stringify(evidence));
+      assert.equal(cursor.advanced, true, JSON.stringify(evidence));
+      assert.equal(arrayAt(generation, 'records').length, 2, JSON.stringify(evidence));
+      return;
+    }
+    case 'mailbox_observation_receipt':
+      assert.equal(record(durable.observation).outcome, 'completed', JSON.stringify(evidence));
+      assert.equal(typeof record(durable.observation_result).idempotency_replayed, 'boolean', JSON.stringify(evidence));
+      return;
+    case 'ticket_source_projection':
+      assert.equal(durable.ticket_count, 2, JSON.stringify(evidence));
+      assert.equal(new Set(stringArrayAt(durable, 'ticket_ids')).size, 2, JSON.stringify(evidence));
+      assert.equal(new Set(stringArrayAt(durable, 'source_ids')).size, 2, JSON.stringify(evidence));
+      return;
+    case 'scheduler_activation_admitted':
+      assert.equal(arrayAt(durable, 'activations').length, 2, JSON.stringify(evidence));
+      assert.equal(arrayAt(durable, 'scheduler_event_statuses').length, 2, JSON.stringify(evidence));
+      return;
+    case 'agent_decision_receipt': {
+      const decisions = arrayAt(durable, 'decisions');
+      assert.equal(decisions.length, 2, JSON.stringify(evidence));
+      assert.equal(new Set(decisions.map((item) => String(item.message_id))).size, 2, JSON.stringify(evidence));
+      assert.equal(new Set(decisions.map((item) => String(item.route))).size, 2, JSON.stringify(evidence));
+      return;
+    }
+    case 'terminal_proposal_projection': {
+      const proposals = arrayAt(durable, 'proposals');
+      assert.equal(proposals.length, 2, JSON.stringify(evidence));
+      assert.equal(new Set(proposals.map((item) => String(item.ticket_id))).size, 2, JSON.stringify(evidence));
+      return;
+    }
+  }
 }
 
 function readJsonLines(path: string): string[] {
@@ -237,7 +294,11 @@ async function startFixture(): Promise<Fixture> {
     baseUrl: fixtureBase,
     graphRequests,
     modelRequests,
-    close: () => new Promise<void>((resolvePromise) => server.close(() => resolvePromise())),
+    close: () => new Promise<void>((resolvePromise) => {
+      server.close(() => resolvePromise());
+      server.closeIdleConnections?.();
+      server.closeAllConnections?.();
+    }),
   };
 }
 
@@ -384,7 +445,7 @@ function writeScenario(siteRoot: string, siteId: string, fixture: Fixture): void
     loop_id: 'isolated.site-loop.e2e',
     site_id: siteId,
     display_name: 'Isolated process-backed Site Loop E2E',
-    resident: { agent_id: 'site-loop-e2e.resident', role: 'resident' },
+    resident: { agent_id: `${siteId}.resident`, role: 'resident' },
     refs: { ticket_projection: { kind: 'work_lifecycle', ref: '.ai/work-lifecycle.db' } },
     docs: [{ path: 'AGENTS.md', description: 'Isolated E2E instructions.' }, { path: 'README.md', description: 'Isolated E2E readme.' }],
     commands: {
@@ -440,7 +501,7 @@ async function runSupervisor(siteRoot: string, siteId: string, fixture: Fixture,
   }
 }
 
-async function readBack(siteRoot: string, siteId: string, fixture: Fixture): Promise<JsonRecord> {
+async function readBack(siteRoot: string, siteId: string, fixture: Fixture, boundary: Boundary): Promise<JsonRecord> {
   const scope = createTestProcessScope({ label: 'isolated E2E MCP readbacks', closeTimeoutMs: 2_000 });
   const servers: Array<{ close: () => Promise<void>; client: JsonlMcpClient }> = [];
   try {
@@ -469,6 +530,31 @@ async function readBack(siteRoot: string, siteId: string, fixture: Fixture): Pro
     const sourceEvidence = readPhaseEvidence(siteRoot, 'source_sync');
     assert.equal(sourceEvidence.status, 'ok', JSON.stringify(sourceEvidence));
     assert.equal(sourceEvidence.cursor_advanced, true, JSON.stringify(sourceEvidence));
+    const sourceCursor = record(sourceEvidence.cursor);
+    assert.equal(sourceCursor.advanced, true, JSON.stringify(sourceEvidence));
+    assert.equal(typeof sourceCursor.next_cursor_sha256, 'string', JSON.stringify(sourceEvidence));
+    assert.equal(record(sourceEvidence.sync_result).idempotency_replayed, true, `source_sync.sync_replay:${JSON.stringify(sourceEvidence)}`);
+    assert.equal(
+      record(sourceEvidence.observation_result).idempotency_replayed,
+      boundary !== 'mailbox_generation_cursor_committed',
+      `source_sync.observation_replay:${boundary}:${JSON.stringify(sourceEvidence)}`,
+    );
+    const sourceAdmissions = arrayAt(sourceEvidence, 'admissions');
+    assert.equal(sourceAdmissions.length, 2, JSON.stringify(sourceEvidence));
+    assert.equal(new Set(sourceAdmissions.map((item) => String(item.message_id))).size, 2, JSON.stringify(sourceEvidence));
+    assert.equal(new Set(sourceAdmissions.map((item) => String(item.fact_id))).size, 2, JSON.stringify(sourceEvidence));
+    assert.equal(new Set(sourceAdmissions.map((item) => String(item.event_id))).size, 2, JSON.stringify(sourceEvidence));
+    const sourceProjectionReplayExpected = !boundary.startsWith('mailbox_');
+    assert.equal(
+      sourceAdmissions.every((item) => record(item.admission_result).idempotency_replayed === sourceProjectionReplayExpected),
+      true,
+      `source_sync.admission_replay:${boundary}:${JSON.stringify(sourceEvidence)}`,
+    );
+    assert.equal(
+      sourceAdmissions.every((item) => record(item.acknowledgment_result).replayed === sourceProjectionReplayExpected),
+      true,
+      `source_sync.outbox_ack_replay:${boundary}:${JSON.stringify(sourceEvidence)}`,
+    );
     const generationId = String(
       evidence.generation_id
         ?? record(evidence.durable_boundary_evidence).generation_id
@@ -490,6 +576,8 @@ async function readBack(siteRoot: string, siteId: string, fixture: Fixture): Pro
     const ticketsResult = await call(work.client, 'ticket_list', { limit: 20 });
     const tickets = arrayAt(ticketsResult, 'tickets', 'items');
     assert.equal(tickets.length, 2, JSON.stringify(ticketsResult));
+    const listedTicketIds = tickets.map((ticket) => String(ticket.ticket_id ?? ticket.id));
+    assert.equal(new Set(listedTicketIds).size, 2, JSON.stringify(ticketsResult));
     const routes: JsonRecord[] = [];
     for (const ticket of tickets) {
       const ticketId = String(ticket.ticket_id ?? ticket.id);
@@ -504,6 +592,17 @@ async function readBack(siteRoot: string, siteId: string, fixture: Fixture): Pro
       const sources = await call(work.client, 'ticket_sources_list', { ticket_id: ticketId });
       assert.equal(arrayAt(sources, 'sources', 'items').length, 1, JSON.stringify(sources));
     }
+    const ticketEvidence = readPhaseEvidence(siteRoot, 'ticket_task_reconciliation');
+    assert.equal(ticketEvidence.status, 'success', JSON.stringify(ticketEvidence));
+    assert.equal(ticketEvidence.ticket_count, 2, JSON.stringify(ticketEvidence));
+    assert.equal(new Set(arrayAt(ticketEvidence, 'routes').map((item) => `${item.message_id}:${item.route}`)).size, 2, JSON.stringify(ticketEvidence));
+    assert.equal(new Set(arrayAt(ticketEvidence, 'routes').map((item) => String(item.route))).size, 2, JSON.stringify(ticketEvidence));
+    const ticketReceipts = record(ticketEvidence.receipts);
+    assert.equal(ticketReceipts.scheduler_terminal_count, 2, JSON.stringify(ticketEvidence));
+    assert.equal(ticketReceipts.work_outbox_ack_count, 2, JSON.stringify(ticketEvidence));
+    assert.equal(ticketReceipts.work_outbox_acknowledged, true, JSON.stringify(ticketEvidence));
+    assert.equal(ticketReceipts.draft_receipt_count, 1, JSON.stringify(ticketEvidence));
+    assert.equal(ticketEvidence.no_duplicate_projection, true, JSON.stringify(ticketEvidence));
     const processingOutbox = await call(work.client, 'work_outbox_list', { consumer_id: 'site-loop-e2e:work-processing', topics: ['work.ticket-work-due.v1'], limit: 20 });
     assert.equal(arrayAt(processingOutbox, 'events', 'items').length, 0, JSON.stringify(processingOutbox));
 
@@ -514,10 +613,11 @@ async function readBack(siteRoot: string, siteId: string, fixture: Fixture): Pro
     const rows = arrayAt(activations, 'activations', 'items');
     assert.equal(rows.length, 2, JSON.stringify(activations));
     assert.equal(rows.every((row) => row.status === 'terminal'), true, JSON.stringify(activations));
+    assert.equal(new Set(rows.map((row) => String(row.activation_id))).size, 2, JSON.stringify(activations));
     assert.equal(new Set(rows.map((row) => String(row.sop_run_id))).size, 2, JSON.stringify(activations));
 
     for (const messageId of ['message-response', 'message-followup']) {
-      const sessionPath = join(siteRoot, '.narada', 'crew', 'nars-sessions', `site-loop-e2e-${messageId}`, 'events.jsonl');
+      const sessionPath = join(siteRoot, '.narada', 'crew', 'nars-sessions', narsSessionId(siteId, messageId), 'events.jsonl');
       const text = readJsonLines(sessionPath).join('\n');
       assert.equal(text.includes('narada.site_loop.agent_decision.v1'), true, `NARS decision missing for ${messageId}`);
     }
@@ -565,7 +665,8 @@ async function readLatestRunForFailure(siteRoot: string, siteId: string, fixture
   }
 }
 
-async function runScenario(boundary: Boundary, fixture: Fixture, index: number): Promise<JsonRecord> {
+async function runScenario(boundary: Boundary, index: number): Promise<JsonRecord> {
+  const fixture = await startFixture();
   const siteRoot = mkdtempSync(join(NARADA_SONAR_ROOT, '.ai', `site-loop-isolated-e2e-${index}-`));
   const siteId = `site:isolated-loop-e2e-${index}`;
   try {
@@ -586,6 +687,8 @@ async function runScenario(boundary: Boundary, fixture: Fixture, index: number):
       supervisor: { exit_code: interrupted.exitCode, stdout: interrupted.stdout.slice(-4_000), stderr: interrupted.stderr.slice(-4_000) },
     }));
     assert.equal(interruptionEvidence.interruption_boundary, boundary, JSON.stringify(interruptionEvidence));
+    assert.equal(interruptionEvidence.phase, boundary.startsWith('mailbox_') ? 'source' : 'tickets', JSON.stringify(interruptionEvidence));
+    assertDurableBoundaryEvidence(boundary, interruptionEvidence);
 
     const replay = await runSupervisor(siteRoot, siteId, fixture);
     assert.equal(replay.timedOut, false, JSON.stringify(replay));
@@ -623,10 +726,23 @@ async function runScenario(boundary: Boundary, fixture: Fixture, index: number):
     const replayJson = JSON.parse(replay.stdout.trim()) as JsonRecord;
     assert.equal(replayJson.status, 'ok', JSON.stringify(replayJson));
     assert.equal(replayJson.health_status, 'healthy', JSON.stringify(replayJson));
-    const readback = await readBack(siteRoot, siteId, fixture);
+    const readback = await readBack(siteRoot, siteId, fixture, boundary);
     return { boundary, interruption: interruptionEvidence, replay: { duration_ms: replay.durationMs }, readback };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    throw new Error(`isolated_e2e_scenario_failed:${boundary}:${message.slice(-4_000)}:fixture=${JSON.stringify({
+      graph_requests: fixture.graphRequests.slice(-20),
+      model_request_count: fixture.modelRequests.length,
+    })}`);
   } finally {
-    rmSync(siteRoot, { recursive: true, force: true });
+    try {
+      await fixture.close();
+    } finally {
+      // Child scopes can finish their root process before a sibling descendant
+      // has released its final SQLite handle. Defer deletion until the matrix
+      // barrier below, after every scenario worker has settled.
+      temporaryScenarioRoots.add(siteRoot);
+    }
   }
 }
 
@@ -641,44 +757,48 @@ function selectedBoundaries(): readonly Boundary[] {
 async function main(): Promise<void> {
   assertEntrypoints();
   mkdirSync(join(NARADA_SONAR_ROOT, '.ai'), { recursive: true });
-  const fixture = await startFixture();
   const startedAt = Date.now();
   const boundaries = selectedBoundaries();
   const scenarios: JsonRecord[] = new Array(boundaries.length);
-  try {
-    let nextIndex = 0;
-    const runWorker = async (): Promise<void> => {
-      while (true) {
-        const index = nextIndex;
-        nextIndex += 1;
-        if (index >= boundaries.length) return;
-        const boundary = boundaries[index] as Boundary;
-        assert.equal(Date.now() - startedAt < ISOLATED_E2E_DEADLINE_MS, true, `isolated E2E deadline exceeded before ${boundary}`);
-        scenarios[index] = await runScenario(boundary, fixture, index);
-      }
-    };
-    await Promise.all(Array.from({ length: Math.min(ISOLATED_E2E_CONCURRENCY, boundaries.length) }, () => runWorker()));
-    assert.equal(scenarios.every(Boolean), true, 'isolated E2E scenario worker omitted a boundary');
-    const result = {
-      schema: 'narada.site_loop.isolated_e2e.result.v1',
-      test_id: TEST_ID,
-      status: 'passed',
-      duration_ms: Date.now() - startedAt,
-      deadline_ms: ISOLATED_E2E_DEADLINE_MS,
-      interruption_manifest: ISOLATED_INTERRUPTION_BOUNDARIES,
-      selected_boundaries: boundaries,
-      scenarios: scenarios.map((scenario) => ({ boundary: scenario.boundary, replay_ms: record(scenario.replay).duration_ms })),
-      external_boundaries: { mailbox: 'deterministic_graph_contract_fixture', model: 'deterministic_openai_contract_fixture' },
-      real_processes: ['site_loop_supervisor', 'site_loop_mcp', 'mailbox_mcp', 'task_lifecycle_mcp', 'work_lifecycle_mcp', 'scheduler_mcp', 'nars'],
-      exactly_once_scope: 'stable_idempotency_keys_and_canonical_work_lifecycle_projection',
-      no_silent_skips: true,
-    };
-    mkdirSync(join(SITE_LOOP_PACKAGE_ROOT, '.tmp', 'e2e-results'), { recursive: true });
-    writeFileSync(RESULT_PATH, JSON.stringify(result, null, 2), 'utf8');
-    console.log(JSON.stringify(result));
-  } finally {
-    await fixture.close();
-  }
+  let nextIndex = 0;
+  const runWorker = async (): Promise<void> => {
+    while (true) {
+      const index = nextIndex;
+      nextIndex += 1;
+      if (index >= boundaries.length) return;
+      const boundary = boundaries[index] as Boundary;
+      assert.equal(Date.now() - startedAt < ISOLATED_E2E_DEADLINE_MS, true, `isolated E2E deadline exceeded before ${boundary}`);
+      scenarios[index] = await runScenario(boundary, index);
+    }
+  };
+  const workerResults = await Promise.allSettled(
+    Array.from({ length: Math.min(ISOLATED_E2E_CONCURRENCY, boundaries.length) }, () => runWorker()),
+  );
+  const scenarioFailure = workerResults.find((result) => result.status === 'rejected')?.reason ?? null;
+  const cleanupFailures = [...temporaryScenarioRoots].filter((root) => !removeTemporaryE2eRoot(root));
+  assert.equal(cleanupFailures.length, 0, `isolated E2E temp root cleanup failed: ${cleanupFailures.join(', ')}`);
+  if (scenarioFailure) throw scenarioFailure;
+  assert.equal(scenarios.every(Boolean), true, 'isolated E2E scenario worker omitted a boundary');
+  const result = {
+    schema: 'narada.site_loop.isolated_e2e.result.v1',
+    test_id: TEST_ID,
+    status: boundaries.length === ISOLATED_INTERRUPTION_BOUNDARIES.length ? 'passed' : 'partial',
+    coverage: boundaries.length === ISOLATED_INTERRUPTION_BOUNDARIES.length ? 'complete' : 'partial',
+    full_matrix: boundaries.length === ISOLATED_INTERRUPTION_BOUNDARIES.length,
+    duration_ms: Date.now() - startedAt,
+    deadline_ms: ISOLATED_E2E_DEADLINE_MS,
+    interruption_manifest: ISOLATED_INTERRUPTION_BOUNDARIES,
+    selected_boundaries: boundaries,
+    scenarios: scenarios.map((scenario) => ({ boundary: scenario.boundary, replay_ms: record(scenario.replay).duration_ms })),
+    external_boundaries: { mailbox: 'deterministic_graph_contract_fixture', model: 'deterministic_openai_contract_fixture' },
+    real_processes: ['site_loop_supervisor', 'site_loop_mcp', 'mailbox_mcp', 'task_lifecycle_mcp', 'work_lifecycle_mcp', 'scheduler_mcp', 'nars'],
+    exactly_once_scope: 'stable_idempotency_keys_and_canonical_work_lifecycle_projection',
+    no_silent_skips: true,
+  };
+  mkdirSync(join(SITE_LOOP_PACKAGE_ROOT, '.tmp', 'e2e-results'), { recursive: true });
+  writeFileSync(RESULT_PATH, JSON.stringify(result, null, 2), 'utf8');
+  console.log(JSON.stringify(result));
+  if (result.status !== 'passed') process.exitCode = 2;
 }
 
 let deadlineTimer: NodeJS.Timeout | null = null;

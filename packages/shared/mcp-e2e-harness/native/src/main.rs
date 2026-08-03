@@ -446,6 +446,12 @@ mod windows_scope {
                 exit_code = 1;
             }
 
+            // TerminateJobObject is asynchronous with respect to descendants.
+            // Wait for the job itself, not only its root process, so every
+            // descendant has released SQLite/file handles before the scoped
+            // child is reported as closed to the harness.
+            let _ = WaitForSingleObject(job, INFINITE);
+
             let _ = stdin_thread.join();
             let _ = stdout_thread.join();
             let _ = stderr_thread.join();

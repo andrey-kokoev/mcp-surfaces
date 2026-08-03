@@ -520,12 +520,12 @@ export function createTemporaryE2eRoot(testId: string): string {
 }
 
 export function removeTemporaryE2eRoot(root: string): boolean {
-  for (let attempt = 0; attempt < 5; attempt += 1) {
+  for (let attempt = 0; attempt < 3; attempt += 1) {
     try {
-      rmSync(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 25 });
+      rmSync(root, { recursive: true, force: true, maxRetries: 20, retryDelay: 200 });
       return true;
     } catch {
-      if (attempt === 4) return false;
+      if (attempt === 2) return false;
     }
   }
   return false;
