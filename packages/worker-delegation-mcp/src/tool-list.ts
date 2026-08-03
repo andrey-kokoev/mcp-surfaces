@@ -126,6 +126,9 @@ function workerRunsListOutputSchema(): Record<string, unknown> {
     status: { type: 'string', const: 'ok' },
     count: { type: 'integer' },
     limit: { type: 'integer' },
+    scanned: { type: 'integer' },
+    scan_limit: { type: 'integer' },
+    scan_truncated: { type: 'boolean' },
     verbose: { type: 'boolean' },
     include_summary: { type: 'boolean' },
     runs: { type: 'array', items: objectSchema({
@@ -153,7 +156,7 @@ function workerRunsListOutputSchema(): Record<string, unknown> {
       diagnostic_tail: nullableStringSchema(),
       status_liveness: { type: 'object', additionalProperties: true },
     }, ['run_id', 'status']) },
-  }, ['schema', 'status', 'runs']);
+  }, ['schema', 'status', 'runs', 'scanned', 'scan_limit', 'scan_truncated']);
 }
 
 function workerRunWaitOutputSchema(): Record<string, unknown> {

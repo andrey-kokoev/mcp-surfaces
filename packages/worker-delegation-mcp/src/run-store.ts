@@ -1,4 +1,4 @@
-import { existsSync, readdirSync, readFileSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import { basename, isAbsolute, relative, resolve } from 'node:path';
 import { diagnosticError } from './errors.js';
 import { enrichFailedRunDiagnostics, readDiagnosticTail, readJsonPreview, readTextTail, withFreshProgress, withProgressObservability, withRunningLiveness } from './diagnostics.js';
@@ -54,6 +54,39 @@ export function listRunIds(state: WorkerMcpState, requestedSiteRoot?: string): s
   }));
 }
 
+export type RunListCandidate = { runId: string; modifiedAtMs: number };
+
+/**
+ * Locate historical runs using result-file metadata only. Run ids may be
+ * opaque hashes, so directory-name ordering is not a recency signal. The
+ * result mtime is the cheap discovery index; full result recovery remains the
+ * responsibility of the bounded caller page.
+ */
+export function listRunCandidates(state: WorkerMcpState, requestedSiteRoot?: string): RunListCandidate[] {
+  const candidates = new Map<string, RunListCandidate>();
+  for (const root of candidateRunRoots(state, requestedSiteRoot)) {
+    if (!existsSync(root)) continue;
+    let entries;
+    try {
+      entries = readdirSync(root, { withFileTypes: true });
+    } catch {
+      continue;
+    }
+    for (const entry of entries) {
+      if (!entry.isDirectory() || !entry.name.startsWith('run-')) continue;
+      const runId = entry.name;
+      try {
+        const modifiedAtMs = statSync(resolve(root, runId, 'result.json')).mtimeMs;
+        const existing = candidates.get(runId);
+        if (!existing || modifiedAtMs > existing.modifiedAtMs) candidates.set(runId, { runId, modifiedAtMs });
+      } catch {
+        // A partially written or removed run is not listable in this pass.
+      }
+    }
+  }
+  return [...candidates.values()];
+}
+
 export function locateRunResult(state: WorkerMcpState, runId: string, requestedSiteRoot?: string): LocatedRunResult | null {
   const primaryRoot = resolve(state.policy.runRoot);
   for (const runRoot of candidateRunRoots(state, requestedSiteRoot)) {
@@ -85,6 +118,30 @@ export function readRunResult(state: WorkerMcpState, runId: string, required = t
     if (!required) return null;
     const message = error instanceof Error ? error.message : String(error);
     throw diagnosticError('worker_run_result_unreadable', 'worker_run_result_unreadable', { run_id: runId, error: message });
+  }
+}
+
+/**
+ * Read only the persisted result record used to decide whether a run belongs
+ * in a bounded list query. This deliberately skips recovery and artifact
+ * readback; the full record is loaded only after the run passes the filter.
+ */
+export function readRunIndexRecord(state: WorkerMcpState, runId: string, requestedSiteRoot?: string): Record<string, unknown> | null {
+  if (!/^run-[A-Za-z0-9TZ-]+$/.test(runId)) throw diagnosticError('worker_run_id_invalid', 'worker_run_id_invalid', { run_id: runId });
+  const located = locateRunResult(state, runId, requestedSiteRoot);
+  if (!located) return null;
+  try {
+    const parsed = JSON.parse(readFileSync(located.resultPath, 'utf8')) as unknown;
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return null;
+    const record = parsed as Record<string, unknown>;
+    const timing = record.timing;
+    return {
+      run_id: typeof record.run_id === 'string' ? record.run_id : runId,
+      status: record.status ?? null,
+      timing: timing && typeof timing === 'object' && !Array.isArray(timing) ? timing : {},
+    };
+  } catch {
+    return null;
   }
 }
 

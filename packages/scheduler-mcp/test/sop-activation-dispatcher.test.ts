@@ -42,7 +42,9 @@ class HappyFabric implements SchedulerFabricCaller {
       case 'sop_outbox_consumer_register': return { registration_replayed: false };
       case 'sop_outbox_list': return { items: [terminalEvent], count: 1 };
       case 'scheduler_event_admit': return { status: 'admitted' };
-      case 'scheduler_activation_list': return { activations: [{ activation_id: 'predecessor-activation' }] };
+      case 'scheduler_activation_list': return args.status === 'admitted'
+        ? { activations: [] }
+        : { activations: [{ activation_id: 'predecessor-activation' }] };
       case 'scheduler_activation_resolve': return { activation: { status: 'terminal' } };
       case 'sop_outbox_ack': return { acknowledgement_replayed: false };
       case 'scheduler_activation_claim':
@@ -95,6 +97,7 @@ test('terminal outbox is acknowledged only after Scheduler admission/resolution 
   assert.equal(report.status, 'completed');
   assert.equal(report.events_acknowledged, 1);
   assert.equal(report.predecessor_activations_resolved, 1);
+  assert.equal(report.admitted_activations_reconciled, 0);
   assert.equal(report.sop_runs_admitted, 1);
 
   const order = fabric.calls.map((call) => call.tool);
@@ -164,4 +167,68 @@ test('crash gap after idempotent SOP admission retries the same occurrence under
   assert.equal(second.sop_runs_admitted, 1);
   assert.equal(starts.length, 2);
   assert.equal(starts[0]!.occurrence_key, starts[1]!.occurrence_key);
+});
+
+test('reconciles an admitted activation whose SOP already reached a terminal state', async () => {
+  const calls: Call[] = [];
+  const fabric: SchedulerFabricCaller = {
+    async call(surface, tool, args = {}) {
+      calls.push({ surface, tool, args });
+      switch (tool) {
+        case 'scheduler_runtime_status': return { status: 'fresh', implementation_id: 'implementation-1' };
+        case 'sop_outbox_consumer_register': return {};
+        case 'sop_outbox_list': return { items: [] };
+        case 'scheduler_activation_list':
+          return args.status === 'admitted'
+            ? { activations: [{ activation_id: 'orphaned-activation', sop_run_id: 'completed-run', status: 'admitted' }] }
+            : { activations: [] };
+        case 'sop_run_status': return { run_id: 'completed-run', status: 'completed', completed_at: '2026-01-01T00:00:02.000Z' };
+        case 'scheduler_activation_resolve': return { activation: { status: 'terminal' } };
+        case 'scheduler_activation_claim': return { activation: null };
+        default: throw new Error(`unexpected_tool:${tool}`);
+      }
+    },
+  };
+
+  const report = await runSchedulerSopDispatcher(options, fabric);
+  assert.equal(report.status, 'completed');
+  assert.equal(report.admitted_activations_reconciled, 1);
+  const resolution = calls.find((call) => call.tool === 'scheduler_activation_resolve')!;
+  assert.equal(resolution.args.sop_run_id, 'completed-run');
+  assert.equal(resolution.args.outcome, 'completed');
+  assert.equal(resolution.args.receipt_id, 'sop-terminal:recovery:completed-run');
+});
+
+test('continues admitted-activation reconciliation after one run-status failure', async () => {
+  const calls: Call[] = [];
+  const fabric: SchedulerFabricCaller = {
+    async call(surface, tool, args = {}) {
+      calls.push({ surface, tool, args });
+      switch (tool) {
+        case 'scheduler_runtime_status': return { status: 'fresh', implementation_id: 'implementation-1' };
+        case 'sop_outbox_consumer_register': return {};
+        case 'sop_outbox_list': return { items: [] };
+        case 'scheduler_activation_list':
+          return args.status === 'admitted'
+            ? { activations: [
+              { activation_id: 'broken-activation', sop_run_id: 'broken-run', status: 'admitted' },
+              { activation_id: 'healthy-activation', sop_run_id: 'healthy-run', status: 'admitted' },
+            ] }
+            : { activations: [] };
+        case 'sop_run_status':
+          if (args.run_id === 'broken-run') throw new Error('sop_status_unavailable');
+          return { run_id: 'healthy-run', status: 'completed', completed_at: '2026-01-01T00:00:02.000Z' };
+        case 'scheduler_activation_resolve': return { activation: { status: 'terminal' } };
+        case 'scheduler_activation_claim': return { activation: null };
+        default: throw new Error(`unexpected_tool:${tool}`);
+      }
+    },
+  };
+
+  const report = await runSchedulerSopDispatcher(options, fabric);
+  assert.equal(report.status, 'completed_with_errors');
+  assert.equal(report.admitted_activations_reconciled, 1);
+  assert.equal(report.errors.length, 1);
+  assert.equal(calls.filter((call) => call.tool === 'scheduler_activation_resolve').length, 1);
+  assert.equal(calls.find((call) => call.tool === 'scheduler_activation_resolve')?.args.sop_run_id, 'healthy-run');
 });

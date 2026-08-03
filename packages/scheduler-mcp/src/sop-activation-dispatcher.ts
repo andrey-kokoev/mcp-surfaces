@@ -18,6 +18,51 @@ export interface SchedulerFabricCaller {
   ): Promise<JsonRecord>;
 }
 
+async function reconcileAdmittedActivations(
+  fabric: SchedulerFabricCaller,
+  options: NormalizedOptions,
+  implementationId: string,
+): Promise<{ reconciled: number; errors: JsonRecord[] }> {
+  const listed = await fabric.call(options.schedulerSurfaceId, 'scheduler_activation_list', {
+    status: 'admitted',
+    limit: options.maxActivations,
+  });
+  const activations = recordArray(listed.activations, 'scheduler_admitted_activation_list_invalid');
+  let reconciled = 0;
+  const errors: JsonRecord[] = [];
+  for (const activation of activations) {
+    const runId = optionalString(activation.sop_run_id);
+    const itemId = optionalString(activation.activation_id) ?? runId ?? undefined;
+    if (!runId) {
+      errors.push(errorRecord('scheduler_activation_reconcile', new Error('scheduler_admitted_activation_run_id_missing'), itemId));
+      continue;
+    }
+    try {
+      const runResult = await fabric.call(options.sopSurfaceId, 'sop_run_status', { run_id: runId });
+      const run = requireRecord(runResult, 'scheduler_run_status_invalid');
+      const status = requiredString(run.status, 'scheduler_run_status_missing');
+      if (status !== 'completed' && status !== 'failed' && status !== 'cancelled') continue;
+      await fabric.call(options.schedulerSurfaceId, 'scheduler_activation_resolve', {
+        sop_run_id: runId,
+        outcome: status,
+        receipt_id: `sop-terminal:recovery:${runId}`,
+        receipt: {
+          schema: 'narada.scheduler.sop_terminal_recovery_receipt.v1',
+          run_id: runId,
+          outcome: status,
+          completed_at: run.completed_at ?? null,
+          recovery: 'admitted_activation_terminal_run',
+        },
+        implementation_id: implementationId,
+      });
+      reconciled += 1;
+    } catch (error) {
+      errors.push(errorRecord('scheduler_activation_reconcile', error, itemId));
+    }
+  }
+  return { reconciled, errors };
+}
+
 export interface SchedulerSopDispatcherOptions {
   siteRoot: string;
   outboxStartAt: string;
@@ -37,6 +82,7 @@ export interface SchedulerSopDispatcherReport extends JsonRecord {
   events_seen: number;
   events_acknowledged: number;
   predecessor_activations_resolved: number;
+  admitted_activations_reconciled: number;
   activations_claimed: number;
   sop_runs_admitted: number;
   activation_failures_recorded: number;
@@ -61,6 +107,7 @@ export async function runSchedulerSopDispatcher(
     events_seen: 0,
     events_acknowledged: 0,
     predecessor_activations_resolved: 0,
+    admitted_activations_reconciled: 0,
     activations_claimed: 0,
     sop_runs_admitted: 0,
     activation_failures_recorded: 0,
@@ -107,18 +154,27 @@ export async function runSchedulerSopDispatcher(
         const activations = recordArray(linked.activations, 'scheduler_activation_list_invalid');
         if (activations.length > 1) throw new Error(`scheduler_sop_run_link_not_unique:${event.run_id}`);
         if (activations.length === 1) {
-          await fabric.call(options.schedulerSurfaceId, 'scheduler_activation_resolve', {
-            sop_run_id: event.run_id,
-            outcome: event.outcome,
-            receipt_id: `sop-terminal:${event.event_id}`,
-            receipt: {
-              schema: 'narada.scheduler.sop_terminal_receipt.v1',
-              event_id: event.event_id,
-              run_id: event.run_id,
+          const linkedActivation = activations[0]!;
+          if (linkedActivation.status === 'terminal') {
+            const terminalOutcome = optionalString(linkedActivation.terminal_outcome);
+            const payloadOutcome = optionalString(event.payload.outcome);
+            if (terminalOutcome && terminalOutcome !== event.outcome && terminalOutcome !== payloadOutcome) {
+              throw new Error(`scheduler_terminal_outcome_conflict:${event.run_id}`);
+            }
+          } else {
+            await fabric.call(options.schedulerSurfaceId, 'scheduler_activation_resolve', {
+              sop_run_id: event.run_id,
               outcome: event.outcome,
-            },
-            implementation_id: implementationId,
-          });
+              receipt_id: `sop-terminal:${event.event_id}`,
+              receipt: {
+                schema: 'narada.scheduler.sop_terminal_receipt.v1',
+                event_id: event.event_id,
+                run_id: event.run_id,
+                outcome: event.outcome,
+              },
+              implementation_id: implementationId,
+            });
+          }
           report.predecessor_activations_resolved += 1;
         }
 
@@ -135,6 +191,18 @@ export async function runSchedulerSopDispatcher(
       } catch (error) {
         report.errors.push(errorRecord('sop_terminal_event', error, raw.event_id));
       }
+    }
+
+    try {
+      const reconciliation = await reconcileAdmittedActivations(
+        fabric,
+        options,
+        implementationId,
+      );
+      report.admitted_activations_reconciled += reconciliation.reconciled;
+      report.errors.push(...reconciliation.errors);
+    } catch (error) {
+      report.errors.push(errorRecord('scheduler_activation_reconcile_list', error));
     }
 
     for (let index = 0; index < options.maxActivations; index += 1) {

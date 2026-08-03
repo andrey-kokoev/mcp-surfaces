@@ -13,7 +13,7 @@ import { publicCognitionDefaults, publicProviderRegistryDiagnostics, updateCogni
 import { projectCanonicalProviderCredentialEnvironment, resolveWorkerProviderRuntimeBinding } from './provider-runtime-binding.js';
 import { buildWorkerPrompt } from './prompt.js';
 import { audit, createRunRecord, registerActiveRun, readWorkerSessionRecord, unregisterActiveRun, writeJson, writeText, writeWorkerOutputSchema, writeWorkerSessionRecord } from './run-record.js';
-import { candidateRunRoots, listActiveRunIds, listRunIds, locateRunResult, readRunResult, resolveRunInspectionSiteRoot, runArtifacts } from './run-store.js';
+import { candidateRunRoots, listActiveRunIds, listRunCandidates, listRunIds, locateRunResult, readRunIndexRecord, readRunResult, resolveRunInspectionSiteRoot, runArtifacts } from './run-store.js';
 import { reapEvidence } from './recovery.js';
 import { extractSessionEventEvidence } from './runtime-events.js';
 import { normalizeBatchRequests, normalizeOptionalRunIds, normalizeRunIds } from './tool-handlers/batch.js';
@@ -1159,24 +1159,39 @@ function workerRunsList(args: Record<string, unknown>, state: WorkerMcpState): R
   const includeSummary = Boolean(args.include_summary) || verbose;
   const requestedSiteRoot = resolveRunInspectionSiteRoot(state, args.site_root);
 
-  const runIds = includeCompleted
-    ? listRunIds(state, requestedSiteRoot ?? undefined)
-    : listActiveRunIds(state, requestedSiteRoot ?? undefined);
-  const runs = runIds
-    .map((runId) => readRunResult(state, runId, false, requestedSiteRoot ?? undefined))
-    .filter((run): run is Record<string, unknown> => Boolean(run))
-    .filter((run) => includeRunByStatus(String(run.status ?? ''), { includeCompleted, includeRunning }))
-    .sort((a, b) => runSortKey(b).localeCompare(runSortKey(a)))
-    .slice(0, limit)
-    .map((run) => runListItem(run, { verbose, includeSummary }));
+  const candidates = includeCompleted
+    ? listRunCandidates(state, requestedSiteRoot ?? undefined)
+    : listActiveRunIds(state, requestedSiteRoot ?? undefined).map((runId) => ({ runId, modifiedAtMs: 0 }));
+  const orderedCandidates = candidates.sort((a, b) => b.modifiedAtMs - a.modifiedAtMs || b.runId.localeCompare(a.runId));
+  const scanLimit = Math.min(orderedCandidates.length, Math.max(limit, 200));
+  const indexedRuns: Array<{ runId: string; record: Record<string, unknown> }> = [];
+  const runs: Record<string, unknown>[] = [];
+  let scanned = 0;
+  for (const candidate of orderedCandidates.slice(0, scanLimit)) {
+    scanned += 1;
+    const indexed = readRunIndexRecord(state, candidate.runId, requestedSiteRoot ?? undefined);
+    if (!indexed || (includeCompleted && !includeRunning && !includeRunByStatus(String(indexed.status ?? ''), { includeCompleted, includeRunning }))) continue;
+    indexedRuns.push({ runId: candidate.runId, record: indexed });
+  }
+  indexedRuns.sort((a, b) => runSortKey(b.record).localeCompare(runSortKey(a.record)));
+  for (const candidate of indexedRuns) {
+    if (runs.length >= limit) break;
+    const run = readRunResult(state, candidate.runId, false, requestedSiteRoot ?? undefined);
+    if (!run || !includeRunByStatus(String(run.status ?? ''), { includeCompleted, includeRunning })) continue;
+    runs.push(run);
+  }
+  runs.sort((a, b) => runSortKey(b).localeCompare(runSortKey(a)));
   return {
     schema: 'narada.worker.runs_list.v1',
     status: 'ok',
     count: runs.length,
     limit,
+    scanned,
+    scan_limit: scanLimit,
+    scan_truncated: scanLimit < orderedCandidates.length,
     verbose,
     include_summary: includeSummary,
-    runs,
+    runs: runs.map((run) => runListItem(run, { verbose, includeSummary })),
   };
 }
 
