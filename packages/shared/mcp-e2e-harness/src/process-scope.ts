@@ -51,6 +51,7 @@ export class TestProcessScope {
   async close(): Promise<void> {
     const children = [...this.children];
     for (const child of children) {
+      if (!this.children.has(child)) continue;
       await closeChild(child, this.closeTimeoutMs);
     }
     if (this.children.size > 0) {
@@ -59,14 +60,14 @@ export class TestProcessScope {
   }
 
   assertClean(): void {
-    const active = [...this.children].filter((child) => child.exitCode === null && !child.killed);
+    const active = [...this.children].filter((child) => !hasTerminated(child));
     if (active.length > 0) {
       throw new Error(this.label + ' has ' + active.length + ' active child process(es): ' + active.map((child) => child.pid ?? 'unknown').join(','));
     }
   }
 
   activeCount(): number {
-    return [...this.children].filter((child) => child.exitCode === null && !child.killed).length;
+    return [...this.children].filter((child) => !hasTerminated(child)).length;
   }
 }
 
@@ -109,31 +110,47 @@ function spawnProcess(
 }
 
 async function closeChild(child: ChildProcess, timeoutMs: number): Promise<void> {
-  if (child.exitCode !== null || child.killed) return;
-  const close = new Promise<void>((resolve) => {
-    child.once('close', () => resolve());
-  });
+  const close = waitForTermination(child);
   if (child.stdin && !child.stdin.destroyed && !child.stdin.writableEnded) {
     child.stdin.end();
   }
-  await Promise.race([
-    close,
-    new Promise<void>((resolve) => setTimeout(() => {
-      try {
-        child.kill();
-      } catch {
-        // The helper's Job Object performs descendant cleanup when its owner is killed.
-      }
-      resolve();
-    }, timeoutMs)),
-  ]);
-  if (child.exitCode === null && !child.killed) {
-    try {
-      child.kill();
-    } catch {
-      // The close assertion below reports any process that remains.
-    }
+  if (await resolvesWithin(close, timeoutMs)) return;
+  try {
+    child.kill();
+  } catch {
+    // The helper's Job Object performs descendant cleanup when its owner is killed.
   }
+  if (!await resolvesWithin(close, timeoutMs)) {
+    throw new Error('child process did not terminate after bounded cleanup: ' + (child.pid ?? 'unknown'));
+  }
+}
+
+function hasTerminated(child: ChildProcess): boolean {
+  return child.exitCode !== null || child.signalCode !== null;
+}
+
+function waitForTermination(child: ChildProcess): Promise<void> {
+  return new Promise<void>((resolvePromise) => {
+    const finish = () => {
+      child.off('close', finish);
+      child.off('error', finish);
+      resolvePromise();
+    };
+    child.once('close', finish);
+    child.once('error', finish);
+    if (hasTerminated(child)) finish();
+  });
+}
+
+async function resolvesWithin(promise: Promise<void>, timeoutMs: number): Promise<boolean> {
+  let timer: NodeJS.Timeout | null = null;
+  const timedOut = new Promise<boolean>((resolvePromise) => {
+    timer = setTimeout(() => resolvePromise(false), timeoutMs);
+  });
+  const completed = promise.then(() => true);
+  const result = await Promise.race([completed, timedOut]);
+  if (timer) clearTimeout(timer);
+  return result;
 }
 
 function positiveInteger(value: number | undefined, fallback: number): number {

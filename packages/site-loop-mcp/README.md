@@ -79,6 +79,9 @@ Configured site loop:
 - `site_loop_status`
 - `site_loop_health`
 - `site_loop_operating_status`
+- `site_loop_proof_status`
+- `site_loop_proof_run`
+- `site_loop_recovery_drill`
 - `site_loop_readiness`
 - `site_loop_coherence`
 - `site_loop_runs_list`
@@ -227,6 +230,36 @@ pnpm --filter @narada-core/site-loop-mcp test:e2e:task-executability
 ```
 
 It uses separate real Task Lifecycle MCP, Site Loop runner, and NARS runtime child processes, including the production NARS task-executability dispatch hook. The only controlled boundary is a local OpenAI-compatible HTTP evaluator fixture; its response and the bounded race delay are synthetic test controls, not claims about external-provider correctness. The emitted evidence distinguishes the real NARS hook path, Site Loop reconciliation, persisted assessment, delegated/worker provenance, and exactly-one-completed/one-locked concurrent run. Store ownership and temporary-root cleanup are asserted; promise barriers, not sleeps, establish ordering. This does not prove that the task, its outcome, or an external provider is correct. The optional live provider proof and recovery runbook are documented in Narada's `docs/operations/task-executability-e2e-and-recovery.md` runbook.
+
+## Site Loop E2E gates
+
+The isolated gate is the deterministic closure test. It spawns real Site Loop,
+Mailbox, Task Lifecycle, Work Lifecycle, Scheduler, NARS, and supervisor
+processes; only the mailbox and model provider boundaries are contract
+fixtures:
+
+```powershell
+pnpm --filter @narada-core/site-loop-mcp test:e2e:isolated
+```
+
+The production gate is opt-in and never substitutes a default Site, scheduler
+task, or mailbox source. It returns `status: "not_run"` with exit code 2 until
+all four declarations are present:
+
+```powershell
+$env:NARADA_E2E_SITE_LOOP_PRODUCTION = '1'
+$env:NARADA_E2E_SITE_LOOP_SITE_ROOT = 'C:/Users/Andrey/Narada'
+$env:NARADA_E2E_SITE_LOOP_TASK_NAME = '<declared Windows scheduled-task name>'
+$env:NARADA_E2E_SITE_LOOP_CONTROLLED_MAILBOX_SOURCE = '<operator-approved controlled source ref>'
+pnpm --filter @narada-core/site-loop-mcp test:e2e:production
+```
+
+An admitted production run must observe the real scheduled task, retire and
+replace the resident carrier, complete a live controlled-mailbox proof through
+the configured connector, and finish with fresh production/mailbox proof and
+strict coherence. Missing or invalid prerequisites are `not_run`; an admitted
+run that does not complete the contract is failed. The watchdog bounds the
+gate at 150 seconds.
 
 ## Verification
 
