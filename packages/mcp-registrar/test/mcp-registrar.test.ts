@@ -1300,6 +1300,23 @@ try {
       },
     },
   }, null, 2), 'utf8');
+  writeFileSync(join(aggregateSiteRoot, '.ai', 'mcp', 'narada-sonar-mcp-loader-mcp.json'), JSON.stringify({
+    schema: 'narada.mcp.client_config.v0',
+    mcpServers: {
+      'narada-sonar-mcp-loader': {
+        transport: 'stdio',
+        command: 'node',
+        args: ['D:/code/mcp-surfaces/packages/mcp-loader-mcp/dist/src/main.js'],
+        tools: [
+          'mcp_loader_process_ownership',
+          'mcp_loader_surface_handle_inventory',
+          'mcp_loader_read_result',
+          'mcp_loader_runtime_status',
+        ],
+        surface_id: 'mcp-loader',
+      },
+    },
+  }, null, 2), 'utf8');
   const mailRegistry: any = buildSiteSurfaceRegistry({ site_id: 'narada-sonar', root: aggregateSiteRoot, config_path: join(aggregateSiteRoot, 'site.json'), surfaces: [] });
   assertOutputReaderClosure(mailRegistry, 'mail surface registry');
   const mailboxRegistry: any = (mailRegistry.surfaces as Array<Record<string, any>>).find((surface) => surface.catalog_surface_id === 'mailbox');
@@ -1308,6 +1325,7 @@ try {
   assert.ok((mailboxRegistry.tool_contract.read_only_tools as string[]).includes('mailbox_output_show'));
   assert.deepEqual(mailboxRegistry.tool_contract.mutating_tools, [
     'mailbox_sync_generation',
+    'mailbox_reconcile_first_observations',
     'mailbox_message_admit',
     'mailbox_outbox_consumer_register',
     'mailbox_outbox_ack',
@@ -1321,6 +1339,16 @@ try {
   assert.equal((graphMailRegistry.tool_contract.mutating_tools as string[]).includes('graph_mail_ticket_draft_disposition_ack'), true);
   assert.equal((graphMailRegistry.tool_contract.refused_tools as string[]).includes('graph_mail_draft_send'), false);
   assert.equal((graphMailRegistry.tool_contract.mutating_tools as string[]).includes('graph_mail_draft_send'), true);
+  const loaderRegistry: any = (mailRegistry.surfaces as Array<Record<string, any>>).find((surface) => surface.catalog_surface_id === 'mcp-loader');
+  assert.ok(loaderRegistry);
+  for (const toolName of [
+    'mcp_loader_process_ownership',
+    'mcp_loader_surface_handle_inventory',
+    'mcp_loader_read_result',
+  ]) {
+    assert.ok((loaderRegistry.tool_contract.read_only_tools as string[]).includes(toolName));
+    assert.equal((loaderRegistry.tool_contract.mutating_tools as string[]).includes(toolName), false);
+  }
 
   writeFileSync(join(aggregateSiteRoot, '.ai', 'mcp', 'narada-sonar-surface-feedback-mcp.json'), JSON.stringify({
     schema: 'narada.mcp.client_config.v0',

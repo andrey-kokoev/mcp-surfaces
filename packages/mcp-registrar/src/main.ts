@@ -3458,8 +3458,10 @@ function readConfiguredServerTools(site: SiteDef, server: SiteMcpFabricServer): 
 
 function surfaceToolContract(surfaceId: string, registeredTools: string[]): SiteSurfaceRegistrySurface['tool_contract'] {
   const descriptor = nativeSurfaceDescriptor(surfaceId);
+  // readOnlyHint is the cross-surface authority for mutation semantics. A
+  // read-only runtime-admin tool may intentionally use a non-read effect class.
   const readOnlyTools = descriptor.tools
-    .filter((tool) => tool.effect.class === 'read' && registeredTools.includes(tool.name))
+    .filter((tool) => tool.annotations?.readOnlyHint === true && registeredTools.includes(tool.name))
     .map((tool) => tool.name);
   const refusedTools = descriptor.tools
     .filter((tool) => tool.annotations?.legacy_policy === 'refused' && registeredTools.includes(tool.name))
