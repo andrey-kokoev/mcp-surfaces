@@ -106,6 +106,8 @@ function asRecord(value: unknown): GraphMailRecord {
 async function graphMailMessageMarkRead(args: GraphMailRecord, state: GraphMailServerState): Promise<GraphMailRecord> {
   const policy = loadGraphMailPolicy(state.siteRoot);
   const messageId = requiredString(args, 'message_id');
+  const idempotencyKey = requiredString(args, 'idempotency_key');
+  const operationRef = `graph-mail-mark-read:${createHash('sha256').update(idempotencyKey).digest('hex').slice(0, 32)}`;
   const decision = decideMessageMarkRead(policy, args);
   if (decision.status !== 'allowed') {
     recordGraphMailAudit(state.siteRoot, {
@@ -115,10 +117,11 @@ async function graphMailMessageMarkRead(args: GraphMailRecord, state: GraphMailS
       reason: decision.reason,
     });
     return {
-      schema: 'narada.graph_mail_mcp.message_mark_read.v1',
-      status: 'refused',
-      reason: decision.reason,
-      message_id: messageId,
+      schema: 'narada.domain_operation.v1',
+      operation_ref: operationRef,
+      outcome: 'failed',
+      error_message: decision.reason,
+      result: { schema: 'narada.graph_mail_mcp.message_mark_read.v1', status: 'refused', reason: decision.reason, message_id: messageId },
     };
   }
   const { accessToken, fetchImpl } = await clientParts(state, policy);
@@ -135,9 +138,10 @@ async function graphMailMessageMarkRead(args: GraphMailRecord, state: GraphMailS
     message_id: messageId,
   });
   return {
-    schema: 'narada.graph_mail_mcp.message_mark_read.v1',
-    status: 'marked_read',
-    message_id: messageId,
+    schema: 'narada.domain_operation.v1',
+    operation_ref: operationRef,
+    outcome: 'completed',
+    result: { schema: 'narada.graph_mail_mcp.message_mark_read.v1', status: 'marked_read', message_id: messageId },
   };
 }
 
@@ -525,7 +529,7 @@ export function listTools(): unknown[] {
       message_id: { type: 'string', description: 'Graph message id.' },
       confirm_write: { type: 'boolean', default: false, description: 'Must be true for mark-read attempts.' },
       idempotency_key: { type: 'string', description: 'Stable SOP action occurrence key.' },
-    }, ['message_id']),
+    }, ['message_id', 'idempotency_key']),
     tool('graph_mail_attachment_list', 'List attachments for a live message or draft.', {
       mailbox_id: { type: 'string', default: 'me', description: 'Mailbox id or user principal. Defaults to the only allowed mailbox when policy has one, otherwise me.' },
       message_id: { type: 'string', description: 'Message id or draft id.' },

@@ -226,12 +226,14 @@ try {
         mailbox_id: 'support@example.test',
         message_id: 'message-1',
         confirm_write: true,
+        idempotency_key: 'blocked-message-1-read',
       },
     },
   }, blockedFolderState);
   assert.equal(blockedMessageMarkRead.error, undefined);
-  assert.equal(blockedMessageMarkRead.result.structuredContent.status, 'refused');
-  assert.equal(blockedMessageMarkRead.result.structuredContent.reason, 'message_mark_read_disallowed_by_policy');
+  assert.equal(blockedMessageMarkRead.result.structuredContent.outcome, 'failed');
+  assert.equal(blockedMessageMarkRead.result.structuredContent.result.status, 'refused');
+  assert.equal(blockedMessageMarkRead.result.structuredContent.result.reason, 'message_mark_read_disallowed_by_policy');
   assert.equal(blockedFolderCalls.length, 1);
   const blockedMailboxOrganizationAudit = readFileSync(join(root, '.ai', 'audit', 'graph-mail-mcp.jsonl'), 'utf8');
   assert.match(blockedMailboxOrganizationAudit, /folder_create_refused/);
@@ -517,6 +519,7 @@ try {
         mailbox_id: 'support@example.test',
         message_id: 'message-1',
         confirm_write: true,
+        idempotency_key: 'message-1-read',
       },
     },
   }, folderState);
@@ -524,7 +527,8 @@ try {
   assert.equal(folderCalls[2].init.method, 'PATCH');
   assert.equal(folderCalls[2].url, 'https://graph.example.test/v1.0/users/support%40example.test/messages/message-1');
   assert.deepEqual(JSON.parse(folderCalls[2].init.body), { isRead: true });
-  assert.equal(messageMarkRead.result.structuredContent.status, 'marked_read');
+  assert.equal(messageMarkRead.result.structuredContent.outcome, 'completed');
+  assert.equal(messageMarkRead.result.structuredContent.result.status, 'marked_read');
   const allowedMailboxOrganizationAudit = readFileSync(join(root, '.ai', 'audit', 'graph-mail-mcp.jsonl'), 'utf8');
   assert.match(allowedMailboxOrganizationAudit, /folder_create_completed/);
   assert.match(allowedMailboxOrganizationAudit, /message_move_completed/);
