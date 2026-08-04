@@ -74,6 +74,7 @@ try {
       'graph_mail_attachment_get',
       'graph_mail_attachment_delete',
       'graph_mail_draft_discard',
+      'graph_mail_ticket_draft_discard',
       'graph_mail_draft_send',
       'graph_mail_output_show',
     ],

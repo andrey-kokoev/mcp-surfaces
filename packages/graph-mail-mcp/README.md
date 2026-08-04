@@ -131,8 +131,13 @@ Telemetry is optional and off by default. When a site enables `.ai/mcp-telemetry
 - `graph_mail_reply_draft_create`: creates a reply draft from an existing message.
 - `graph_mail_reply_all_draft_create`: creates a reply-all draft from an existing message.
 - `graph_mail_forward_draft_create`: creates a forward draft from an existing message.
+- `graph_mail_ticket_draft_upsert`: idempotently creates or recovers the exact unsent draft authorized by a Work Lifecycle effect claim.
+- `graph_mail_ticket_draft_discard`: conditionally deletes that exact tracked draft after explicit confirmation, persists a restart-safe discard intent, and returns a digest-verified disposition receipt for Work Lifecycle reconciliation.
+- `graph_mail_ticket_draft_disposition_scan`: observes tracked drafts that Graph reports as sent and persists digest-verified disposition receipts; absence alone is not evidence.
+- `graph_mail_ticket_draft_disposition_list`: lists unacknowledged sent or discarded disposition receipts for one reconciliation consumer.
+- `graph_mail_ticket_draft_disposition_ack`: acknowledges a receipt only after its consumer has durably reconciled it.
 - `graph_mail_draft_update`: updates an existing draft.
-- `graph_mail_draft_discard`: deletes an existing draft.
+- `graph_mail_draft_discard`: deletes an ordinary draft, but refuses Work-linked tracked drafts; use `graph_mail_ticket_draft_discard` for those.
 - `graph_mail_draft_send`: sends an existing draft only when policy allows it.
 
 ## Send Safety

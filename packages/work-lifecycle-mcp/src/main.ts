@@ -270,7 +270,7 @@ const TICKET_TOOLS: McpToolDefinition[] = [
   },
   {
     name: 'ticket_draft_disposition_reconcile',
-    description: 'Reconcile a digest-verified, operation-linked Graph disposition observation and reactivate the ticket exactly once.',
+    description: 'Reconcile a digest-verified, operation-linked Graph sent or authorized-discard disposition receipt and reactivate the ticket exactly once.',
     inputSchema: objectSchema({
       ticket_id: stringSchema('Canonical ticket id.'),
       draft_id: stringSchema('Stable draft identity.'),

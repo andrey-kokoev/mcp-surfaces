@@ -24,6 +24,38 @@ export interface TicketDraftOperationRow {
   completed_at: string | null;
 }
 
+function hydrateDiscardIntent(row: JsonRecord): TicketDraftDiscardIntentRow {
+  const status = String(row.status);
+  if (status !== 'pending' && status !== 'verified' && status !== 'completed') {
+    throw new Error('graph_ticket_draft_discard_intent_status_corrupt');
+  }
+  return {
+    operation_key: String(row.operation_key),
+    idempotency_key: String(row.idempotency_key),
+    request_digest: String(row.request_digest),
+    status,
+    verified_etag: nullableString(row.verified_etag),
+    verified_at: nullableString(row.verified_at),
+    receipt: row.receipt_json === null ? null : parseRecord(row.receipt_json),
+    created_at: String(row.created_at),
+    updated_at: String(row.updated_at),
+    completed_at: nullableString(row.completed_at),
+  };
+}
+
+export interface TicketDraftDiscardIntentRow {
+  operation_key: string;
+  idempotency_key: string;
+  request_digest: string;
+  status: 'pending' | 'verified' | 'completed';
+  verified_etag: string | null;
+  verified_at: string | null;
+  receipt: JsonRecord | null;
+  created_at: string;
+  updated_at: string;
+  completed_at: string | null;
+}
+
 export interface BeginTicketDraftOperationInput {
   operation_key: string;
   action_idempotency_key: string;
@@ -43,8 +75,11 @@ export interface TicketDraftDispositionObservationRow {
   ticket_id: string;
   mailbox_id: string;
   draft_id: string;
-  disposition: 'sent';
-  evidence_kind: 'synchronized_graph_observation';
+  disposition: 'sent' | 'discarded';
+  evidence_kind:
+    | 'synchronized_graph_observation'
+    | 'operator_confirmed_graph_discard'
+    | 'operator_authorized_graph_absence_after_verified_discard';
   evidence_id: string;
   receipt: JsonRecord;
   observed_at: string;
@@ -91,8 +126,12 @@ export class TicketDraftOperationStore {
         ticket_id text not null,
         mailbox_id text not null,
         draft_id text not null,
-        disposition text not null check(disposition = 'sent'),
-        evidence_kind text not null check(evidence_kind = 'synchronized_graph_observation'),
+        disposition text not null check(disposition in ('sent', 'discarded')),
+        evidence_kind text not null check(evidence_kind in (
+          'synchronized_graph_observation',
+          'operator_confirmed_graph_discard',
+          'operator_authorized_graph_absence_after_verified_discard'
+        )),
         evidence_id text not null unique,
         receipt_json text not null
           check(length(cast(receipt_json as blob)) <= 16384),
@@ -109,7 +148,174 @@ export class TicketDraftOperationStore {
         acknowledged_at text not null,
         primary key(observation_id, consumer_id)
       ) strict;
+
+      create table if not exists graph_ticket_draft_discard_intents(
+        operation_key text primary key references graph_ticket_draft_operations(operation_key),
+        idempotency_key text not null unique,
+        request_digest text not null,
+        status text not null check(status in ('pending', 'verified', 'completed')),
+        verified_etag text,
+        verified_at text,
+        receipt_json text check(
+          receipt_json is null or length(cast(receipt_json as blob)) <= 16384
+        ),
+        created_at text not null,
+        updated_at text not null,
+        completed_at text,
+        check(
+          (status = 'pending' and verified_etag is null and verified_at is null and receipt_json is null and completed_at is null)
+          or
+          (status = 'verified' and verified_etag is not null and verified_at is not null and receipt_json is null and completed_at is null)
+          or
+          (status = 'completed' and verified_etag is not null and verified_at is not null and receipt_json is not null and completed_at is not null)
+        )
+      ) strict;
     `);
+    this.#migrateDispositionSchemaV1();
+  }
+
+  private requireDiscardIntent(operationKey: string): TicketDraftDiscardIntentRow {
+    const row = this.db.prepare(`
+      select * from graph_ticket_draft_discard_intents where operation_key = ?
+    `).get(operationKey) as JsonRecord | undefined;
+    if (!row) throw new Error(`graph_ticket_draft_discard_intent_not_found:${operationKey}`);
+    return hydrateDiscardIntent(row);
+  }
+
+  #migrateDispositionSchemaV1(): void {
+    const row = this.db.prepare(`
+      select sql from sqlite_master
+       where type = 'table' and name = 'graph_ticket_draft_disposition_observations'
+    `).get() as JsonRecord | undefined;
+    const sql = typeof row?.sql === 'string' ? row.sql : '';
+    if (!/check\s*\(\s*disposition\s*=\s*'sent'\s*\)/i.test(sql)) return;
+    this.db.exec('pragma foreign_keys = off;');
+    try {
+      this.db.exec(`
+        begin immediate;
+        alter table graph_ticket_draft_disposition_receipts
+          rename to graph_ticket_draft_disposition_receipts_v1;
+        alter table graph_ticket_draft_disposition_observations
+          rename to graph_ticket_draft_disposition_observations_v1;
+        create table graph_ticket_draft_disposition_observations(
+          observation_id text primary key,
+          operation_key text not null unique references graph_ticket_draft_operations(operation_key),
+          ticket_id text not null,
+          mailbox_id text not null,
+          draft_id text not null,
+          disposition text not null check(disposition in ('sent', 'discarded')),
+          evidence_kind text not null check(evidence_kind in (
+            'synchronized_graph_observation',
+            'operator_confirmed_graph_discard',
+            'operator_authorized_graph_absence_after_verified_discard'
+          )),
+          evidence_id text not null unique,
+          receipt_json text not null check(length(cast(receipt_json as blob)) <= 16384),
+          observed_at text not null
+        ) strict;
+        create table graph_ticket_draft_disposition_receipts(
+          observation_id text not null references graph_ticket_draft_disposition_observations(observation_id),
+          consumer_id text not null,
+          reconciliation_ref text not null,
+          receipt_json text not null check(length(cast(receipt_json as blob)) <= 16384),
+          acknowledged_at text not null,
+          primary key(observation_id, consumer_id)
+        ) strict;
+        insert into graph_ticket_draft_disposition_observations
+          select * from graph_ticket_draft_disposition_observations_v1;
+        insert into graph_ticket_draft_disposition_receipts
+          select * from graph_ticket_draft_disposition_receipts_v1;
+        drop table graph_ticket_draft_disposition_receipts_v1;
+        drop table graph_ticket_draft_disposition_observations_v1;
+        commit;
+      `);
+    } catch (error) {
+      try { this.db.exec('rollback;'); } catch { /* no open transaction */ }
+      throw error;
+    } finally {
+      this.db.exec('pragma foreign_keys = on;');
+    }
+  }
+
+  beginDiscardIntent(input: {
+    operation_key: string;
+    idempotency_key: string;
+    request_digest: string;
+    now: string;
+  }): { intent: TicketDraftDiscardIntentRow; created: boolean } {
+    const result = this.db.prepare(`
+      insert into graph_ticket_draft_discard_intents(
+        operation_key, idempotency_key, request_digest, status,
+        verified_etag, verified_at, receipt_json,
+        created_at, updated_at, completed_at
+      ) values (?, ?, ?, 'pending', null, null, null, ?, ?, null)
+      on conflict(operation_key) do nothing
+    `).run(
+      input.operation_key,
+      input.idempotency_key,
+      input.request_digest,
+      input.now,
+      input.now,
+    );
+    const intent = this.requireDiscardIntent(input.operation_key);
+    if (
+      intent.idempotency_key !== input.idempotency_key
+      || intent.request_digest !== input.request_digest
+    ) throw new Error(`graph_ticket_draft_discard_idempotency_conflict:${input.operation_key}`);
+    return { intent, created: Number(result.changes) === 1 };
+  }
+
+  verifyDiscardIntent(operationKey: string, etag: string, now: string): TicketDraftDiscardIntentRow {
+    const normalizedEtag = etag.trim();
+    if (!normalizedEtag) throw new Error('graph_ticket_draft_discard_etag_required');
+    const current = this.requireDiscardIntent(operationKey);
+    if (current.status === 'completed') return current;
+    this.db.prepare(`
+      update graph_ticket_draft_discard_intents
+         set status = 'verified', verified_etag = ?, verified_at = ?, updated_at = ?
+       where operation_key = ? and status in ('pending', 'verified')
+    `).run(normalizedEtag, now, now, operationKey);
+    return this.requireDiscardIntent(operationKey);
+  }
+
+  completeDiscardIntent(
+    operationKey: string,
+    observation: TicketDraftDispositionObservationRow,
+    now: string,
+  ): TicketDraftDiscardIntentRow {
+    const receiptJson = canonicalJson(observation.receipt);
+    if (Buffer.byteLength(receiptJson, 'utf8') > 16_384) {
+      throw new Error('graph_ticket_draft_discard_receipt_too_large');
+    }
+    this.beginImmediate();
+    try {
+      const current = this.requireDiscardIntent(operationKey);
+      if (current.status === 'completed') {
+        if (canonicalJson(current.receipt) !== receiptJson) {
+          throw new Error(`graph_ticket_draft_discard_completion_conflict:${operationKey}`);
+        }
+        this.commit();
+        return current;
+      }
+      if (current.status !== 'verified') {
+        throw new Error(`graph_ticket_draft_discard_not_verified:${operationKey}`);
+      }
+      this.recordDispositionObservation(observation);
+      const result = this.db.prepare(`
+        update graph_ticket_draft_discard_intents
+           set status = 'completed', receipt_json = ?, updated_at = ?, completed_at = ?
+         where operation_key = ? and status = 'verified'
+      `).run(receiptJson, now, now, operationKey);
+      if (Number(result.changes) !== 1) {
+        throw new Error(`graph_ticket_draft_discard_completion_conflict:${operationKey}`);
+      }
+      const completed = this.requireDiscardIntent(operationKey);
+      this.commit();
+      return completed;
+    } catch (error) {
+      this.rollback();
+      throw error;
+    }
   }
 
   beginImmediate(): void {
@@ -348,7 +554,7 @@ export function stableReceiptId(operationKey: string, draftId: string): string {
 
 export function stableDispositionObservationId(
   operationKey: string,
-  disposition: 'sent',
+  disposition: 'sent' | 'discarded',
   observedMessageId: string,
 ): string {
   return `graph_draft_disposition_${createHash('sha256')
@@ -397,8 +603,14 @@ function hydrate(row: JsonRecord): TicketDraftOperationRow {
 }
 
 function hydrateDispositionObservation(row: JsonRecord): TicketDraftDispositionObservationRow {
-  if (row.disposition !== 'sent') throw new Error('graph_ticket_draft_disposition_corrupt');
-  if (row.evidence_kind !== 'synchronized_graph_observation') {
+  if (row.disposition !== 'sent' && row.disposition !== 'discarded') {
+    throw new Error('graph_ticket_draft_disposition_corrupt');
+  }
+  if (
+    row.evidence_kind !== 'synchronized_graph_observation'
+    && row.evidence_kind !== 'operator_confirmed_graph_discard'
+    && row.evidence_kind !== 'operator_authorized_graph_absence_after_verified_discard'
+  ) {
     throw new Error('graph_ticket_draft_disposition_evidence_kind_corrupt');
   }
   return {
@@ -407,8 +619,8 @@ function hydrateDispositionObservation(row: JsonRecord): TicketDraftDispositionO
     ticket_id: String(row.ticket_id),
     mailbox_id: String(row.mailbox_id),
     draft_id: String(row.draft_id),
-    disposition: 'sent',
-    evidence_kind: 'synchronized_graph_observation',
+    disposition: row.disposition,
+    evidence_kind: row.evidence_kind,
     evidence_id: String(row.evidence_id),
     receipt: parseRecord(row.receipt_json),
     observed_at: String(row.observed_at),

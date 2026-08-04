@@ -47,6 +47,7 @@ const GRAPH_MAIL_TELEMETRY_TOOL_NAMES = new Set([
   'graph_mail_forward_draft_create',
   'graph_mail_reply_all_to_last_in_thread_draft_create',
   'graph_mail_ticket_draft_upsert',
+  'graph_mail_ticket_draft_discard',
   'graph_mail_ticket_draft_disposition_scan',
   'graph_mail_ticket_draft_disposition_list',
   'graph_mail_ticket_draft_disposition_ack',
@@ -68,7 +69,7 @@ type GraphMailServerState = GraphMailRecord & {
   tokenCache: { accessToken: string; expiresAtMs: number } | null;
   fetchImpl: typeof fetch;
   ticketDraftFaultInjector?: (
-    point: 'after_graph_commit_before_receipt',
+    point: 'after_graph_commit_before_receipt' | 'after_graph_discard_before_receipt',
     operationKey: string,
   ) => void | Promise<void>;
 };
@@ -98,6 +99,191 @@ type DelegatedTokenState = {
 
 function asRecord(value: unknown): GraphMailRecord {
   return value && typeof value === 'object' && !Array.isArray(value) ? value as GraphMailRecord : {};
+}
+
+async function graphMailTicketDraftDiscard(
+  args: GraphMailRecord,
+  state: GraphMailServerState,
+): Promise<GraphMailRecord> {
+  if (args.confirm_discard !== true) throw new Error('graph_ticket_draft_discard_confirmation_required');
+  const input = {
+    ticket_id: requiredString(args, 'ticket_id'),
+    effect_claim_id: requiredString(args, 'effect_claim_id'),
+    draft_operation_key: requiredString(args, 'draft_operation_key'),
+    mailbox_id: requiredString(args, 'mailbox_id'),
+    draft_id: requiredString(args, 'draft_id'),
+    idempotency_key: requiredString(args, 'idempotency_key'),
+    confirm_discard: true,
+  } as const;
+  const requestDigest = sha256Canonical(input);
+  const store = new TicketDraftOperationStore(state.siteRoot);
+  try {
+    const operation = store.find(input.draft_operation_key);
+    if (!operation || operation.status !== 'completed') {
+      throw new Error(`graph_ticket_draft_operation_not_completed:${input.draft_operation_key}`);
+    }
+    if (
+      operation.ticket_id !== input.ticket_id
+      || operation.effect_claim_id !== input.effect_claim_id
+      || operation.mailbox_id !== input.mailbox_id
+      || operation.draft_id !== input.draft_id
+    ) throw new Error(`graph_ticket_draft_discard_linkage_mismatch:${input.draft_operation_key}`);
+
+    const begun = store.beginDiscardIntent({
+      operation_key: input.draft_operation_key,
+      idempotency_key: input.idempotency_key,
+      request_digest: requestDigest,
+      now: new Date().toISOString(),
+    });
+    if (begun.intent.status === 'completed') {
+      return {
+        schema: 'narada.graph_mail.ticket_draft_discard.v1',
+        status: 'discarded',
+        disposition_receipt: begun.intent.receipt,
+        idempotency_replayed_or_recovered: true,
+      };
+    }
+
+    const client = await clientParts(state);
+    const messages = await findTicketMessagesByOperation(input.mailbox_id, input.draft_operation_key, client);
+    if (messages.length > 1) {
+      throw new Error(`graph_ticket_draft_discard_remote_identity_ambiguous:${input.draft_operation_key}`);
+    }
+    const observed = messages[0];
+    if (!observed) {
+      if (begun.intent.status !== 'verified') {
+        throw new Error(`graph_ticket_draft_discard_absence_not_evidence:${input.draft_operation_key}`);
+      }
+      const receipt = ticketDraftDiscardReceipt(operation, {
+        evidence_kind: 'operator_authorized_graph_absence_after_verified_discard',
+        graph_delete_confirmed: false,
+        graph_absence_confirmed: true,
+        observed_at: new Date().toISOString(),
+      });
+      const completed = store.completeDiscardIntent(
+        input.draft_operation_key,
+        ticketDraftDiscardObservation(operation, receipt),
+        String(receipt.observed_at),
+      );
+      return {
+        schema: 'narada.graph_mail.ticket_draft_discard.v1',
+        status: 'discarded',
+        disposition_receipt: completed.receipt,
+        idempotency_replayed_or_recovered: true,
+      };
+    }
+
+    const observedMessageId = requiredDraftDispositionMessageId(observed);
+    if (observedMessageId !== input.draft_id) {
+      throw new Error(`graph_ticket_draft_discard_remote_identity_mismatch:${input.draft_operation_key}`);
+    }
+    if (observed.isDraft !== true) {
+      throw new Error(`graph_ticket_draft_discard_refused_not_draft:${input.draft_operation_key}`);
+    }
+    const verifier = stringOption(observed['@odata.etag']) ?? stringOption(observed.changeKey);
+    if (!verifier) throw new Error('graph_ticket_draft_discard_remote_verifier_missing');
+    const verifiedAt = new Date().toISOString();
+    store.verifyDiscardIntent(input.draft_operation_key, verifier, verifiedAt);
+
+    const path = graphMailboxPath(
+      input.mailbox_id,
+      `messages/${encodeURIComponent(input.draft_id)}`,
+      client.policy,
+    );
+    recordGraphMailAudit(state.siteRoot, {
+      event_kind: 'ticket_draft_discard_requested',
+      ticket_id: input.ticket_id,
+      effect_claim_id: input.effect_claim_id,
+      draft_operation_key: input.draft_operation_key,
+      mailbox_id: input.mailbox_id,
+      draft_id: input.draft_id,
+    });
+    await graphRequest(client, { method: 'DELETE', path, headers: { 'If-Match': verifier } });
+    recordGraphMailAudit(state.siteRoot, {
+      event_kind: 'ticket_draft_discard_completed',
+      ticket_id: input.ticket_id,
+      effect_claim_id: input.effect_claim_id,
+      draft_operation_key: input.draft_operation_key,
+      mailbox_id: input.mailbox_id,
+      draft_id: input.draft_id,
+    });
+    await state.ticketDraftFaultInjector?.(
+      'after_graph_discard_before_receipt',
+      input.draft_operation_key,
+    );
+    const receipt = ticketDraftDiscardReceipt(operation, {
+      evidence_kind: 'operator_confirmed_graph_discard',
+      graph_delete_confirmed: true,
+      graph_absence_confirmed: false,
+      observed_at: verifiedAt,
+    });
+    const completed = store.completeDiscardIntent(
+      input.draft_operation_key,
+      ticketDraftDiscardObservation(operation, receipt),
+      verifiedAt,
+    );
+    return {
+      schema: 'narada.graph_mail.ticket_draft_discard.v1',
+      status: 'discarded',
+      disposition_receipt: completed.receipt,
+      idempotency_replayed_or_recovered: false,
+    };
+  } finally {
+    store.close();
+  }
+}
+
+function ticketDraftDiscardReceipt(
+  operation: TicketDraftOperationRow,
+  evidence: {
+    evidence_kind:
+      | 'operator_confirmed_graph_discard'
+      | 'operator_authorized_graph_absence_after_verified_discard';
+    graph_delete_confirmed: boolean;
+    graph_absence_confirmed: boolean;
+    observed_at: string;
+  },
+): GraphMailRecord {
+  const draftId = String(operation.draft_id);
+  const observationId = stableDispositionObservationId(operation.operation_key, 'discarded', draftId);
+  const unsignedReceipt: GraphMailRecord = {
+    schema: 'narada.graph_mail.ticket_draft_disposition_receipt.v1',
+    observation_id: observationId,
+    evidence_kind: evidence.evidence_kind,
+    evidence_id: observationId,
+    disposition: 'discarded',
+    ticket_id: operation.ticket_id,
+    effect_claim_id: operation.effect_claim_id,
+    draft_operation_key: operation.operation_key,
+    mailbox_id: operation.mailbox_id,
+    draft_id: draftId,
+    observed_message_id: draftId,
+    is_draft: true,
+    graph_delete_confirmed: evidence.graph_delete_confirmed,
+    graph_absence_confirmed: evidence.graph_absence_confirmed,
+    observed_at: evidence.observed_at,
+  };
+  return { ...unsignedReceipt, receipt_sha256: sha256Canonical(unsignedReceipt) };
+}
+
+function ticketDraftDiscardObservation(
+  operation: TicketDraftOperationRow,
+  receipt: GraphMailRecord,
+) {
+  return {
+    observation_id: String(receipt.observation_id),
+    operation_key: operation.operation_key,
+    ticket_id: operation.ticket_id,
+    mailbox_id: operation.mailbox_id,
+    draft_id: String(operation.draft_id),
+    disposition: 'discarded' as const,
+    evidence_kind: receipt.evidence_kind as
+      | 'operator_confirmed_graph_discard'
+      | 'operator_authorized_graph_absence_after_verified_discard',
+    evidence_id: String(receipt.evidence_id),
+    receipt,
+    observed_at: String(receipt.observed_at),
+  };
 }
 
 if (import.meta.url === `file:///${process.argv[1]?.replace(/\\/g, '/')}`) {
@@ -347,6 +533,23 @@ export function listTools(): unknown[] {
       'source_message_id',
       'reply_mode',
       'idempotency_key',
+    ]),
+    tool('graph_mail_ticket_draft_discard', 'Idempotently discard the exact unsent draft linked to a Work Lifecycle effect claim and durably emit a reconciliable disposition receipt. This tool cannot send.', {
+      ticket_id: { type: 'string', description: 'Canonical Work Lifecycle ticket id.' },
+      effect_claim_id: { type: 'string', description: 'Revision-bound Work Lifecycle effect claim id.' },
+      draft_operation_key: { type: 'string', description: 'Stable Work Lifecycle Graph draft operation key.' },
+      mailbox_id: { type: 'string', description: 'Allowed mailbox identity recorded by the draft operation.' },
+      draft_id: { type: 'string', description: 'Exact tracked draft id recorded by the draft operation.' },
+      idempotency_key: { type: 'string', description: 'Stable operator/SOP discard occurrence key.' },
+      confirm_discard: { type: 'boolean', const: true, description: 'Must be true to authorize permanent deletion of this unsent draft.' },
+    }, [
+      'ticket_id',
+      'effect_claim_id',
+      'draft_operation_key',
+      'mailbox_id',
+      'draft_id',
+      'idempotency_key',
+      'confirm_discard',
     ]),
     tool('graph_mail_ticket_draft_disposition_scan', 'Mechanically observe bounded tracked ticket drafts and durably record a sent disposition only when Graph returns the operation-linked message with isDraft=false. Absence is never treated as a disposition.', {
       limit: { type: 'integer', minimum: 1, maximum: 5, default: 5 },
@@ -660,6 +863,9 @@ async function callTool(params: GraphMailRecord, state: GraphMailServerState) {
         break;
       case 'graph_mail_ticket_draft_upsert':
         result = await graphMailTicketDraftUpsert(args, state);
+        break;
+      case 'graph_mail_ticket_draft_discard':
+        result = await graphMailTicketDraftDiscard(args, state);
         break;
       case 'graph_mail_ticket_draft_disposition_scan':
         result = await graphMailTicketDraftDispositionScan(args, state);
@@ -1644,8 +1850,32 @@ async function graphMailDraftDiscard(args: GraphMailRecord, state: GraphMailServ
   const { policy, accessToken, fetchImpl } = await clientParts(state);
   const draftId = requiredString(args, 'draft_id');
   const path = graphMailboxPath(args.mailbox_id, `messages/${encodeURIComponent(draftId)}`, policy);
+  const propertyId = odataString(TICKET_DRAFT_OPERATION_PROPERTY_ID);
+  const draft = asRecord(await graphRequest(
+    { policy, accessToken, fetchImpl },
+    {
+      path,
+      query: {
+        '$select': 'id,isDraft,changeKey',
+        '$expand': `singleValueExtendedProperties($filter=id eq '${propertyId}')`,
+      },
+    },
+  ));
+  if (draft.isDraft !== true) throw new Error('graph_mail_draft_discard_refused_not_draft');
+  const properties = Array.isArray(draft.singleValueExtendedProperties)
+    ? draft.singleValueExtendedProperties.map(asRecord)
+    : [];
+  if (properties.some((property) => (
+    property.id === TICKET_DRAFT_OPERATION_PROPERTY_ID && stringOption(property.value)
+  ))) {
+    throw new Error('graph_ticket_draft_requires_ticket_discard_tool');
+  }
+  const verifier = stringOption(draft['@odata.etag']) ?? stringOption(draft.changeKey);
   recordGraphMailAudit(state.siteRoot, { event_kind: 'draft_discard_requested', mailbox_id: args.mailbox_id ?? 'me', draft_id: draftId });
-  const graph = await graphRequest({ policy, accessToken, fetchImpl }, { method: 'DELETE', path });
+  const graph = await graphRequest(
+    { policy, accessToken, fetchImpl },
+    { method: 'DELETE', path, ...(verifier ? { headers: { 'If-Match': verifier } } : {}) },
+  );
   recordGraphMailAudit(state.siteRoot, { event_kind: 'draft_discard_completed', mailbox_id: args.mailbox_id ?? 'me', draft_id: draftId });
   return { schema: 'narada.graph_mail_mcp.draft_discard.v1', status: 'discarded', result: graph };
 }
@@ -1879,6 +2109,7 @@ const GRAPH_MAIL_MUTATING_TOOLS = new Set([
   'graph_mail_forward_draft_create',
   'graph_mail_reply_all_to_last_in_thread_draft_create',
   'graph_mail_ticket_draft_upsert',
+  'graph_mail_ticket_draft_discard',
   'graph_mail_ticket_draft_disposition_scan',
   'graph_mail_ticket_draft_disposition_ack',
   'graph_mail_draft_update',
@@ -1890,6 +2121,7 @@ const GRAPH_MAIL_DESTRUCTIVE_TOOLS = new Set([
   'graph_mail_auth_clear',
   'graph_mail_message_move',
   'graph_mail_attachment_delete',
+  'graph_mail_ticket_draft_discard',
   'graph_mail_draft_discard',
   'graph_mail_draft_send',
 ]);
@@ -1905,6 +2137,7 @@ const GRAPH_MAIL_IDEMPOTENT_TOOLS = new Set([
   'graph_mail_attachment_list',
   'graph_mail_attachment_get',
   'graph_mail_ticket_draft_upsert',
+  'graph_mail_ticket_draft_discard',
   'graph_mail_ticket_draft_disposition_scan',
   'graph_mail_ticket_draft_disposition_list',
   'graph_mail_ticket_draft_disposition_ack',

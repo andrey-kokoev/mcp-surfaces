@@ -21,6 +21,7 @@ export type GraphMailRequest = {
   path: string;
   query?: Record<string, string | number | boolean | null | undefined>;
   body?: unknown;
+  headers?: Record<string, string>;
 };
 
 function trimSlashes(value: string): string {
@@ -57,6 +58,7 @@ export async function graphRequest(options: GraphMailClientOptions, request: Gra
   const headers: Record<string, string> = {
     Authorization: `Bearer ${options.accessToken}`,
     Accept: 'application/json',
+    ...request.headers,
   };
   const init: GraphMailRecord = { method, headers };
   if (request.body !== undefined) {

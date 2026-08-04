@@ -110,6 +110,7 @@ try {
     'graph_mail_forward_draft_create',
     'graph_mail_reply_all_to_last_in_thread_draft_create',
     'graph_mail_ticket_draft_upsert',
+    'graph_mail_ticket_draft_discard',
     'graph_mail_ticket_draft_disposition_scan',
     'graph_mail_ticket_draft_disposition_list',
     'graph_mail_ticket_draft_disposition_ack',
@@ -128,6 +129,8 @@ try {
   assert.equal(toolRows.find((tool: DynamicTestValue) => tool.name === 'graph_mail_message_move')?.annotations.destructiveHint, true);
   assert.equal(toolRows.find((tool: DynamicTestValue) => tool.name === 'graph_mail_attachment_upload_chunk')?.annotations.readOnlyHint, false);
   assert.equal(toolRows.find((tool: DynamicTestValue) => tool.name === 'graph_mail_ticket_draft_upsert')?.annotations.idempotentHint, true);
+  assert.equal(toolRows.find((tool: DynamicTestValue) => tool.name === 'graph_mail_ticket_draft_discard')?.annotations.destructiveHint, true);
+  assert.equal(toolRows.find((tool: DynamicTestValue) => tool.name === 'graph_mail_ticket_draft_discard')?.annotations.idempotentHint, true);
   assert.equal(toolRows.find((tool: DynamicTestValue) => tool.name === 'graph_mail_ticket_draft_upsert')?.annotations.readOnlyHint, false);
   assert.equal(toolRows.find((tool: DynamicTestValue) => tool.name === 'graph_mail_ticket_draft_disposition_scan')?.annotations.idempotentHint, true);
   assert.equal(toolRows.find((tool: DynamicTestValue) => tool.name === 'graph_mail_ticket_draft_disposition_scan')?.annotations.readOnlyHint, false);
@@ -901,6 +904,189 @@ try {
   assert.equal(ticketDraftReplay.result.structuredContent.result.draft_id, 'ticket-draft-1');
   assert.equal(ticketDraftReplay.result.structuredContent.result.idempotency_replayed_or_recovered, true);
   assert.equal(ticketDraftCalls.length, 2, 'exact replay must not call Graph');
+
+  const discardDraftCalls: CapturedRequest[] = [];
+  const discardDraftState = createServerState({
+    siteRoot: root,
+    accessToken: 'test-token',
+    fetchImpl: mockFetch(discardDraftCalls, [
+      { body: { value: [] } },
+      { body: { id: 'ticket-draft-discard-1', isDraft: true, conversationId: 'conversation-discard-1' } },
+      {
+        body: {
+          id: 'ticket-draft-discard-1',
+          isDraft: true,
+          changeKey: 'discard-change-1',
+          singleValueExtendedProperties: [{
+            id: 'String {d700a6f2-79ad-4f44-9df7-3e9b622f09f8} Name NaradaTicketDraftOperation',
+            value: 'draft_operation_ticket_discard_1',
+          }],
+        },
+      },
+      { body: { value: [{ id: 'ticket-draft-discard-1', isDraft: true, changeKey: 'discard-change-1' }] } },
+      { status: 204, text: '' },
+    ]),
+  });
+  const discardDraftRequest = {
+    source_id: 'source-discard-1',
+    mailbox_id: 'support@example.test',
+    source_message_id: 'source-message-discard-1',
+    reply_mode: 'reply',
+    body_text: 'Controlled unsent draft to discard.',
+  };
+  const discardDraftCreateArguments = {
+    ticket_id: 'ticket-discard-1',
+    effect_claim_id: 'effect-claim-discard-1',
+    draft_operation_key: 'draft_operation_ticket_discard_1',
+    draft_request_digest: sha256Canonical(discardDraftRequest),
+    draft_source_id: discardDraftRequest.source_id,
+    mailbox_id: discardDraftRequest.mailbox_id,
+    source_message_id: discardDraftRequest.source_message_id,
+    reply_mode: discardDraftRequest.reply_mode,
+    body_text: discardDraftRequest.body_text,
+    idempotency_key: 'sop-action-ticket-draft-discard-create-1',
+  };
+  const discardDraftCreated = await rpc({
+    jsonrpc: '2.0', id: 14011, method: 'tools/call',
+    params: { name: 'graph_mail_ticket_draft_upsert', arguments: discardDraftCreateArguments },
+  }, discardDraftState);
+  assert.equal(discardDraftCreated.error, undefined);
+  const genericTrackedDiscard = await rpc({
+    jsonrpc: '2.0', id: 140115, method: 'tools/call',
+    params: {
+      name: 'graph_mail_draft_discard',
+      arguments: { mailbox_id: 'support@example.test', draft_id: 'ticket-draft-discard-1' },
+    },
+  }, discardDraftState);
+  assert.match(String(genericTrackedDiscard.error?.message), /graph_ticket_draft_requires_ticket_discard_tool/);
+  assert.equal(discardDraftCalls.filter((call) => call.init.method === 'DELETE').length, 0);
+  const discardArguments = {
+    ticket_id: discardDraftCreateArguments.ticket_id,
+    effect_claim_id: discardDraftCreateArguments.effect_claim_id,
+    draft_operation_key: discardDraftCreateArguments.draft_operation_key,
+    mailbox_id: discardDraftCreateArguments.mailbox_id,
+    draft_id: 'ticket-draft-discard-1',
+    idempotency_key: 'operator-discard-ticket-draft-1',
+    confirm_discard: true,
+  };
+  const discarded = await rpc({
+    jsonrpc: '2.0', id: 14012, method: 'tools/call',
+    params: { name: 'graph_mail_ticket_draft_discard', arguments: discardArguments },
+  }, discardDraftState);
+  assert.equal(discarded.error, undefined);
+  assert.equal(discarded.result.structuredContent.status, 'discarded');
+  assert.equal(discarded.result.structuredContent.idempotency_replayed_or_recovered, false);
+  const discardReceipt = discarded.result.structuredContent.disposition_receipt;
+  assert.equal(discardReceipt.disposition, 'discarded');
+  assert.equal(discardReceipt.evidence_kind, 'operator_confirmed_graph_discard');
+  assert.equal(discardReceipt.graph_delete_confirmed, true);
+  assert.equal(discardDraftCalls[4].init.method, 'DELETE');
+  assert.equal(discardDraftCalls[4].init.headers['If-Match'], 'discard-change-1');
+  const { receipt_sha256: discardReceiptSha256, ...unsignedDiscardReceipt } = discardReceipt;
+  assert.equal(discardReceiptSha256, sha256Canonical(unsignedDiscardReceipt));
+  const discardedReplay = await rpc({
+    jsonrpc: '2.0', id: 14013, method: 'tools/call',
+    params: { name: 'graph_mail_ticket_draft_discard', arguments: discardArguments },
+  }, discardDraftState);
+  assert.equal(discardedReplay.error, undefined);
+  assert.equal(discardedReplay.result.structuredContent.idempotency_replayed_or_recovered, true);
+  assert.equal(discardDraftCalls.length, 5, 'discard replay must not call Graph');
+  const discardAck = await rpc({
+    jsonrpc: '2.0', id: 14014, method: 'tools/call',
+    params: {
+      name: 'graph_mail_ticket_draft_disposition_ack',
+      arguments: {
+        observation_id: discardReceipt.observation_id,
+        consumer_id: 'work-reconciler',
+        reconciliation_ref: 'work-event-discard-1',
+        reconciliation_receipt: { event_id: 'work-event-discard-1', status: 'reconciled' },
+      },
+    },
+  }, discardDraftState);
+  assert.equal(discardAck.error, undefined);
+
+  const interruptedDiscardCalls: CapturedRequest[] = [];
+  let injectDiscardCrash = true;
+  const interruptedDiscardState = createServerState({
+    siteRoot: root,
+    accessToken: 'test-token',
+    fetchImpl: mockFetch(interruptedDiscardCalls, [
+      { body: { value: [] } },
+      { body: { id: 'ticket-draft-discard-recovered', isDraft: true } },
+      { body: { value: [{ id: 'ticket-draft-discard-recovered', isDraft: true, changeKey: 'discard-change-recovered' }] } },
+      { status: 204, text: '' },
+      { body: { value: [] } },
+    ]),
+    ticketDraftFaultInjector: (point: 'after_graph_commit_before_receipt' | 'after_graph_discard_before_receipt') => {
+      if (point !== 'after_graph_discard_before_receipt' || !injectDiscardCrash) return;
+      injectDiscardCrash = false;
+      throw new Error('injected_after_graph_discard');
+    },
+  });
+  const interruptedCreateRequest = {
+    source_id: 'source-discard-recovered',
+    mailbox_id: 'support@example.test',
+    source_message_id: 'source-message-discard-recovered',
+    reply_mode: 'reply',
+    body_text: 'Controlled crash-recovery draft.',
+  };
+  const interruptedCreateArguments = {
+    ticket_id: 'ticket-discard-recovered',
+    effect_claim_id: 'effect-claim-discard-recovered',
+    draft_operation_key: 'draft_operation_ticket_discard_recovered',
+    draft_request_digest: sha256Canonical(interruptedCreateRequest),
+    draft_source_id: interruptedCreateRequest.source_id,
+    mailbox_id: interruptedCreateRequest.mailbox_id,
+    source_message_id: interruptedCreateRequest.source_message_id,
+    reply_mode: interruptedCreateRequest.reply_mode,
+    body_text: interruptedCreateRequest.body_text,
+    idempotency_key: 'sop-action-ticket-draft-discard-recovered-create',
+  };
+  const interruptedCreated = await rpc({
+    jsonrpc: '2.0', id: 14015, method: 'tools/call',
+    params: { name: 'graph_mail_ticket_draft_upsert', arguments: interruptedCreateArguments },
+  }, interruptedDiscardState);
+  assert.equal(interruptedCreated.error, undefined);
+  const interruptedDiscardArguments = {
+    ticket_id: interruptedCreateArguments.ticket_id,
+    effect_claim_id: interruptedCreateArguments.effect_claim_id,
+    draft_operation_key: interruptedCreateArguments.draft_operation_key,
+    mailbox_id: interruptedCreateArguments.mailbox_id,
+    draft_id: 'ticket-draft-discard-recovered',
+    idempotency_key: 'operator-discard-ticket-draft-recovered',
+    confirm_discard: true,
+  };
+  const interruptedDiscard = await rpc({
+    jsonrpc: '2.0', id: 14016, method: 'tools/call',
+    params: { name: 'graph_mail_ticket_draft_discard', arguments: interruptedDiscardArguments },
+  }, interruptedDiscardState);
+  assert.match(String(interruptedDiscard.error?.message), /injected_after_graph_discard/);
+  const recoveredDiscard = await rpc({
+    jsonrpc: '2.0', id: 14017, method: 'tools/call',
+    params: { name: 'graph_mail_ticket_draft_discard', arguments: interruptedDiscardArguments },
+  }, interruptedDiscardState);
+  assert.equal(recoveredDiscard.error, undefined);
+  assert.equal(recoveredDiscard.result.structuredContent.status, 'discarded');
+  assert.equal(recoveredDiscard.result.structuredContent.idempotency_replayed_or_recovered, true);
+  assert.equal(
+    recoveredDiscard.result.structuredContent.disposition_receipt.evidence_kind,
+    'operator_authorized_graph_absence_after_verified_discard',
+  );
+  assert.equal(recoveredDiscard.result.structuredContent.disposition_receipt.graph_delete_confirmed, false);
+  assert.equal(interruptedDiscardCalls.filter((call) => call.init.method === 'DELETE').length, 1);
+  const recoveredDiscardAck = await rpc({
+    jsonrpc: '2.0', id: 14018, method: 'tools/call',
+    params: {
+      name: 'graph_mail_ticket_draft_disposition_ack',
+      arguments: {
+        observation_id: recoveredDiscard.result.structuredContent.disposition_receipt.observation_id,
+        consumer_id: 'work-reconciler',
+        reconciliation_ref: 'work-event-discard-recovered',
+        reconciliation_receipt: { event_id: 'work-event-discard-recovered', status: 'reconciled' },
+      },
+    },
+  }, interruptedDiscardState);
+  assert.equal(recoveredDiscardAck.error, undefined);
 
   const absentDispositionCalls: CapturedRequest[] = [];
   const absentDispositionState = createServerState({
