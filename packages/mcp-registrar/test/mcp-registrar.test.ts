@@ -7,12 +7,30 @@ import { fileURLToPath } from 'node:url';
 import { DatabaseSync } from 'node:sqlite';
 import { payloadCreate } from '@narada-core/mcp-transport';
 import { buildGuidanceResult } from '../src/guidance.js';
-import { appendLoaderAllowedSiteRoots, buildSiteBindConfig, buildSiteSurfaceRegistry, checkOutputReaderClosureForRegistry, checkSiteRegistryConformance, checkSiteRegistryConformanceFromObservation, compareCarrierProjection, createServerState, handleRequest, readSiteSurfaceOverrides, sharedSurfaceIdsForBinding, siteBindSidecarRefusal, siteSurfaceServerKey, validateSiteMcpFabric, validateSiteToolInventoryObservation } from '../src/main.js';
+import { appendLoaderAllowedSiteRoots, buildSiteBindConfig, buildSiteSurfaceRegistry, checkOutputReaderClosureForRegistry, checkSiteRegistryConformance, checkSiteRegistryConformanceFromObservation, compareCarrierProjection, createServerState, handleRequest, readCodexPluginOverrides, readSiteSurfaceOverrides, sharedSurfaceIdsForBinding, siteBindSidecarRefusal, siteSurfaceServerKey, validateSiteMcpFabric, validateSiteToolInventoryObservation } from '../src/main.js';
 
 const root: any = mkdtempSync(join(tmpdir(), 'mcp-registrar-behavior-'));
 const siteOverrideConfig = join(root, 'site-overrides.json');
 writeFileSync(siteOverrideConfig, JSON.stringify({ surface_overrides: { 'task-lifecycle': { enabled: false } } }), 'utf8');
 assert.deepEqual(readSiteSurfaceOverrides(siteOverrideConfig), { 'task-lifecycle': { enabled: false } });
+assert.deepEqual(
+  readCodexPluginOverrides({
+    NARADA_CODEX_ENABLED_PLUGINS: 'sample-enabled@personal;sample-second@team',
+    NARADA_CODEX_DISABLED_PLUGINS: 'sample-disabled@personal',
+  }),
+  {
+    'sample-disabled@personal': false,
+    'sample-enabled@personal': true,
+    'sample-second@team': true,
+  },
+);
+assert.throws(
+  () => readCodexPluginOverrides({
+    NARADA_CODEX_ENABLED_PLUGINS: 'sample@personal',
+    NARADA_CODEX_DISABLED_PLUGINS: 'sample@personal',
+  }),
+  /registrar_codex_plugin_policy_conflict/,
+);
 assert.equal(sharedSurfaceIdsForBinding(
   { site_id: 'fixture', surfaces: ['task-lifecycle', 'work-lifecycle'], prefix: 'fixture' },
   { site_id: 'fixture', root, config_path: siteOverrideConfig, surfaces: [], surface_overrides: readSiteSurfaceOverrides(siteOverrideConfig) },
@@ -255,6 +273,11 @@ try {
   const operatorProjectionConfig: any = buildSiteBindConfig(fixtureSite, narsSession as any, 'user-site-operator');
   const operatorProjectionServer: any = (operatorProjectionConfig.config.mcpServers as Record<string, any>)[operatorProjectionConfig.serverKey];
   assert.equal(operatorProjectionServer.surface_projection.projection_id, 'user-site-operator');
+  assert.deepEqual(operatorProjectionServer.surface_projection.execution, {
+    adapter: 'stdio',
+    tenancy: 'session_isolated',
+    replacement: 'manual',
+  });
 
   const quotaMeter: any = (surfaceData.items as Array<Record<string, any>>).find((s) => s.id === 'quota-meter');
   assert.ok(quotaMeter);

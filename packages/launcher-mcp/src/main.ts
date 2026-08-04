@@ -33,7 +33,7 @@ function mcpScopeLoci(scope: string): string[] {
 const COVERED_OPTIONS = [...DECLARED_OPTIONS];
 
 type JsonRecord = Record<string, unknown>;
-type LauncherState = { naradaRoot: string; defaultRegistryPath: string };
+type LauncherState = { naradaRoot: string; defaultRegistryPath: string; projectionId: string };
 type AgentRecord = {
   agent: string;
   title: string;
@@ -53,7 +53,8 @@ type AgentRecord = {
 export function createServerState(options: JsonRecord = {}): LauncherState {
   const naradaRoot = normalizePath(String(options.naradaRoot ?? options.narada_root ?? process.env.NARADA_ROOT ?? DEFAULT_NARADA_ROOT));
   const defaultRegistryPath = normalizePath(String(options.registryPath ?? options.registry_path ?? join(naradaRoot, 'config', 'launch', 'agents.psd1')));
-  return { naradaRoot, defaultRegistryPath };
+  const projectionId = String(options.projectionId ?? options.projection_id ?? 'stdio');
+  return { naradaRoot, defaultRegistryPath, projectionId };
 }
 
 export async function handleRequest(request: JsonRecord, state: LauncherState) {
@@ -111,6 +112,11 @@ export function launcherSurfaceDefinition(): DefinedSurface {
         args: ['{mcp_surfaces_root}/launcher-mcp/dist/src/main.js', '--narada-root', '{site_root}'],
         env: [],
       },
+      execution: {
+        adapter: 'stdio',
+        tenancy: 'session_isolated',
+        replacement: 'manual',
+      },
       injection_scope: 'user_site',
       default_injection: 'disabled',
       runtime_requirements: [],
@@ -118,6 +124,27 @@ export function launcherSurfaceDefinition(): DefinedSurface {
       lifecycle: {
         mode: 'replayable',
         reason: 'Launcher tools are read-only plans and registry reads; reconnecting to a fresh stdio process is safe.',
+      },
+    }, {
+      id: 'factory',
+      transport: {
+        kind: 'stdio',
+        command: 'node',
+        args: ['{mcp_surfaces_root}/launcher-mcp/dist/src/runtime-factory.js'],
+        env: [],
+      },
+      execution: {
+        adapter: 'surface_factory',
+        tenancy: 'authority_shared',
+        replacement: 'generation_swap',
+      },
+      injection_scope: 'user_site',
+      default_injection: 'disabled',
+      runtime_requirements: [],
+      authority_requirements: ['scope.user_site'],
+      lifecycle: {
+        mode: 'replayable',
+        reason: 'Launcher tools are read-only and may share one authority-partitioned Site runtime across carrier sessions.',
       },
     }],
   });
@@ -267,6 +294,8 @@ function launcherTelemetryDeclaration(toolName: string): TelemetryDeclaration | 
 function launcherDoctor(state: LauncherState): JsonRecord {
   const launcherScript = join(state.naradaRoot, 'Start-NaradaWorkspace.ps1');
   const matrixScript = join(state.naradaRoot, 'tools', 'agent-start', 'Test-LauncherOptionMatrix.ps1');
+  const projection = launcherSurfaceDefinition().descriptor.projections.find((candidate) => candidate.id === state.projectionId)
+    ?? launcherSurfaceDefinition().descriptor.projections[0];
   return {
     schema: 'narada.launcher.doctor.v1',
     status: existsSync(state.defaultRegistryPath) && existsSync(launcherScript) ? 'ok' : 'degraded',
@@ -282,8 +311,12 @@ function launcherDoctor(state: LauncherState): JsonRecord {
     option_matrix_script_exists: existsSync(matrixScript),
     execution_posture: 'read_only_no_launch_no_shell',
     fabric_lifecycle: {
-      ...launcherSurfaceDefinition().descriptor.projections[0]?.lifecycle,
-      reconnect: 'start_fresh_stdio_process',
+      projection_id: projection?.id ?? state.projectionId,
+      execution: projection?.execution,
+      ...projection?.lifecycle,
+      reconnect: projection?.execution?.adapter === 'surface_factory'
+        ? 'reuse_authority_shared_site_runtime'
+        : 'start_fresh_stdio_process',
       restart_actuator: null,
     },
     mcp_injection_scope_doctrine: {
@@ -649,6 +682,7 @@ function parseCliArgs(argv: string[]): JsonRecord {
     const arg = argv[i];
     if (arg === '--narada-root' && argv[i + 1]) options.naradaRoot = argv[++i];
     else if (arg === '--registry-path' && argv[i + 1]) options.registryPath = argv[++i];
+    else if (arg === '--projection-id' && argv[i + 1]) options.projectionId = argv[++i];
   }
   return options;
 }

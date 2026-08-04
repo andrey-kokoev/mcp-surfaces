@@ -499,6 +499,8 @@ export async function runProxy(argv = process.argv.slice(2)): Promise<void> {
   let stderrTail = '';
   let stdoutTail = '';
   let childClosed = false;
+  let childCloseDiagnostic: ProxyDiagnostic | null = null;
+  let parentRequestObserved = false;
   let parentFramed = false;
   const childLaunch = spawnProxyChild(options, supervisorPath);
   const child = childLaunch.child;
@@ -618,6 +620,7 @@ export async function runProxy(argv = process.argv.slice(2)): Promise<void> {
     const drained = startsWithJsonRpcFrame(parentBuffer) ? drainJsonRpcFrames(parentBuffer) : drainJsonLines(parentBuffer);
     parentBuffer = drained.remaining;
     if (drained.requests.length > 0) parentFramed = drained.framed;
+    if (drained.requests.length > 0) parentRequestObserved = true;
     for (const request of drained.requests) {
       const params = isJsonRecord(request.params) ? request.params : {};
       if (request.method === 'tools/call' && params.name === RUNTIME_STATUS_TOOL_NAME) {
@@ -654,13 +657,6 @@ export async function runProxy(argv = process.argv.slice(2)): Promise<void> {
           }, drained.framed);
         }
         continue;
-      }
-      if (!child.stdin.destroyed) writeJsonRpcMessageToStream(child.stdin, request, false);
-      if (request.method === 'initialize' || request.method === 'tools/list') {
-        recordStartupTrace(startupTrace, options, child, childIdentity, 'request_forwarded', {
-          method: request.method,
-          request_id: request.id ?? null,
-        });
       }
       const id = request.id;
       if ((typeof id === 'string' || typeof id === 'number') && typeof request.method === 'string') {
@@ -721,6 +717,26 @@ export async function runProxy(argv = process.argv.slice(2)): Promise<void> {
           startedAt: new Date().toISOString(),
           lastProgress: null,
           lifecycle: [{ at: new Date().toISOString(), event: 'request_forwarded' }],
+        });
+      }
+      if (childClosed || child.stdin.destroyed) {
+        if (pending.size > 0) {
+          flushPendingErrors(pending, options, childCloseDiagnostic ?? {
+            code: 'child_exited_before_response',
+            message: `child_exited_before_response:${child.exitCode ?? child.signalCode ?? 'unknown'}`,
+            stderrTail,
+            stdoutTail,
+            exitCode: child.exitCode,
+            signal: child.signalCode,
+          }, child, childIdentity, childBuffer);
+        }
+        continue;
+      }
+      writeJsonRpcMessageToStream(child.stdin, request, false);
+      if (request.method === 'initialize' || request.method === 'tools/list') {
+        recordStartupTrace(startupTrace, options, child, childIdentity, 'request_forwarded', {
+          method: request.method,
+          request_id: request.id ?? null,
         });
       }
     }
@@ -799,16 +815,16 @@ export async function runProxy(argv = process.argv.slice(2)): Promise<void> {
       signal,
       parent_pid_alive: processIsAlive(parentPid),
     }, new Date().toISOString());
-    process.stdin.pause();
+    childCloseDiagnostic = {
+      code: 'child_exited_before_response',
+      message: `child_exited_before_response:${code ?? signal ?? 'unknown'}`,
+      stderrTail,
+      stdoutTail,
+      exitCode: code,
+      signal,
+    };
     if (pending.size > 0) {
-      flushPendingErrors(pending, options, {
-        code: 'child_exited_before_response',
-        message: `child_exited_before_response:${code ?? signal ?? 'unknown'}`,
-        stderrTail,
-        stdoutTail,
-        exitCode: code,
-        signal,
-      }, child, childIdentity, childBuffer);
+      flushPendingErrors(pending, options, childCloseDiagnostic, child, childIdentity, childBuffer);
     }
     clearTimedOutRequests(timedOutRequests);
     clearTimers(childTerminationTimers);
@@ -816,11 +832,22 @@ export async function runProxy(argv = process.argv.slice(2)): Promise<void> {
   });
 
   await new Promise<void>((resolveDone) => {
+    if (childClosed) {
+      resolveDone();
+      return;
+    }
     child.on('close', () => resolveDone());
     process.stdin.on('end', () => {
       if (childClosed) resolveDone();
     });
   });
+  if (childClosed && !parentRequestObserved && !process.stdin.readableEnded) {
+    const inputDrainDeadline = Date.now() + 1_000;
+    while (!parentRequestObserved && !process.stdin.readableEnded && Date.now() < inputDrainDeadline) {
+      await new Promise<void>((resolveDelay) => setTimeout(resolveDelay, 5));
+    }
+  }
+  process.stdin.pause();
   // A terminal child failure can be observed in the same tick as the proxy's
   // exit. Close stdout only after the diagnostic write has drained so callers
   // never lose the structured child_exited_before_response error.

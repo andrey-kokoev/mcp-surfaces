@@ -7,6 +7,7 @@ Standalone MCP surface packages shared by Narada sites and carriers.
 - `@narada-core/mcp-transport`: MCP payload/output-ref helpers. See `packages/shared/mcp-transport/README.md`.
 - `@narada-core/mcp-telemetry`: optional MCP telemetry helpers. See `packages/shared/mcp-telemetry/README.md`.
 - `@narada-core/mcp-runtime-proxy`: carrier stdio proxy for MCP startup diagnostics. See `packages/shared/mcp-runtime-proxy/README.md`.
+- `@narada-core/mcp-surface-runtime`: authority-bound execution engine for explicit surface factories with a stdio compatibility adapter. See `packages/shared/mcp-surface-runtime/README.md`.
 - `@narada-core/local-filesystem-mcp`: canonical local filesystem MCP surface exposing `fs_*` tools. See `packages/local-filesystem-mcp/README.md`.
 - `@narada-core/structured-command-mcp`: policy-gated command execution surface using structured argv schemas. See `packages/structured-command-mcp/README.md`.
 - `@narada-core/git-mcp`: governed Git inspection and publication MCP surface. See `packages/git-mcp/README.md`.
@@ -42,6 +43,10 @@ pnpm test
 
 See `docs/mcp-surfaces-target-shape.md` for the implementation-driving target
 shape for MCP surfaces as Narada's governed crossing layer.
+
+See `docs/mcp-surface-runtime-target-shape.md` for the proof-first path from
+per-session stdio children to one supervised, authority-partitioned PC Site
+surface service.
 
 See `docs/mcp-injection-scopes.md` for the doctrine that separates host,
 user-site, and local-site MCP injection from session aliases.

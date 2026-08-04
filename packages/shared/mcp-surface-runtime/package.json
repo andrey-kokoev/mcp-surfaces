@@ -1,0 +1,28 @@
+{
+  "name": "@narada-core/mcp-surface-runtime",
+  "version": "0.1.0",
+  "license": "Apache-2.0",
+  "type": "module",
+  "description": "Policy-neutral authority-bound MCP surface execution engine with worker and stdio adapters.",
+  "scripts": {
+    "build": "tsc -b",
+    "typecheck": "tsc -b --pretty false",
+    "test": "pnpm build && node --test dist/test/mcp-surface-runtime.test.js"
+  },
+  "types": "./dist/src/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/src/index.d.ts",
+      "default": "./dist/src/index.js"
+    }
+  },
+  "dependencies": {
+    "@narada-core/mcp-fabric-contracts": "workspace:*",
+    "@narada-core/mcp-runtime-client": "workspace:*",
+    "ajv": "^8.20.0"
+  },
+  "files": [
+    "dist/",
+    "README.md"
+  ]
+}

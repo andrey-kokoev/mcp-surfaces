@@ -132,6 +132,19 @@ process.stdin.on('data', (chunk) => {
       args: [restartableEntrypoint, '--site-root', root, '--unclassified'],
       tools: ['echo'],
     },
+    'factory-surface': {
+      command: 'node',
+      args: [restartableEntrypoint],
+      tools: ['echo'],
+      surface_projection: {
+        projection_id: 'default',
+        execution: {
+          adapter: 'surface_factory',
+          tenancy: 'authority_shared',
+          replacement: 'generation_swap',
+        },
+      },
+    },
     'narada-sonar-nars-session': {
       command: 'node',
       args: [restartableEntrypoint, '--site-root', root, '--marker', 'nars'],
@@ -380,6 +393,9 @@ try {
   assert.equal(missingRuntimeAttach?.data?.code, 'surface_runtime_required');
   const wrongRuntimeAttach = await call('tools/call', { name: 'mcp_loader_attach_surface', arguments: { site_root: root, surface_id: 'nars-session', runtime_kind: 'codex' } }, 29);
   assert.equal(wrongRuntimeAttach?.data?.code, 'surface_runtime_not_supported');
+  const factoryAttach = await call('tools/call', { name: 'mcp_loader_attach_surface', arguments: { site_root: root, surface_id: 'factory-surface' } }, 291);
+  assert.equal(factoryAttach?.data?.code, 'surface_execution_adapter_not_supported_by_loader');
+  assert.equal(factoryAttach?.data?.details?.responsible_actuator, 'pc_site_surface_runtime');
 
   const narsAttach = await call('tools/call', { name: 'mcp_loader_attach_surface', arguments: { site_root: root, surface_id: 'nars-session', runtime_kind: 'nars' } }, 30);
   assert.equal(narsAttach?.schema, 'narada.mcp_loader.surface_attached.v1');

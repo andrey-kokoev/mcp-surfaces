@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { assertLiveToolsConform } from '@narada-core/mcp-fabric-contracts';
 import { createServerState, handleRequest, launcherSurfaceDefinition } from '../src/main.js';
+import { createSurfaceRuntime } from '../src/runtime-factory.js';
 
 const root = mkdtempSync(join(tmpdir(), 'launcher-mcp-'));
 const registryPath = join(root, 'agents.psd1');
@@ -24,6 +25,12 @@ try {
   const state = createServerState({ naradaRoot: root, registryPath });
   const surface = launcherSurfaceDefinition();
   assert.equal(surface.descriptor.projections[0]!.lifecycle.mode, 'replayable');
+  const factoryProjection = surface.descriptor.projections.find((projection) => projection.id === 'factory');
+  assert.deepEqual(factoryProjection?.execution, {
+    adapter: 'surface_factory',
+    tenancy: 'authority_shared',
+    replacement: 'generation_swap',
+  });
   assert.equal(surface.descriptor.guidance_tool, 'launcher_guidance');
   const liveList = await ((handleRequest(
     { jsonrpc: '2.0', id: 99, method: 'tools/list', params: {} },
@@ -39,9 +46,49 @@ try {
   assert.equal(doctor.registry_exists, true);
   assert.equal(doctor.execution_posture, 'read_only_no_launch_no_shell');
   assert.equal(doctor.fabric_lifecycle.mode, 'replayable');
+  assert.equal(doctor.fabric_lifecycle.projection_id, 'stdio');
+  assert.deepEqual(doctor.fabric_lifecycle.execution, {
+    adapter: 'stdio',
+    tenancy: 'session_isolated',
+    replacement: 'manual',
+  });
   assert.equal(doctor.fabric_lifecycle.reconnect, 'start_fresh_stdio_process');
   assert.deepEqual(doctor.mcp_injection_scope_doctrine.scopes, ['host', 'user_site', 'local_site']);
   assert.equal(doctor.mcp_injection_scope_doctrine.canonical_host_example, 'speech');
+
+  const runtime = await createSurfaceRuntime({
+    binding_id: 'launcher-factory',
+    site_id: 'test-site',
+    authority_ref: 'site:test-site:mcp-surfaces',
+    surface_id: 'launcher',
+    projection_id: 'factory',
+    generation_id: 'generation-1',
+    tool_contract_digest: surface.tool_contract_digest,
+    site_root: root,
+    configuration: { narada_root: root, registry_path: registryPath },
+  });
+  const factoryDoctor = await runtime.callTool({ tool_name: 'launcher_doctor', arguments: {} }, {
+    request_id: 'request-1',
+    carrier_session_id: 'session-1',
+    carrier_id: 'test-carrier',
+    agent_id: 'test-agent',
+    site_id: 'test-site',
+    authority_ref: 'site:test-site:mcp-surfaces',
+    admission: {
+      decision: 'admitted',
+      decision_ref: 'decision-1',
+      authority_ref: 'site:test-site:mcp-surfaces',
+      surface_id: 'launcher',
+      tool_name: 'launcher_doctor',
+      reason: 'test',
+    },
+  });
+  assert.equal((factoryDoctor.structuredContent as Record<string, any>).schema, doctor.schema);
+  assert.equal((factoryDoctor.structuredContent as Record<string, any>).fabric_lifecycle.projection_id, 'factory');
+  assert.equal((factoryDoctor.structuredContent as Record<string, any>).fabric_lifecycle.execution.adapter, 'surface_factory');
+  assert.equal((factoryDoctor.structuredContent as Record<string, any>).fabric_lifecycle.reconnect, 'reuse_authority_shared_site_runtime');
+  assert.equal((await runtime.health()).status, 'healthy');
+  await runtime.dispose();
 
   const options = view(await call('launcher_options_list', {}));
   assert.ok((options.declared_options as string[]).includes('IntelligenceProvider'));

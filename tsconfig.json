@@ -32,6 +32,9 @@
       "path": "./packages/shared/mcp-runtime-client"
     },
     {
+      "path": "./packages/shared/mcp-surface-runtime"
+    },
+    {
       "path": "./packages/local-filesystem-mcp"
     },
     {

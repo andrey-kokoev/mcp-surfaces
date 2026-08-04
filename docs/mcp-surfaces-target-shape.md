@@ -192,6 +192,10 @@ A helper must not:
 
 ## MCP Fabric V2 Compilation Boundary
 
+The authority-partitioned execution follow-on is specified in
+`docs/mcp-surface-runtime-target-shape.md`. That design keeps Fabric V2 as the
+declaration/compiler boundary and adds no runtime authority to the registrar.
+
 MCP Fabric V2 treats surface declarations as versioned inputs to a deterministic
 compiler rather than as carrier configuration fragments:
 

@@ -24,6 +24,7 @@ export function buildGuidanceResult(args: GuidanceRecord = {}): GuidanceRecord {
     tool_preference: [
       { step: 'validate_fabric', guidance: 'Call registrar_site_mcp_fabric_validate for the target Site.' },
       { step: 'observe_live', guidance: 'Call mcp_loader_site_tool_inventory_check against the same Site root. Every live tool must explicitly declare readOnlyHint=true or false.' },
+      { step: 'codex_plugin_policy', guidance: 'Before all-carrier materialization, set NARADA_CODEX_ENABLED_PLUGINS and/or NARADA_CODEX_DISABLED_PLUGINS to exact semicolon- or newline-separated Codex plugin IDs when naked Codex startup needs explicit plugin overrides; unlisted plugins receive no generated override and hand-edits to generated config are not preserved.' },
       { step: 'materialize_carriers', guidance: 'Call registrar_materialize_all to rewrite every registered carrier config together. Normal materialization never takes a carrier_id.' },
       { step: 'materialize', guidance: 'Call registrar_site_surface_registry_sync only when the Site fabric and catalog are intentional.' },
       { step: 'prove', guidance: 'Call registrar_site_registry_conformance_check with the Loader observation_ref. Status ok is the authority projection proof.' },

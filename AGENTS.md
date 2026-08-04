@@ -12,6 +12,7 @@ Current packages:
 - `@narada-core/mcp-telemetry`: shared optional MCP telemetry helpers.
 - `@narada-core/mcp-affordances`: shared UI-neutral MCP affordance schema and validation helpers.
 - `@narada-core/mcp-runtime-proxy`: shared carrier stdio proxy for MCP startup diagnostics.
+- `@narada-core/mcp-surface-runtime`: policy-neutral authority-bound surface execution engine with factory and stdio adapters.
 - `@narada-core/mcp-e2e-harness`: shared bounded mechanics for real MCP end-to-end tests.
 - `@narada-core/mcp-fabric-contracts`: shared versioned MCP descriptor, manifest, carrier projection, observation, and reconciliation contracts.
 - `@narada-core/mcp-fabric-compiler`: pure manifest and Codex/Kimi/OpenCode carrier projection compiler with strict Moonshot schema validation.
@@ -61,6 +62,7 @@ workspace is the canonical Site root, `.narada` is the control root, and
 - Run `pnpm install` after cloning or pulling workspace changes, then `pnpm build`. Package test scripts compile through `tsc -b` into `dist/` and run the compiled output, so a successful build is a prerequisite for any test run.
 - After editing the root `tsconfig.json` (or any shared build configuration), run a full rebuild with `pnpm exec tsc -b --force`. Incremental builds will not re-emit unchanged packages, and the `mcp-loader-mcp` freshness test compares build-configuration mtimes against `dist/` and will fail until everything is re-emitted.
 - Layout: runnable MCP surfaces live in `packages/*`, shared libraries in `packages/shared/*`, design and doctrine docs in `docs/`, and the root UI-neutrality boundary test in `test/`.
+- Root `pnpm test` runs the boundary gates and every package under this repository's `./packages/**`; linked sibling workspaces may provide dependencies but their own test suites remain owned by those repositories.
 - The root `README.md` gives repo-level framing; each package has its own `README.md` with setup details.
 - Key docs: `docs/mcp-taxonomy.md` (generic versus Narada-specific split), `docs/mcp-wiring.md` and `docs/mcp-injection-scopes.md` (how surfaces reach carriers and sites), `docs/mcp-surfaces-target-shape.md` (target architecture), `docs/site-loop-doctrine.md` (Site Loop doctrine), `docs/mcp-output-refusal-conventions.md` (output-ref and refusal patterns).
 - Task Lifecycle MCP runtime startup is prepared-only: run `task-lifecycle-mcp --prepare --site-root <site-root>` explicitly before attaching a stateful runtime; see `docs/task-lifecycle-preparation.md` for the readiness contract and remediation path.
@@ -70,6 +72,16 @@ workspace is the canonical Site root, `.narada` is the control root, and
 Carrier-native config files are host/user-site bootstrap profiles. Each Site binding declares `loading_mode: "static"` or `"progressive"`. Static bindings materialize their selected surfaces directly; progressive bindings materialize only their explicit bootstrap allowlist and use `mcp-loader` for runtime discovery and attachment. The launch must not infer Local Site surfaces from the current directory or from an unchosen Site. The built-in carrier profiles use progressive loading with `agent-context`, `mcp-registrar`, `mcp-loader`, and `local-filesystem` as the bootstrap set.
 
 Local Site MCP fabric is injected by Narada launch/session materialization, not by creating carrier profiles named for individual sites. Do not add site-specific carrier profiles such as `opencode-sonar`; bind the Site through the launcher/site fabric instead. If a carrier needs a different local Site, launch it through Narada so the Site-owned MCP aggregate is selected at session start.
+
+Generated Codex carrier configs keep `[features].apps = false` for naked
+profile-less launches. Exact plugin startup overrides may be supplied through
+`NARADA_CODEX_ENABLED_PLUGINS` and `NARADA_CODEX_DISABLED_PLUGINS` before
+all-carrier materialization; these are semicolon- or newline-separated exact
+plugin IDs, with no wildcard or implicit discovery. Unlisted plugins receive
+no generated override; hand-edits to generated config are not preserved. The
+overrides apply only to Codex's base carrier config; a
+selected Codex profile may layer over them. The built-in `codex-andrey`
+projection keeps `github@openai-curated-remote` disabled by default.
 
 Registrar tests must cover generated carrier configs for all supported carrier kinds and prove that shared surfaces use shared package entrypoints and current tool metadata. Generated carrier configs must not preserve legacy Site-local entrypoints or obsolete tool names after a surface migrates to a shared package.
 
@@ -140,6 +152,7 @@ pnpm test:mcp-transport
 pnpm test:mcp-telemetry
 pnpm test:mcp-affordances
 pnpm test:mcp-runtime-proxy
+pnpm test:mcp-surface-runtime
 pnpm test:mcp-e2e-harness
 pnpm test:mcp-fabric-contracts
 pnpm test:mcp-fabric-compiler
@@ -230,6 +243,7 @@ Do all of the following in the same change:
 - `mcp-telemetry` owns optional site-policy-gated telemetry helpers; it must not replace mandatory audit logs or persist raw args/results by default.
 - `mcp-affordances` owns UI-neutral MCP affordance document types, builders, and validation helpers. It must not encode renderer-specific components or bypass MCP tool schemas and policy checks.
 - `mcp-runtime-proxy` owns carrier-facing startup diagnostics and transport-neutral generation replacement for eligible stdio and Streamable HTTP surfaces. It must not authorize tools, mutate policy, interpret surface domain behavior, or hot-replace `restart_required` surfaces.
+- `mcp-surface-runtime` owns authority-bound instance tenancy, worker/stdio adapter lifecycle, admitted-call validation, and explicitly assessed generation swaps. It does not discover Sites, decide admission, authenticate carriers, or provide a security boundary between worker threads.
 - `mcp-e2e-harness` owns bounded child-process transport (JSONL and Content-Length), temporary roots, cleanup, and result artifacts for real MCP E2E tests. It must not create Site fabric, define surface policy, or encode domain assertions.
 - `mcp-fabric-contracts` owns policy-neutral, versioned fabric document schemas, canonicalization, and digests. It must not discover Sites, authorize tools, launch runtimes, or own carrier configuration.
 - `mcp-fabric-compiler` owns deterministic manifest resolution, carrier projection documents, effect-derived approvals, and semantics-preserving carrier schema transforms. It must not write host files or actuate carrier/runtime lifecycle.

@@ -198,37 +198,39 @@ try {
 
   const childEntrypoint = join(root, 'failing-child.mjs');
   writeFileSync(childEntrypoint, "process.stderr.write('import failed: missing shared dist\\n'); process.exit(42);\n", 'utf8');
-  const child = spawnProxy([
-    '--surface-id',
-    'test-surface',
-    '--entrypoint',
-    childEntrypoint,
-    '--',
-    '--site-root',
-    root,
-  ], { stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true });
+  for (let attempt = 0; attempt < 5; attempt += 1) {
+    const child = spawnProxy([
+      '--surface-id',
+      'test-surface',
+      '--entrypoint',
+      childEntrypoint,
+      '--',
+      '--site-root',
+      root,
+    ], { stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true });
 
-  let stdout = '';
-  let stderr = '';
-  child.stdout.setEncoding('utf8');
-  child.stderr.setEncoding('utf8');
-  child.stdout.on('data', (chunk) => { stdout += chunk; });
-  child.stderr.on('data', (chunk) => { stderr += chunk; });
+    let stdout = '';
+    let stderr = '';
+    child.stdout.setEncoding('utf8');
+    child.stderr.setEncoding('utf8');
+    child.stdout.on('data', (chunk) => { stdout += chunk; });
+    child.stderr.on('data', (chunk) => { stderr += chunk; });
 
-  child.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'initialize', params: { protocolVersion: '2024-11-05' } })}\n`);
-  child.stdin.end();
+    child.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', id: attempt + 1, method: 'initialize', params: { protocolVersion: '2024-11-05' } })}\n`);
+    child.stdin.end();
 
-  const exitCode = await new Promise<number | null>((resolve) => child.on('close', resolve));
-  assert.equal(exitCode, 42);
-  assert.match(stderr, /missing shared dist/);
+    const exitCode = await new Promise<number | null>((resolve) => child.on('close', resolve));
+    assert.equal(exitCode, 42);
+    assert.match(stderr, /missing shared dist/);
 
-  const response = JSON.parse(stdout.trim());
-  assert.equal(response.id, 1);
-  assert.equal(response.error.data.schema, 'narada.mcp_runtime_proxy.error.v1');
-  assert.equal(response.error.data.code, 'child_exited_before_response');
-  assert.equal(response.error.data.surface_id, 'test-surface');
-  assert.equal(response.error.data.exit_code, 42);
-  assert.match(response.error.data.stderr_tail, /missing shared dist/);
+    const response = JSON.parse(stdout.trim());
+    assert.equal(response.id, attempt + 1);
+    assert.equal(response.error.data.schema, 'narada.mcp_runtime_proxy.error.v1');
+    assert.equal(response.error.data.code, 'child_exited_before_response');
+    assert.equal(response.error.data.surface_id, 'test-surface');
+    assert.equal(response.error.data.exit_code, 42);
+    assert.match(response.error.data.stderr_tail, /missing shared dist/);
+  }
 
   const silentEntrypoint = join(root, 'silent-child.mjs');
   writeFileSync(silentEntrypoint, "process.stdin.resume(); setInterval(() => {}, 1000);\n", 'utf8');

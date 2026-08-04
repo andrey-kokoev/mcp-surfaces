@@ -9,11 +9,13 @@ import {
   RuntimeObservationV2Schema,
   liveToolsContractDigest,
   parseSurfaceDescriptorV2,
+  surfaceExecutionDeclaration,
   stableDigest,
   LifecycleRequirementSchema,
   type LifecycleRequirement,
   type McpToolDefinition,
   type SurfaceDescriptorV2,
+  type SurfaceExecutionDeclaration,
 } from '@narada-core/mcp-fabric-contracts';
 import { buildBoundedToolResult, outputShow, outputShowAsync, payloadCreate, prunePayloadWorkspaces } from '@narada-core/mcp-transport';
 import { buildGuidanceResult, guidanceToolDefinition } from './guidance.js';
@@ -352,6 +354,7 @@ export type RuntimeFileObservation = {
 type RuntimeSurfaceMetadata = {
   serverName: string;
   projectionId: string;
+  execution: SurfaceExecutionDeclaration;
   lifecycle: LifecycleRequirement;
   descriptor: SurfaceDescriptorV2 | null;
   descriptorDigest: string | null;
@@ -492,6 +495,7 @@ type ChildConnection = {
   generationId: string;
   serverName: string;
   projectionId: string;
+  execution: SurfaceExecutionDeclaration;
   lifecycle: LifecycleRequirement;
   descriptor: SurfaceDescriptorV2 | null;
   descriptorDigest: string | null;
@@ -927,6 +931,20 @@ async function attachSurface(args: JsonRecord, state: LoaderState): Promise<Json
   const runtimeRequirements = ensureSurfaceRuntimeAllowed(surfaceId, siteRoot, runtimeKind);
   const runtimeMetadata = surfaceRuntimeMetadata(siteRoot, surfaceId);
 
+  if (runtimeMetadata.execution.adapter !== 'stdio') {
+    throw diagnosticError(
+      'surface_execution_adapter_not_supported_by_loader',
+      `surface_execution_adapter_not_supported_by_loader:${surfaceId}:${runtimeMetadata.execution.adapter}`,
+      {
+        surface_id: surfaceId,
+        projection_id: runtimeMetadata.projectionId,
+        execution: runtimeMetadata.execution,
+        responsible_actuator: 'pc_site_surface_runtime',
+        remediation: 'Route this admitted binding through the PC Site surface runtime; mcp-loader remains the stdio compatibility adapter.',
+      },
+    );
+  }
+
   if (state.connections.size >= state.policy.maxConnections) {
     const inventory = connectionInventory(state);
     throw diagnosticError('max_connections_reached', `max_connections_reached:${state.connections.size}`, {
@@ -1066,6 +1084,7 @@ async function openConnection(input: {
     generationId,
     serverName: metadata.serverName,
     projectionId: metadata.projectionId,
+    execution: metadata.execution,
     lifecycle: metadata.lifecycle,
     descriptor: metadata.descriptor,
     descriptorDigest: metadata.descriptorDigest,
@@ -1392,6 +1411,7 @@ async function restartConnection(args: JsonRecord, state: LoaderState): Promise<
     metadata: {
       serverName: connection.serverName,
       projectionId: connection.projectionId,
+      execution: connection.execution,
       lifecycle: connection.lifecycle,
       descriptor: connection.descriptor,
       descriptorDigest: connection.descriptorDigest,
@@ -1818,6 +1838,7 @@ function connectionStatusFields(connection: ChildConnection): JsonRecord {
     surface_id: connection.surfaceId,
     server_name: connection.serverName,
     projection_id: connection.projectionId,
+    execution: connection.execution,
     runtime_kind: connection.runtimeKind,
     runtime_requirements: connection.runtimeRequirements,
     lifecycle: connection.lifecycle,
@@ -1960,6 +1981,7 @@ function surfaceRuntimeMetadata(siteRoot: string, surfaceId: string): RuntimeSur
       ?? optionalString(projection.projection_id)
       ?? optionalString(server.projection_id)
       ?? 'default',
+    execution: surfaceExecutionDeclaration(projection.execution),
     lifecycle,
     descriptor,
     descriptorDigest: optionalDigest(

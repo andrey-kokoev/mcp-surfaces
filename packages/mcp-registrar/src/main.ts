@@ -8,7 +8,7 @@ import { payloadShow } from '@narada-core/mcp-transport';
 import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from 'node:fs';
 import { basename, dirname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { defineNativeSurface, surfaceDescriptorDigest, surfaceToolContractDigest, type DefinedSurface, type McpToolDefinition, type SurfaceDescriptorV2 } from '@narada-core/mcp-fabric-contracts';
+import { defineNativeSurface, surfaceDescriptorDigest, surfaceExecutionDeclaration, surfaceToolContractDigest, type DefinedSurface, type McpToolDefinition, type SurfaceDescriptorV2, type SurfaceExecutionDeclaration } from '@narada-core/mcp-fabric-contracts';
 import {
   MCP_RUNTIME_CONTRACT_VERSION,
   buildMaterializationGeneration,
@@ -42,6 +42,7 @@ type McpDefaultInjection = 'all_site_bound_sessions' | 'all_carrier_sessions' | 
 export type McpSurfaceProjection = {
   id: string;
   injection_scope: McpInjectionScope;
+  execution: SurfaceExecutionDeclaration;
   default_injection?: McpDefaultInjection;
   restart_owner?: McpRestartOwner;
   runtime_requirements?: McpRuntimeKind[];
@@ -130,6 +131,8 @@ type SurfaceOverride = {
   enabled?: boolean;
 };
 
+type CodexPluginOverrides = Record<string, boolean>;
+
 type MaterializedServer = {
   kind: 'shared' | 'local';
   entrypoint: string;
@@ -152,6 +155,7 @@ type CarrierDef = {
   extra_allowed_roots?: string[];
   trust_projects?: string[];
   surface_overrides?: Record<string, SurfaceOverride>;
+  codex_plugin_overrides?: CodexPluginOverrides;
 };
 
 function findPackageRoot(moduleDirectory: string): string {
@@ -167,6 +171,10 @@ function findPackageRoot(moduleDirectory: string): string {
 
 function portablePathLiteral(path: string): string {
   return resolve(path).replace(/\\/g, '/');
+}
+
+function tomlBasicString(value: string): string {
+  return JSON.stringify(value);
 }
 
 const MCP_REGISTRAR_PACKAGE_ROOT = findPackageRoot(dirname(fileURLToPath(import.meta.url)));
@@ -199,6 +207,7 @@ function nativeProjectionToRegistrarProjection(
   return {
     id: projection.id,
     injection_scope: projection.injection_scope,
+    execution: surfaceExecutionDeclaration(projection.execution),
     default_injection: projection.default_injection === 'enabled'
       ? projection.injection_scope === 'host' ? 'all_carrier_sessions' : 'all_site_bound_sessions'
       : projection.runtime_requirements.length > 0 ? 'runtime_selected_sessions' : undefined,
@@ -445,6 +454,50 @@ function defaultCarrierExtraAllowedRoots(): string[] {
   return [portablePathLiteral(MCP_WORKSPACE_PARENT)];
 }
 
+function delimitedEnvironmentValues(value: string | undefined): string[] {
+  if (!value?.trim()) return [];
+  return uniqueStrings(value.split(/[;\r\n]+/).map((item) => item.trim()).filter(Boolean));
+}
+
+function assertCodexPluginId(pluginId: string): string {
+  if (!pluginId || /[\u0000-\u001f\u007f]/.test(pluginId)) {
+    throw diagnosticError(
+      'registrar_codex_plugin_id_invalid',
+      `registrar_codex_plugin_id_invalid:${pluginId}`,
+      { plugin_id: pluginId },
+    );
+  }
+  return pluginId;
+}
+
+export function readCodexPluginOverrides(environment: NodeJS.ProcessEnv = process.env): CodexPluginOverrides {
+  const enabled = delimitedEnvironmentValues(environment.NARADA_CODEX_ENABLED_PLUGINS).map(assertCodexPluginId);
+  const disabled = delimitedEnvironmentValues(environment.NARADA_CODEX_DISABLED_PLUGINS).map(assertCodexPluginId);
+  const overlap = enabled.filter((pluginId) => disabled.includes(pluginId));
+  if (overlap.length > 0) {
+    throw diagnosticError(
+      'registrar_codex_plugin_policy_conflict',
+      `registrar_codex_plugin_policy_conflict:${overlap.join(',')}`,
+      { plugin_ids: overlap },
+    );
+  }
+  return Object.fromEntries([
+    ...enabled.map((pluginId) => [pluginId, true] as const),
+    ...disabled.map((pluginId) => [pluginId, false] as const),
+  ].sort(([left], [right]) => left.localeCompare(right)));
+}
+
+const DEFAULT_CODEX_PLUGIN_OVERRIDES: CodexPluginOverrides = {
+  'github@openai-curated-remote': false,
+};
+
+function configuredCodexPluginOverrides(environment: NodeJS.ProcessEnv = process.env): CodexPluginOverrides {
+  return {
+    ...DEFAULT_CODEX_PLUGIN_OVERRIDES,
+    ...readCodexPluginOverrides(environment),
+  };
+}
+
 const CARRIERS: CarrierDef[] = [
   {
     carrier_id: 'opencode-andrey', kind: 'opencode', config_path: defaultCarrierConfigPath('opencode'), surfaces: [],
@@ -493,6 +546,7 @@ const CARRIERS: CarrierDef[] = [
       extra_allowed_roots: defaultCarrierExtraAllowedRoots(),
     }],
     extra_allowed_roots: defaultCarrierExtraAllowedRoots(),
+    codex_plugin_overrides: configuredCodexPluginOverrides(),
   },
 ];
 
@@ -1115,6 +1169,7 @@ function surfaceProjections(surface: RegistrarSurfaceRecord): McpSurfaceProjecti
   return nativeSurfaceDescriptor(surface.id).projections.map((projection) => ({
     id: projection.id,
     injection_scope: projection.injection_scope,
+    execution: surfaceExecutionDeclaration(projection.execution),
     default_injection: projection.default_injection === 'enabled'
       ? projection.injection_scope === 'host' ? 'all_carrier_sessions' : 'all_site_bound_sessions'
       : projection.runtime_requirements.length > 0 ? 'runtime_selected_sessions' : undefined,
@@ -1213,6 +1268,7 @@ function projectionMetadata(surfaceId: string, projectionId?: string, runtimeKin
     injection_scope: projection.injection_scope,
     ...(projection.default_injection ? { default_injection: projection.default_injection } : {}),
     runtime_requirements: projection.runtime_requirements ?? [],
+    execution: projection.execution,
     ...(runtimeKind ? { runtime_kind: runtimeKind } : {}),
     descriptor_digest: surfaceDescriptorDigest(descriptor),
     tool_contract_digest: surfaceToolContractDigest(descriptor),
@@ -1812,6 +1868,7 @@ function emitKimiConfig(carrier: CarrierDef, configPath?: string): { content: st
 
 function emitCodexConfig(carrier: CarrierDef, configPath?: string): { content: string; structured: JsonRecord } {
   const rawServers = collectCarrierServers(carrier);
+  const codexPluginOverrides = carrier.codex_plugin_overrides ?? {};
   const lines: string[] = [];
   lines.push('# Generated by mcp-registrar. Do not hand-edit; changes will be overwritten on next materialize.');
   lines.push('');
@@ -1819,6 +1876,11 @@ function emitCodexConfig(carrier: CarrierDef, configPath?: string): { content: s
   lines.push('[features]');
   lines.push('apps = false');
   lines.push('');
+  for (const [pluginId, enabled] of Object.entries(codexPluginOverrides).sort(([left], [right]) => left.localeCompare(right))) {
+    lines.push(`[plugins.${tomlBasicString(pluginId)}]`);
+    lines.push(`enabled = ${enabled}`);
+    lines.push('');
+  }
   const trustProjects = dedupeRoots([...(carrier.trust_projects ?? []), ...(carrier.extra_allowed_roots ?? [])]);
   for (const project of trustProjects) {
     const escaped = project.replace(/\\/g, '\\\\');
@@ -1860,7 +1922,8 @@ function emitCodexConfig(carrier: CarrierDef, configPath?: string): { content: s
       ...(startupTimeoutSec === undefined ? {} : { startup_timeout_sec: startupTimeoutSec }),
     };
   }
-  const structured = { features: { apps: false }, trust_projects: trustProjects, mcpServers };
+  const plugins = Object.fromEntries(Object.entries(codexPluginOverrides).map(([pluginId, enabled]) => [pluginId, { enabled }]));
+  const structured = { features: { apps: false }, plugins, trust_projects: trustProjects, mcpServers };
   return { content: lines.join('\n') + '\n', structured };
 }
 

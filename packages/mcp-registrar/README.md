@@ -110,6 +110,34 @@ Apps can be explicitly enabled for one launch with `codex --enable apps`.
 The setting is emitted by the registrar and must not be hand-edited into the
 generated carrier file.
 
+### Codex plugin startup overrides
+
+The Codex carrier can emit exact plugin enable/disable overrides for a
+profile-less launch. Set semicolon- or newline-separated plugin IDs before
+materialization:
+
+```powershell
+$env:NARADA_CODEX_ENABLED_PLUGINS = 'my-plugin@personal'
+$env:NARADA_CODEX_DISABLED_PLUGINS = 'github@openai-curated-remote'
+pnpm materialize:carrier -- --materialize-all
+```
+
+The built-in `codex-andrey` carrier keeps the currently observed
+`github@openai-curated-remote` plugin disabled by default. The environment
+variables add overrides; listing that ID in `NARADA_CODEX_ENABLED_PLUGINS`
+explicitly enables it.
+
+The registrar writes one `[plugins."<plugin-id>"] enabled = ...` table into
+the generated Codex config. Plugin IDs must be exact Codex IDs; there is no
+wildcard. Unlisted plugins receive no generated override, so Codex's normal
+installed/default state applies; existing hand-edits to the generated file
+are not preserved. Disabling every installed plugin therefore requires
+listing each one explicitly. Unset the variables and rematerialize to remove
+those additional generated overrides. These settings apply only
+to the Codex carrier; Kimi and opencode projections do not receive them. They
+are written to Codex's base config for naked launches, and a selected Codex
+profile may layer over them.
+
 ## Kimi Carrier Contract
 
 `pnpm test:registrar:kimi-contract` materializes the real `kimi-andrey` configuration, launches every emitted stdio server with its generated command and arguments, performs MCP initialization and `tools/list`, and validates every tool `inputSchema` against the strict contract from [MoonshotAI/walle v0.1.13](https://github.com/MoonshotAI/walle). This deterministic test requires no Kimi account or provider call and is included in the registrar package test.

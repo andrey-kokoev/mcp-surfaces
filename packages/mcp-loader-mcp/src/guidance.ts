@@ -46,6 +46,7 @@ export function buildGuidanceResult(args: GuidanceRecord = {}): GuidanceRecord {
       'Call mcp_loader_process_ownership when reconciling child processes after an interrupted attach; it reports only this loader run\'s direct children and safe known-connection cleanup actions.',
       'Call mcp_loader_list_site_surfaces and mcp_loader_site_fabric_diagnostics for the explicit Site root.',
       'Use mcp_loader_attach_surface with an explicit surface_id and runtime_kind when the projection requires one.',
+      'Inspect surface_projection.execution before attachment. mcp-loader accepts stdio projections only; surface_factory projections belong to the PC Site surface runtime.',
       'Use mcp_loader_list_tools or mcp_loader_tool_discovery_manifest after attachment; the child tools/list response owns exact tool schemas.',
       'Call mcp_loader_runtime_observation with connection_id and carrier_kind to obtain the V2 normalized observation; it reports the stable logical connection id, generation, lifecycle, digests, and bounded recovery actuator.',
       'For mcp_loader_call_tool, place timeout_ms inside the nested arguments object. The loader forwards it to the child and adds bounded outer grace so the child can return its own timeout result.',
@@ -78,6 +79,7 @@ export function buildGuidanceResult(args: GuidanceRecord = {}): GuidanceRecord {
     anti_patterns: [
       'Do not infer a Site or runtime from the current directory, process name, server name, or entrypoint path.',
       'Do not attach an undeclared surface or use an entrypoint outside the allowed policy prefixes.',
+      'Do not reinterpret a surface_factory projection as stdio or treat loader approval as admission for nested mutating tools.',
       'Do not copy child inputSchema or outputSchema into loader guidance; read the current child tools/list response instead.',
       'Do not treat loader attachment as authorization for the child surface domain; the attached surface remains authoritative.',
       'Do not copy or hand-build observation maps; pass the immutable observation_ref returned by mcp_loader_site_tool_inventory_check.',
@@ -89,6 +91,7 @@ export function buildGuidanceResult(args: GuidanceRecord = {}): GuidanceRecord {
     recovery: [
       'For unknown_tool, call tools/list and mcp_loader_guidance again after restart.',
       'For surface_runtime_required or surface_runtime_not_supported, inspect the declared projection and retry only with an explicit compatible runtime_kind.',
+      'For surface_execution_adapter_not_supported_by_loader, route the admitted binding through the PC Site surface runtime; changing the adapter locally would violate the descriptor.',
       'For fabric drift, repair the owning Site fabric or shared registry declaration before retrying attachment.',
       'For missing or stale live observations, rerun mcp_loader_site_tool_inventory_check and pass its new observation_ref to the Registrar.',
       'For child failures, inspect mcp_loader_surface_status and stderr evidence, then use mcp_loader_surface_restart({ connection_id, reason }) when the attached child should be replaced.',
@@ -110,6 +113,7 @@ export function buildGuidanceResult(args: GuidanceRecord = {}): GuidanceRecord {
     boundaries: [
       'MCP Loader owns child attachment, initialization, tool discovery, call proxying, and detachment.',
       'MCP Loader does not own attached-surface domain policy, action admission, or child tool semantics.',
+      'MCP Loader is the stdio compatibility adapter. It does not host surface factories or own authority-shared instances.',
       'The loader binds children to the requested Site root and does not let an ambient caller Site root override it.',
       'Process ownership is limited to direct children spawned by this loader run; the loader does not own arbitrary host process or conhost enumeration.',
       'Guidance is read-only model-facing operating advice and does not replace tool schemas or policy checks.',

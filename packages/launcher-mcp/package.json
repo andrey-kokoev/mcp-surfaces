@@ -16,6 +16,10 @@
     "./surface-definition": {
       "types": "./dist/src/surface-definition.d.ts",
       "default": "./dist/src/surface-definition.js"
+    },
+    "./runtime-factory": {
+      "types": "./dist/src/runtime-factory.d.ts",
+      "default": "./dist/src/runtime-factory.js"
     }
   },
   "scripts": {

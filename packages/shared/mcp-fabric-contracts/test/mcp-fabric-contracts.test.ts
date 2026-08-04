@@ -14,6 +14,7 @@ import {
   CarrierRestartRequestV1Schema,
   defineSurface,
   defineNativeSurface,
+  surfaceExecutionDeclaration,
   type SurfaceDescriptorV2,
 } from '../src/index.js';
 import { startHttpFixture } from '../src/http-fixture.js';
@@ -222,6 +223,27 @@ test('manifest digest is stable and duplicate bindings fail closed', () => {
     }),
     /duplicate binding/,
   );
+});
+
+test('surface execution posture is conservative by default and participates in descriptor identity', () => {
+  assert.deepEqual(surfaceExecutionDeclaration(undefined), {
+    adapter: 'stdio',
+    tenancy: 'session_isolated',
+    replacement: 'manual',
+  });
+
+  const isolated = descriptor();
+  const normalized = parseSurfaceDescriptorV2(isolated);
+  assert.equal(normalized.projections[0]!.execution, undefined);
+
+  const shared = descriptor();
+  shared.projections[0]!.execution = {
+    adapter: 'surface_factory',
+    tenancy: 'authority_shared',
+    replacement: 'generation_swap',
+  };
+  assert.notEqual(surfaceDescriptorDigest(isolated), surfaceDescriptorDigest(shared));
+  assert.deepEqual(parseSurfaceDescriptorV2(shared).projections[0]!.execution, shared.projections[0]!.execution);
 });
 
 test('carrier restart request and outcome contracts preserve explicit authority evidence', () => {

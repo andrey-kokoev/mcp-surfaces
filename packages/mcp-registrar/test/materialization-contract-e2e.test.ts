@@ -22,17 +22,17 @@ type RpcRun = {
   stderr: string;
 };
 
-function testEnvironment(): NodeJS.ProcessEnv {
-  const env: NodeJS.ProcessEnv = { ...process.env, NARADA_MCP_WORKSPACE_ROOT: workspaceRoot, NARADA_MCP_SURFACES_ROOT: surfacesRoot };
+function testEnvironment(overrides: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv {
+  const env: NodeJS.ProcessEnv = { ...process.env, NARADA_MCP_WORKSPACE_ROOT: workspaceRoot, NARADA_MCP_SURFACES_ROOT: surfacesRoot, ...overrides };
   delete env['NARADA_MCP_REGISTRAR_FRESH_CHILD'];
   return env;
 }
 
-function runCli(args: string[]): Promise<RpcRun> {
+function runCli(args: string[], environment: NodeJS.ProcessEnv = {}): Promise<RpcRun> {
   return new Promise((resolveRun, rejectRun) => {
     const child = spawn(process.execPath, args, {
       cwd: workspaceRoot,
-      env: testEnvironment(),
+      env: testEnvironment(environment),
       stdio: ['ignore', 'pipe', 'pipe'],
       windowsHide: true,
     });
@@ -188,6 +188,30 @@ test('fresh registrar materializes, validates, and launches a carrier generation
 
     const config = readFileSync(configPath, 'utf8');
     assert.match(config, /\[features\]\r?\napps = false\r?\n/);
+    assert.match(config, /\[plugins\."github@openai-curated-remote"\]\r?\nenabled = false\r?\n/);
+
+    const pluginPolicyRoot = mkdtempSync(join(tmpdir(), 'mcp-registrar-plugin-policy-e2e-'));
+    try {
+      const pluginPolicyMaterialize = await runCli([
+        registrarEntrypoint,
+        '--materialize-all',
+        '--output-dir',
+        pluginPolicyRoot,
+      ], {
+        NARADA_CODEX_ENABLED_PLUGINS: 'github@openai-curated-remote;sample-enabled@personal',
+        NARADA_CODEX_DISABLED_PLUGINS: 'sample-disabled@personal',
+      });
+      assert.equal(pluginPolicyMaterialize.exitCode, 0, pluginPolicyMaterialize.stderr);
+      const pluginPolicyConfig = readFileSync(join(pluginPolicyRoot, 'config.toml'), 'utf8');
+      assert.match(pluginPolicyConfig, /\[plugins\."sample-disabled@personal"\]\r?\nenabled = false\r?\n/);
+      assert.match(pluginPolicyConfig, /\[plugins\."sample-enabled@personal"\]\r?\nenabled = true\r?\n/);
+      assert.match(pluginPolicyConfig, /\[plugins\."github@openai-curated-remote"\]\r?\nenabled = true\r?\n/);
+      assert.equal(readFileSync(join(pluginPolicyRoot, 'mcp.json'), 'utf8').includes('sample-enabled@personal'), false);
+      assert.equal(readFileSync(join(pluginPolicyRoot, 'opencode.jsonc'), 'utf8').includes('sample-enabled@personal'), false);
+    } finally {
+      rmSync(pluginPolicyRoot, { recursive: true, force: true });
+    }
+
     const proxyCount = codexResult.materialization_validation.proxy_count as number;
     assert.equal((config.match(/--artifact-manifest/g) ?? []).length, proxyCount);
     assert.equal((config.match(/--runtime-contract-version/g) ?? []).length, proxyCount);

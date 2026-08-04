@@ -96,6 +96,18 @@ export const StreamableHttpTransportSchema = z.object({
   headers: z.array(HeaderNameSchema).default([]),
 }).strict();
 
+export const SurfaceExecutionDeclarationSchema = z.object({
+  adapter: z.enum(['stdio', 'surface_factory']).default('stdio'),
+  tenancy: z.enum(['session_isolated', 'authority_shared']).default('session_isolated'),
+  replacement: z.enum(['manual', 'generation_swap']).default('manual'),
+}).strict();
+
+export const DEFAULT_SURFACE_EXECUTION_DECLARATION = Object.freeze({
+  adapter: 'stdio',
+  tenancy: 'session_isolated',
+  replacement: 'manual',
+} as const);
+
 export const SurfaceProjectionV2Schema = z.object({
   id: IdentifierSchema,
   transport: z.discriminatedUnion('kind', [
@@ -107,6 +119,7 @@ export const SurfaceProjectionV2Schema = z.object({
   runtime_requirements: z.array(IdentifierSchema).default([]),
   authority_requirements: z.array(IdentifierSchema).default([]),
   lifecycle: LifecycleRequirementSchema,
+  execution: SurfaceExecutionDeclarationSchema.optional(),
 }).strict();
 
 export const SurfaceDescriptorV2Schema = z.object({
@@ -361,6 +374,7 @@ export const CarrierRestartOutcomeV1Schema = z.object({
 
 export type ToolEffect = z.infer<typeof ToolEffectSchema>;
 export type LifecycleRequirement = z.infer<typeof LifecycleRequirementSchema>;
+export type SurfaceExecutionDeclaration = z.infer<typeof SurfaceExecutionDeclarationSchema>;
 export type ToolContractV2 = z.infer<typeof ToolContractV2Schema>;
 export type SurfaceProjectionV2 = z.infer<typeof SurfaceProjectionV2Schema>;
 export type SurfaceDescriptorV2 = z.infer<typeof SurfaceDescriptorV2Schema>;
@@ -396,6 +410,81 @@ export type DefinedSurface = {
   descriptor_digest: string;
   tool_contract_digest: string;
 };
+
+export type SurfaceRuntimeJson = Record<string, unknown>;
+
+export type SurfaceRuntimeInit = {
+  binding_id: string;
+  site_id: string;
+  authority_ref: string;
+  surface_id: string;
+  projection_id: string;
+  generation_id: string;
+  tool_contract_digest: string;
+  site_root?: string;
+  configuration?: SurfaceRuntimeJson;
+};
+
+export type SurfaceAdmissionDecision = {
+  decision: 'admitted' | 'refused' | 'deferred' | 'routed';
+  decision_ref: string;
+  authority_ref: string;
+  surface_id: string;
+  tool_name: string;
+  reason: string;
+};
+
+export type SurfaceInvocationContext = {
+  request_id: string;
+  carrier_session_id: string;
+  carrier_id: string;
+  agent_id: string;
+  site_id: string;
+  authority_ref: string;
+  admission: SurfaceAdmissionDecision;
+  consent_ref?: string;
+  trace_ref?: string;
+  abort_signal?: AbortSignal;
+};
+
+export type SurfaceRuntimeRequest = {
+  tool_name: string;
+  arguments: SurfaceRuntimeJson;
+};
+
+export type SurfaceRuntimeHealth = {
+  status: 'healthy' | 'degraded' | 'unavailable';
+  detail?: string;
+};
+
+export type SurfaceReplacementAssessment = {
+  compatible: boolean;
+  reason: string;
+  state_migration_required?: boolean;
+};
+
+export type SurfaceReplacementCandidate = {
+  previous_generation_id: string;
+  previous_tool_contract_digest: string;
+  candidate_generation_id: string;
+  candidate_tool_contract_digest: string;
+};
+
+export type SurfaceRuntime = {
+  readonly tool_names: readonly string[];
+  callTool(request: SurfaceRuntimeRequest, context: SurfaceInvocationContext): Promise<SurfaceRuntimeJson>;
+  health(): Promise<SurfaceRuntimeHealth>;
+  assessReplacement?(candidate: SurfaceReplacementCandidate): Promise<SurfaceReplacementAssessment>;
+  dispose(): Promise<void>;
+};
+
+export type SurfaceRuntimeFactory = (init: SurfaceRuntimeInit) => Promise<SurfaceRuntime>;
+
+export function surfaceExecutionDeclaration(
+  value: unknown,
+): SurfaceExecutionDeclaration {
+  return SurfaceExecutionDeclarationSchema.parse(value ?? DEFAULT_SURFACE_EXECUTION_DECLARATION);
+}
 
 export function lifecycleReadbackMetadata(surfaceId: string): LifecycleReadbackMetadata {
   return {
@@ -678,6 +767,7 @@ export function normalizeSurfaceDescriptorV2(value: unknown): SurfaceDescriptorV
     projections: descriptor.projections
       .map((projection) => ({
         ...projection,
+        execution: surfaceExecutionDeclaration(projection.execution),
         runtime_requirements: sortUnique(projection.runtime_requirements),
         authority_requirements: sortUnique(projection.authority_requirements),
         transport: projection.transport.kind === 'stdio'
@@ -751,4 +841,5 @@ export const McpFabricJsonSchemas = {
   reconciliation_plan: z.toJSONSchema(ReconciliationPlanV2Schema),
   carrier_restart_request: z.toJSONSchema(CarrierRestartRequestV1Schema),
   carrier_restart_outcome: z.toJSONSchema(CarrierRestartOutcomeV1Schema),
+  surface_execution_declaration: z.toJSONSchema(SurfaceExecutionDeclarationSchema),
 } as const;

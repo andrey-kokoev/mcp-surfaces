@@ -44,11 +44,25 @@ Generated shape:
 [features]
 apps = false
 
+[plugins."github@openai-curated-remote"]
+enabled = false
+
 [mcp_servers.narada-andrey-user-local-filesystem]
 command = "node"
 args = ["<installed-package>/dist/src/main.js", "--mode", "read", "--allowed-root", "<your-workspace-root>"]
 approval_mode = "approve"
 ```
+
+Set `NARADA_CODEX_ENABLED_PLUGINS` and/or
+`NARADA_CODEX_DISABLED_PLUGINS` to semicolon- or newline-separated exact
+Codex plugin IDs before running `pnpm materialize:carrier -- --materialize-all`.
+The generated policy is an explicit override map: unlisted plugins are not
+given an override, wildcard IDs are not supported, and hand-edits to the
+generated config are not preserved. These settings affect the
+Codex carrier's base config; a selected Codex profile may layer over them.
+The built-in `codex-andrey` projection disables
+`github@openai-curated-remote` by default, matching the current local carrier
+posture.
 
 ### opencode
 
@@ -97,6 +111,43 @@ The surface itself does not need Narada. The wiring workflow may.
 The registrar catalog is materialized from each package's native V2 descriptor. The descriptor owns the live `tools/list` contract, effect metadata, projection transport, injection scope, runtime requirements, and lifecycle requirement. Carrier-specific files are projections of that descriptor; they are not a second source of tool or scope truth.
 
 Runtime observation is separate from config wiring. The runtime proxy records generation, heartbeat, lease, freshness, health, and contract-digest state. `mcp-loader_runtime_observation` reports the loader's stable logical connection and active/draining generations. A child replacement is requested through `mcp_loader_surface_restart`; a loader-process restart belongs to the carrier or runtime supervisor. Registrar config apply, loader generation replacement, and carrier restart remain separate actuators.
+
+Projection metadata also carries an explicit `execution` declaration. Existing
+bindings default to `stdio` + `session_isolated` + `manual`; this preserves the
+current process model. A package can opt into `surface_factory`,
+`authority_shared`, or `generation_swap` only through its package-owned
+descriptor. `mcp-loader` refuses factory projections with
+`surface_execution_adapter_not_supported_by_loader`: it remains the stdio
+compatibility adapter, while the PC Site runtime is the intended factory
+actuator. A generic loader approval never authorizes a nested mutating call.
+
+The PC Site service is authenticated over loopback and reads the selected
+binding from the registrar-generated Site capability registry on every call.
+NARS performs action admission before dispatch. Gateway close releases its
+carrier-session handles; bounded idle eviction is the fallback for interrupted
+sessions. The gateway resolves the PC Site from explicit launch context first,
+then from the admitted binding's User Site authority locus; it does not infer
+the service root from a Local Site working directory. The current production
+canary is `launcher::factory` on the Andrey User Site, with
+`launcher::stdio` retained as rollback and a hidden external watchdog proving
+bounded service recovery.
+
+For an eligible `surface_factory` + `generation_swap` binding, the PC Site
+service exposes an authenticated control-plane generation-replacement action.
+The action targets an existing logical instance by its expected active
+generation and resolves the candidate only from the current Site registry; it
+does not accept an arbitrary entrypoint. Compatible implementation replacement
+drains the old generation and preserves connected carrier sessions. Refusal or
+candidate failure leaves the old generation active. Replacement events are
+reported in authenticated service status and persisted in the Site runtime
+event log. Descriptor or tool-contract changes still require registrar review
+and materialization; stdio remains the explicit rollback projection.
+
+At execution time, three records have distinct roles: the package descriptor is
+the authored contract, the admitted Site-registry binding is the authority
+contract, and the live handler inventory is observed implementation evidence.
+The registrar compiles and materializes those records but is not runtime binding
+authority.
 
 ## Native descriptor coverage gate
 

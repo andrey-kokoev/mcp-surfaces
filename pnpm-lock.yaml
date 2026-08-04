@@ -481,6 +481,18 @@ importers:
         specifier: workspace:*
         version: link:../mcp-e2e-harness
 
+  packages/shared/mcp-surface-runtime:
+    dependencies:
+      '@narada-core/mcp-fabric-contracts':
+        specifier: workspace:*
+        version: link:../mcp-fabric-contracts
+      '@narada-core/mcp-runtime-client':
+        specifier: workspace:*
+        version: link:../mcp-runtime-client
+      ajv:
+        specifier: ^8.20.0
+        version: 8.20.0
+
   packages/shared/mcp-telemetry: {}
 
   packages/shared/mcp-transport:
