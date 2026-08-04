@@ -43,9 +43,10 @@ export interface MailAdmissionConfig {
 export interface ScopeConfig {
   scope_id: string;
   root_dir: string;
-  sources: Array<JsonRecord & { type: string; user_id?: string; base_url?: string; prefer_immutable_ids?: boolean; tenant_id?: string; client_id?: string; client_secret?: string }>;
+  sources: Array<JsonRecord & { type: string; mailbox_id?: string; user_id?: string; base_url?: string; prefer_immutable_ids?: boolean; tenant_id?: string; client_id?: string; client_secret?: string }>;
   graph?: {
     auth_mode?: 'delegated_token_store' | 'control_plane_default';
+    mailbox_id?: string;
     tenant_id?: string;
     client_id?: string;
     client_secret?: string;
@@ -167,10 +168,10 @@ export interface ControlPlaneRuntime {
 
 let cached: { entrypoint: string; runtime: ControlPlaneRuntime } | null = null;
 
-export async function loadControlPlaneRuntime(siteRoot: string): Promise<ControlPlaneRuntime> {
+export async function loadControlPlaneRuntime(siteRoot: string, controlPlaneRoot?: string): Promise<ControlPlaneRuntime> {
   let entrypoint: string;
   try {
-    entrypoint = await resolveControlPlaneEntrypoint(siteRoot);
+    entrypoint = await resolveControlPlaneEntrypoint(siteRoot, controlPlaneRoot);
   } catch (error) {
     throw new Error(`mailbox_control_plane_runtime_unavailable:${boundedError(error)}`);
   }
@@ -250,42 +251,60 @@ async function refreshDelegatedGraphToken(path: string, token: DelegatedGraphTok
   return refreshed.access_token;
 }
 
-async function resolveControlPlaneEntrypoint(siteRoot: string): Promise<string> {
+async function resolveControlPlaneEntrypoint(siteRoot: string, controlPlaneRoot?: string): Promise<string> {
+  if (controlPlaneRoot) {
+    const explicitRoot = resolve(controlPlaneRoot);
+    const packageRoots = [
+      explicitRoot,
+      join(explicitRoot, 'packages', 'layers', 'control-plane'),
+      join(explicitRoot, 'node_modules', '@narada-core', 'control-plane'),
+    ];
+    for (const packageRoot of packageRoots) {
+      const entrypoint = await resolvePackageEntrypoint(packageRoot);
+      if (entrypoint) return entrypoint;
+    }
+    throw new Error(`mailbox_control_plane_package_not_found:${explicitRoot}`);
+  }
   let cursor = resolve(siteRoot);
   const root = parse(cursor).root;
   while (true) {
     const packageRoot = join(cursor, 'node_modules', '@narada-core', 'control-plane');
-    const manifestPath = join(packageRoot, 'package.json');
-    const manifestBytes = await readFile(manifestPath, 'utf8').catch((error: NodeJS.ErrnoException) => {
-      if (error.code === 'ENOENT') return null;
-      throw error;
-    });
-    if (manifestBytes !== null) {
-      const manifest = JSON.parse(manifestBytes) as unknown;
-      if (!manifest || typeof manifest !== 'object' || Array.isArray(manifest)) {
-        throw new Error(`mailbox_control_plane_manifest_invalid:${manifestPath}`);
-      }
-      const record = manifest as JsonRecord;
-      const exportsRecord = record.exports && typeof record.exports === 'object' && !Array.isArray(record.exports)
-        ? record.exports as JsonRecord
-        : {};
-      const dotExport = exportsRecord['.'] && typeof exportsRecord['.'] === 'object' && !Array.isArray(exportsRecord['.'])
-        ? exportsRecord['.'] as JsonRecord
-        : {};
-      const relativeEntrypoint = typeof dotExport.import === 'string'
-        ? dotExport.import
-        : typeof record.module === 'string'
-          ? record.module
-          : typeof record.main === 'string'
-            ? record.main
-            : null;
-      if (!relativeEntrypoint) throw new Error(`mailbox_control_plane_entrypoint_missing:${manifestPath}`);
-      return resolve(packageRoot, relativeEntrypoint);
-    }
+    const entrypoint = await resolvePackageEntrypoint(packageRoot);
+    if (entrypoint) return entrypoint;
     if (cursor === root) break;
     cursor = dirname(cursor);
   }
   throw new Error(`mailbox_control_plane_package_not_found:${siteRoot}`);
+}
+
+async function resolvePackageEntrypoint(packageRoot: string): Promise<string | null> {
+  const manifestPath = join(packageRoot, 'package.json');
+  const manifestBytes = await readFile(manifestPath, 'utf8').catch((error: NodeJS.ErrnoException) => {
+    if (error.code === 'ENOENT') return null;
+    throw error;
+  });
+  if (manifestBytes === null) return null;
+  const manifest = JSON.parse(manifestBytes) as unknown;
+  if (!manifest || typeof manifest !== 'object' || Array.isArray(manifest)) {
+    throw new Error(`mailbox_control_plane_manifest_invalid:${manifestPath}`);
+  }
+  const record = manifest as JsonRecord;
+  if (record.name !== '@narada-core/control-plane') return null;
+  const exportsRecord = record.exports && typeof record.exports === 'object' && !Array.isArray(record.exports)
+    ? record.exports as JsonRecord
+    : {};
+  const dotExport = exportsRecord['.'] && typeof exportsRecord['.'] === 'object' && !Array.isArray(exportsRecord['.'])
+    ? exportsRecord['.'] as JsonRecord
+    : {};
+  const relativeEntrypoint = typeof dotExport.import === 'string'
+    ? dotExport.import
+    : typeof record.module === 'string'
+      ? record.module
+      : typeof record.main === 'string'
+        ? record.main
+        : null;
+  if (!relativeEntrypoint) throw new Error(`mailbox_control_plane_entrypoint_missing:${manifestPath}`);
+  return resolve(packageRoot, relativeEntrypoint);
 }
 
 function validateRuntime(value: unknown): ControlPlaneRuntime {

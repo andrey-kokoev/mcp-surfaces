@@ -76,6 +76,22 @@ export class MailboxDomainStore {
     }
   }
 
+  observationByMessage(scopeId: string, messageId: string): JsonRecord | null {
+    const row = this.db.prepare(`
+      select observation.observation_id, observation.mailbox_id, observation.message_id,
+             observation.first_generation_id, observation.first_fact_id, observation.observed_at,
+             event.event_id
+      from mailbox_message_observations observation
+      join mailbox_sync_generations generation
+        on generation.generation_id = observation.first_generation_id
+      left join mailbox_outbox event
+        on event.aggregate_id = observation.observation_id
+       and event.topic = 'mailbox.message.first_observed'
+      where generation.scope_id = ? and observation.message_id = ?
+    `).get(scopeId, messageId) as JsonRecord | undefined;
+    return row ?? null;
+  }
+
   close(): void {
     this.db.close();
   }
@@ -643,6 +659,25 @@ export class MailboxDomainStore {
       `).run(consumerId, scopeId, topicsJson, startAt, now);
       return this.db.prepare('select * from mailbox_outbox_consumers where consumer_id = ?').get(consumerId) as JsonRecord;
     });
+  }
+
+  outboxConsumer(consumerId: string): JsonRecord | null {
+    const row = this.db.prepare(`
+      select consumer_id, scope_id, topics_json, start_at, created_at
+      from mailbox_outbox_consumers where consumer_id = ?
+    `).get(consumerId) as JsonRecord | undefined;
+    if (!row) return null;
+    const topics = typeof row.topics_json === 'string' ? JSON.parse(row.topics_json) as unknown : null;
+    if (!Array.isArray(topics) || topics.some((topic) => typeof topic !== 'string')) {
+      throw new Error(`mailbox_outbox_consumer_topics_invalid:${consumerId}`);
+    }
+    return {
+      consumer_id: String(row.consumer_id),
+      scope_id: row.scope_id === null ? null : String(row.scope_id),
+      topics,
+      start_at: String(row.start_at),
+      created_at: String(row.created_at),
+    };
   }
 
   listOutbox(consumerId: string, limit: number): OutboxPage {

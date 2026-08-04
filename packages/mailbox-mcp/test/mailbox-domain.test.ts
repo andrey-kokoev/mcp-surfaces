@@ -76,6 +76,9 @@ const source: Source = {
 
 try {
   const naradaSonarRoot = resolve(import.meta.dirname, '..', '..', '..', '..', '..', 'narada.sonar');
+  const naradaRoot = resolve(import.meta.dirname, '..', '..', '..', '..', '..', 'narada');
+  const explicitRuntime = await loadControlPlaneRuntime(root, naradaRoot);
+  assert.equal(typeof explicitRuntime.loadConfig, 'function');
   const runtime = await loadControlPlaneRuntime(naradaSonarRoot);
   const service = new MailboxDomainService(root, { runtime, sourceFactory: () => source });
 
@@ -86,6 +89,12 @@ try {
   assert.equal(record(first.result).first_observation_count, 2);
   assert.equal(first.result_ref, undefined, 'SOP result_ref is reserved for immutable value refs');
   assert.equal(sourceCalls, 1);
+
+  const foundFact = service.messageFactFind({ scope_id: 'support', message_id: 'message-allowed' });
+  assert.equal(foundFact.status, 'ok');
+  assert.equal(record(foundFact.observation).message_id, 'message-allowed');
+  assert.equal(record(foundFact.observation).first_generation_id, record(first.result).generation_id);
+  assert.equal(service.messageFactFind({ scope_id: 'other-scope', message_id: 'message-allowed' }).status, 'not_found');
 
   const replay = await service.syncGeneration({ idempotency_key: 'sync-action-1', scope_id: 'support' });
   assert.equal(record(replay.result).idempotency_replayed, true);
@@ -122,6 +131,11 @@ try {
     topics: ['mailbox.message.first_observed'],
     start_at: '2026-07-31T00:00:00.000Z',
   });
+  const shownConsumer = service.outboxConsumerShow({ consumer_id: 'scheduler' });
+  assert.equal(shownConsumer.status, 'ok');
+  assert.equal(record(shownConsumer.consumer).start_at, '2026-07-31T00:00:00.000Z');
+  assert.deepEqual(record(shownConsumer.consumer).topics, ['mailbox.message.first_observed']);
+  assert.equal(service.outboxConsumerShow({ consumer_id: 'missing-consumer' }).status, 'not_found');
   const listed = service.outboxList({ consumer_id: 'scheduler' });
   const events = arrayOfRecords(listed.items);
   assert.equal(events.length, 2);

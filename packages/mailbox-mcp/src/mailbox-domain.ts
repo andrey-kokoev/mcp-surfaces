@@ -36,6 +36,7 @@ export interface MailboxDomainServiceOptions {
   now?: () => string;
   faultInjector?: (point: 'after_batch_staged' | 'after_runner', generationId: string) => void | Promise<void>;
   runtime?: ControlPlaneRuntime;
+  controlPlaneRoot?: string;
 }
 
 function requiredUniqueStrings(value: unknown, code: string, maxItems: number, maxLength: number): string[] {
@@ -53,6 +54,20 @@ export class MailboxDomainService {
   constructor(siteRoot: string, options: MailboxDomainServiceOptions = {}) {
     this.siteRoot = resolve(siteRoot);
     this.options = options;
+  }
+
+  messageFactFind(args: JsonRecord): JsonRecord {
+    const scopeId = requiredBoundedString(args.scope_id, 'mailbox_fact_find_scope_id_required', MAX_SCOPE_ID);
+    const messageId = requiredBoundedString(args.message_id, 'mailbox_fact_find_message_id_required', 1024);
+    const store = this.openStore();
+    try {
+      const observation = store.observationByMessage(scopeId, messageId);
+      return observation
+        ? { schema: 'narada.mailbox.message_fact_lookup.v1', status: 'ok', scope_id: scopeId, message_id: messageId, observation }
+        : { schema: 'narada.mailbox.message_fact_lookup.v1', status: 'not_found', scope_id: scopeId, message_id: messageId };
+    } finally {
+      store.close();
+    }
   }
 
   admissionShow(args: JsonRecord): JsonRecord {
@@ -538,6 +553,19 @@ export class MailboxDomainService {
     }
   }
 
+  outboxConsumerShow(args: JsonRecord): JsonRecord {
+    const consumerId = requiredBoundedString(args.consumer_id, 'mailbox_outbox_consumer_id_required', 256);
+    const store = this.openStore();
+    try {
+      const consumer = store.outboxConsumer(consumerId);
+      return consumer
+        ? { schema: 'narada.mailbox.outbox_consumer_lookup.v1', status: 'ok', consumer }
+        : { schema: 'narada.mailbox.outbox_consumer_lookup.v1', status: 'not_found', consumer_id: consumerId };
+    } finally {
+      store.close();
+    }
+  }
+
   outboxList(args: JsonRecord): JsonRecord {
     const consumerId = requiredBoundedString(args.consumer_id, 'mailbox_outbox_consumer_id_required', 256);
     const limit = boundedInteger(args.limit, 100, 1, 100);
@@ -601,7 +629,7 @@ export class MailboxDomainService {
   }
 
   private async runtime(): Promise<ControlPlaneRuntime> {
-    return this.options.runtime ?? await loadControlPlaneRuntime(this.siteRoot);
+    return this.options.runtime ?? await loadControlPlaneRuntime(this.siteRoot, this.options.controlPlaneRoot);
   }
 }
 
@@ -705,7 +733,7 @@ function createGraphSource(kernel: ControlPlaneRuntime, scope: ScopeConfig, site
 function configuredGraphMailboxId(scope: ScopeConfig): string {
   const configured = scope.graph ?? scope.sources.find((source) => source.type === 'graph');
   return requiredBoundedString(
-    configured?.user_id,
+    configured?.mailbox_id ?? configured?.user_id,
     `mailbox_scope_graph_user_id_required:${scope.scope_id}`,
     512,
   );
@@ -854,6 +882,7 @@ function syncConfigFingerprint(scope: ScopeConfig): string {
     root_dir: scope.root_dir,
     source: graph ? {
       type: 'graph',
+      mailbox_id: graph.mailbox_id,
       user_id: graph.user_id,
       base_url: graph.base_url,
       prefer_immutable_ids: graph.prefer_immutable_ids ?? true,

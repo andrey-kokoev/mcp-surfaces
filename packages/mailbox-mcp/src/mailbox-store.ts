@@ -273,13 +273,24 @@ export function summarizeMessage(message: MailboxMessage, options: { includeBody
     importance: message.importance,
     categories: message.categories,
     preview: message.preview,
-    attachments: message.attachments,
+    attachments: message.attachments.map(metadataOnlyAttachment),
     source_path: message.source_path,
   };
   if (options.includeBody) summary.body_text = message.body_text;
   if (options.includeHtml) summary.body_html = message.body_html;
   if (options.includeRaw) summary.raw = message.raw;
   return summary;
+}
+
+function metadataOnlyAttachment(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(metadataOnlyAttachment);
+  if (!value || typeof value !== 'object') return value;
+  const sanitized: MailboxRecord = {};
+  for (const [key, nested] of Object.entries(value as MailboxRecord)) {
+    if (/^(?:contentbytes|content_bytes|content_base64|contentref|content_ref|content|data|bytes|raw)$/i.test(key)) continue;
+    sanitized[key] = metadataOnlyAttachment(nested);
+  }
+  return sanitized;
 }
 
 export function messageMatchesQuery(message: MailboxMessage, query: unknown): boolean {

@@ -4,10 +4,10 @@ import { listTools } from './main.js';
 const READ_ONLY_TOOLS = [
   'mailbox_guidance', 'mailbox_doctor', 'mailbox_accounts_list',
   'mailbox_messages_list', 'mailbox_message_show', 'mailbox_output_show',
-  'mailbox_fact_show',
+  'mailbox_fact_show', 'mailbox_message_fact_find',
   'mailbox_admission_show',
   'mailbox_search', 'mailbox_thread_show', 'mailbox_generation_show',
-  'mailbox_outbox_list',
+  'mailbox_outbox_consumer_show', 'mailbox_outbox_list',
 ] as const;
 
 export function surfaceDefinition(): DefinedSurface {

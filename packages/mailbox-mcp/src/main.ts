@@ -62,7 +62,11 @@ export function createServerState(options: unknown = {}): MailboxServerState {
     serverName: String(optionsRecord.serverName ?? SERVER_NAME),
     domainService: optionsRecord.domainService instanceof MailboxDomainService
       ? optionsRecord.domainService
-      : new MailboxDomainService(siteRoot),
+      : new MailboxDomainService(siteRoot, {
+        ...(typeof optionsRecord.controlPlaneRoot === 'string' && optionsRecord.controlPlaneRoot.trim()
+          ? { controlPlaneRoot: resolve(optionsRecord.controlPlaneRoot) }
+          : {}),
+      }),
   };
 }
 
@@ -154,6 +158,10 @@ export function listTools(): unknown[] {
       scope_id: { type: 'string', description: 'Configured mailbox scope id. Optional only when the config contains one scope.' },
       config_path: { type: 'string', description: 'Site-relative sync config path. Defaults to config/config.json.' },
     }, ['fact_id']),
+    tool('mailbox_message_fact_find', 'Resolve one synchronized immutable message id to its canonical first-observation fact and event references.', {
+      scope_id: { type: 'string', description: 'Configured mailbox scope id.' },
+      message_id: { type: 'string', description: 'Immutable Graph message id.' },
+    }, ['scope_id', 'message_id']),
     tool('mailbox_generation_show', 'Show bounded metadata and receipts for one synchronization generation.', {
       generation_id: { type: 'string' },
     }, ['generation_id']),
@@ -163,6 +171,9 @@ export function listTools(): unknown[] {
       topics: { type: 'array', minItems: 1, maxItems: 16, items: { type: 'string' } },
       start_at: { type: 'string', description: 'Inclusive ISO-8601 event watermark.' },
     }, ['consumer_id', 'scope_id', 'topics', 'start_at'], false),
+    tool('mailbox_outbox_consumer_show', 'Read one durable mailbox outbox consumer registration for crash-safe bootstrap recovery.', {
+      consumer_id: { type: 'string' },
+    }, ['consumer_id']),
     tool('mailbox_outbox_list', 'List unacknowledged mailbox domain events for a registered consumer.', {
       consumer_id: { type: 'string' },
       limit: { type: 'integer', minimum: 1, maximum: 100, default: 100 },
@@ -245,11 +256,17 @@ async function callTool(params: MailboxRecord, state: MailboxServerState) {
     case 'mailbox_fact_show':
       result = await state.domainService.factShow(args);
       break;
+    case 'mailbox_message_fact_find':
+      result = state.domainService.messageFactFind(args);
+      break;
     case 'mailbox_generation_show':
       result = state.domainService.generationShow(args);
       break;
     case 'mailbox_outbox_consumer_register':
       result = state.domainService.outboxConsumerRegister(args);
+      break;
+    case 'mailbox_outbox_consumer_show':
+      result = state.domainService.outboxConsumerShow(args);
       break;
     case 'mailbox_outbox_list':
       result = state.domainService.outboxList(args);

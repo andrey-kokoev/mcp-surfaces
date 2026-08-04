@@ -38,7 +38,12 @@ try {
       isRead: false,
       bodyPreview: 'Can you send an update?',
       body: { contentType: 'text', content: 'Can you send an update on the open ticket?' },
-      attachments: [{ name: 'screenshot.png', size: 1234 }],
+      attachments: [{
+        name: 'screenshot.png',
+        size: 1234,
+        contentBytes: 'must-not-cross-summary-boundary',
+        content_ref: 'inline-base64:must-not-cross-summary-boundary',
+      }],
     }),
     JSON.stringify({
       id: 'msg-2',
@@ -119,6 +124,7 @@ try {
   assert.equal(show.error, undefined);
   assert.equal(show.result.structuredContent.message.body_text, 'Can you send an update on the open ticket?');
   assert.equal(show.result.structuredContent.message.attachments[0].name, 'screenshot.png');
+  assert.equal(JSON.stringify(show.result.structuredContent.message).includes('must-not-cross-summary-boundary'), false);
 
   const showDuplicate = await rpc({
     jsonrpc: '2.0',
