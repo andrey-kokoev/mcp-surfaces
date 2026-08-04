@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { appendFileSync, mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
-import { DatabaseSync } from 'node:sqlite';
+import { DatabaseSync } from '@narada-core/sqlite';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { DEFAULT_SITE_LOOP_CONFIG } from '../src/site-loop/site-loop-config.js';

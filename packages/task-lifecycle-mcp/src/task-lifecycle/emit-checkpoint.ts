@@ -7,7 +7,7 @@
 import { existsSync, mkdirSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { randomUUID } from 'node:crypto';
-import { DatabaseSync } from 'node:sqlite';
+import { DatabaseSync } from '@narada-core/sqlite';
 
 const AGENT_EVENTS_DDL = `
 CREATE TABLE IF NOT EXISTS agent_events (

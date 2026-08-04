@@ -30,5 +30,8 @@
   },
   "files": [
     "dist/"
-  ]
+  ],
+  "devDependencies": {
+    "@narada-core/sqlite": "workspace:*"
+  }
 }

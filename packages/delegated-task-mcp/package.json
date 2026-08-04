@@ -41,6 +41,7 @@
   ],
   "devDependencies": {
     "@narada-core/mcp-e2e-harness": "workspace:*",
+    "@narada-core/sqlite": "workspace:*",
     "c8": "^11.0.0"
   }
 }

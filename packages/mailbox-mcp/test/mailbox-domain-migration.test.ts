@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { DatabaseSync } from 'node:sqlite';
+import { DatabaseSync } from '@narada-core/sqlite';
 import { MailboxDomainStore } from '../src/mailbox-domain-store.js';
 
 const root = mkdtempSync(join(tmpdir(), 'mailbox-domain-migration-'));

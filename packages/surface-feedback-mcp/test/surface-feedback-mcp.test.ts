@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { DatabaseSync } from 'node:sqlite';
+import { DatabaseSync } from '@narada-core/sqlite';
 import { closeServerState, createServerState, handleRequest, parseArgs } from '../src/main.js';
 
 const root = mkdtempSync(join(tmpdir(), 'surface-feedback-mcp-behavior-'));

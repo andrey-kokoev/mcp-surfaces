@@ -1,7 +1,7 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { existsSync, mkdirSync } from 'node:fs';
 import { dirname, isAbsolute, join, resolve } from 'node:path';
-import { DatabaseSync } from 'node:sqlite';
+import { DatabaseSync } from '@narada-core/sqlite';
 
 export const SCHEDULER_ACTIVATION_SCHEMA_VERSION = 2 as const;
 export const SCHEDULER_DATABASE_PATH = '.ai/scheduler.db' as const;

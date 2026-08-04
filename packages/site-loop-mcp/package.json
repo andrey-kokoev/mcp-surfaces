@@ -51,6 +51,7 @@
   },
   "files": ["dist/", "schemas/", "README.md"],
   "devDependencies": {
-    "@narada-core/mcp-e2e-harness": "workspace:*"
+    "@narada-core/mcp-e2e-harness": "workspace:*",
+    "@narada-core/sqlite": "workspace:*"
   }
 }

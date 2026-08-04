@@ -27,7 +27,8 @@
   "dependencies": {
     "@narada-core/mcp-fabric-contracts": "workspace:*",
     "@narada-core/mcp-telemetry": "workspace:*",
-    "@narada-core/mcp-transport": "workspace:*"
+    "@narada-core/mcp-transport": "workspace:*",
+    "@narada-core/sqlite": "workspace:*"
   },
   "files": [
     "dist/",

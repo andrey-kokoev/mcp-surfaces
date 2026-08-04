@@ -47,6 +47,7 @@
     "@narada-core/execution-contract": "workspace:*",
     "@narada-core/mcp-fabric-contracts": "workspace:*",
     "@narada-core/mcp-transport": "workspace:*",
+    "@narada-core/sqlite": "workspace:*",
     "@narada-core/task-governance-core": "workspace:*"
   },
   "files": ["dist/", "README.md"],

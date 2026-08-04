@@ -1,11 +1,9 @@
 import { existsSync, statSync } from 'node:fs';
-import { createRequire } from 'node:module';
 import { join, resolve } from 'node:path';
 import { cpus } from 'node:os';
-import type { DatabaseSync as DatabaseSyncType } from 'node:sqlite';
+import { DatabaseSync } from '@narada-core/sqlite';
 
 type JsonRecord = Record<string, unknown>;
-const require = createRequire(import.meta.url);
 
 function databasePath(siteRoot: string): string {
   return join(resolve(siteRoot), '.narada', 'runtime', 'mcp-runtime-observer', 'observations.db');
@@ -17,10 +15,9 @@ function siteRoot(explicit?: string): string {
   return resolve(value);
 }
 
-function open(explicit?: string): { db: DatabaseSyncType; path: string } {
+function open(explicit?: string): { db: DatabaseSync; path: string } {
   const path = databasePath(siteRoot(explicit));
   if (!existsSync(path)) throw new Error('runtime_introspection_memory_store_unavailable');
-  const { DatabaseSync } = require('node:sqlite') as typeof import('node:sqlite');
   return { db: new DatabaseSync(path, { readOnly: true }), path };
 }
 
@@ -139,10 +136,10 @@ export function memoryIncidentShow(args: JsonRecord = {}, explicitSiteRoot?: str
 }
 
 type SqlValue = string | number | bigint | Uint8Array | null;
-function row(db: DatabaseSyncType, sql: string, ...args: SqlValue[]): JsonRecord { return (db.prepare(sql).get(...args) ?? {}) as JsonRecord; }
-function rows(db: DatabaseSyncType, sql: string, ...args: SqlValue[]): JsonRecord[] { return db.prepare(sql).all(...args) as JsonRecord[]; }
-function tableExists(db: DatabaseSyncType, name: string): boolean { return Boolean(row(db, "SELECT 1 present FROM sqlite_master WHERE type='table' AND name=?1", name).present); }
-function observerOverhead(db: DatabaseSyncType): JsonRecord {
+function row(db: DatabaseSync, sql: string, ...args: SqlValue[]): JsonRecord { return (db.prepare(sql).get(...args) ?? {}) as JsonRecord; }
+function rows(db: DatabaseSync, sql: string, ...args: SqlValue[]): JsonRecord[] { return db.prepare(sql).all(...args) as JsonRecord[]; }
+function tableExists(db: DatabaseSync, name: string): boolean { return Boolean(row(db, "SELECT 1 present FROM sqlite_master WHERE type='table' AND name=?1", name).present); }
+function observerOverhead(db: DatabaseSync): JsonRecord {
   if (!tableExists(db, 'observer_cycles')) return {
     cycles: 0, last_cycle_at_ms: null, average_cycle_duration_ms: null,
     p95_cycle_duration_ms: null, maximum_cycle_duration_ms: null,

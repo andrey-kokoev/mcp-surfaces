@@ -25,5 +25,8 @@
   "files": [
     "dist/",
     "README.md"
-  ]
+  ],
+  "devDependencies": {
+    "@narada-core/sqlite": "workspace:*"
+  }
 }

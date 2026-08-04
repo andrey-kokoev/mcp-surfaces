@@ -3,7 +3,7 @@ import { mkdirSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { cpus } from 'node:os';
-import { DatabaseSync } from 'node:sqlite';
+import { DatabaseSync } from '@narada-core/sqlite';
 import test from 'node:test';
 import { memoryAttribution, memoryOwners, memoryStatus, memoryTimeline } from '../src/memory-store.js';
 

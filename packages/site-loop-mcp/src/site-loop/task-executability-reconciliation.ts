@@ -409,7 +409,7 @@ export function createTaskExecutabilityOrchestratorForSiteLoop(args: {
   // The Site Loop already owns the disciplined lifecycle connection for this
   // run. Bind the delegated-task gate to that connection instead of letting
   // it open a second connection to the same database while the loop holds its
-  // write lease. A second synchronous node:sqlite connection can block the
+  // write lease. A second synchronous SQLite connection can block the
   // Site Loop event loop before the worker completion supervisor can observe
   // the child NARS terminal event.
   delegatedState.taskLifecycleStore = lifecycleStore;

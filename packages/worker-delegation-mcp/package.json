@@ -35,6 +35,7 @@
     "@narada-core/mcp-fabric-contracts": "workspace:*",
     "@narada-core/mcp-affordances": "workspace:*",
     "@narada-core/mcp-transport": "workspace:*",
+    "@narada-core/sqlite": "workspace:*",
     "zod": "^4.4.3"
   },
   "files": [

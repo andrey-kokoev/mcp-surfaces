@@ -25,7 +25,8 @@
   },
   "dependencies": {
     "@narada-core/mcp-fabric-contracts": "workspace:*",
-    "@narada-core/task-lifecycle-mcp": "workspace:*"
+    "@narada-core/task-lifecycle-mcp": "workspace:*",
+    "@narada-core/sqlite": "workspace:*"
   },
   "devDependencies": {
     "@narada-core/mcp-e2e-harness": "workspace:*"
