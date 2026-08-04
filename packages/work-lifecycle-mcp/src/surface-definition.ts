@@ -31,9 +31,8 @@ export function surfaceDefinition(): DefinedSurface {
       runtime_requirements: [],
       authority_requirements: ['scope.local_site'],
       lifecycle: {
-        mode: 'restart_required',
-        restart_owner: 'mcp-loader',
-        reason: 'One runtime owns the Site-scoped Work Lifecycle writer lease.',
+        mode: 'replayable',
+        reason: 'SQLite WAL transactions, idempotency keys, and revision checks allow independent runtime processes.',
       },
     }],
     metadata: { codex_startup_timeout_sec: 15 },

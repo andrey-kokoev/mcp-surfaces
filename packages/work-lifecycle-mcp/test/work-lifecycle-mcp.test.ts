@@ -42,14 +42,12 @@ async function call(
 test('surface composes first-class ticket tools and revision-gated task tools', async () => {
   const root = mkdtempSync(join(tmpdir(), 'work-lifecycle-mcp-'));
   prepareWorkLifecycleStore(root);
-  const store = openPreparedWorkLifecycleStore(root, {
-    writerId: 'mcp-test-writer',
-    writerLeaseMs: 60_000,
-  });
+  const store = openPreparedWorkLifecycleStore(root);
   const runtime = createWorkLifecycleRuntime({ siteRoot: root, store });
   try {
     const definition = surfaceDefinition();
     assert.equal(definition.descriptor.surface_id, 'work-lifecycle');
+    assert.equal(definition.descriptor.projections[0]?.lifecycle?.mode, 'replayable');
     const tools = listTools();
     assert.ok(tools.some((tool) => tool.name === 'ticket_admit_source'));
     assert.ok(tools.some((tool) => tool.name === 'task_lifecycle_create'));
@@ -97,6 +95,8 @@ test('surface composes first-class ticket tools and revision-gated task tools', 
     });
     assert.equal(asRecord(shown.ticket).revision, 1);
     assert.equal((shown.sources as unknown[]).length, 1);
+    const doctor = await call(runtime, 4, 'work_lifecycle_doctor', {});
+    assert.equal(asRecord(doctor.concurrency).posture, 'sqlite_wal_transactional_multi_process');
   } finally {
     store.close();
     rmSync(root, { recursive: true, force: true });

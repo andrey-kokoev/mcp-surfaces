@@ -446,7 +446,6 @@ export function createWorkLifecycleRuntime(options: {
       stderr: options.stderr ?? process.stderr,
       storeOverride: store.taskStore,
     });
-    store.startWriterAuthorityHeartbeat();
     return { siteRoot: options.siteRoot, store, ownsStore };
   } catch (error) {
     if (ownsStore) store.close();
@@ -515,7 +514,6 @@ async function callTaskTool(
   if (!definition) throw new Error(`unknown_tool:${name}`);
   const delegatedArgs = { ...args };
   if (!definition.annotations?.readOnlyHint) {
-    runtime.store.heartbeatWriterAuthority();
     assertTaskRevision(runtime.store, args, 'task_number', 'expected_revision');
     assertTaskRevision(runtime.store, args, 'parent_task_number', 'expected_parent_revision');
     assertTaskRevision(runtime.store, args, 'required_task_number', 'expected_required_revision');
@@ -570,10 +568,10 @@ function callTicketTool(
         status: preparation.status === 'prepared' ? 'ok' : 'not_ready',
         site_root: runtime.siteRoot,
         preparation,
-        writer: {
-          writer_id: store.writerId,
+        concurrency: {
           database_path: store.databasePath,
-          posture: 'single_runtime_lease',
+          posture: 'sqlite_wal_transactional_multi_process',
+          conflict_guards: ['sqlite_write_serialization', 'idempotency_keys', 'revision_checks'],
         },
       });
     case 'ticket_list': {
