@@ -54,7 +54,10 @@ export function memoryOwners(args: JsonRecord = {}, explicitSiteRoot?: string): 
   try {
     const limit = boundedInt(args.limit, 50, 1, 200);
     const active = args.active_only === false ? 0 : 1;
-    const items = rows(db, `SELECT o.*,
+    const items = rows(db, `SELECT o.owner_id,o.site_id,o.authority_ref,o.owner_kind,o.pid,
+      o.process_started_at,CAST(o.process_creation_ticks AS TEXT) process_creation_ticks,
+      o.parent_owner_id,o.surface_id,o.instance_id,o.generation_id,o.carrier_session_id,
+      o.executable_name,o.observed_at,o.active,
       (SELECT private_bytes FROM process_samples p WHERE p.owner_id=COALESCE(o.parent_owner_id,o.owner_id) ORDER BY sampled_at_ms DESC LIMIT 1) private_bytes,
       (SELECT working_set_bytes FROM process_samples p WHERE p.owner_id=COALESCE(o.parent_owner_id,o.owner_id) ORDER BY sampled_at_ms DESC LIMIT 1) working_set_bytes,
       (SELECT heap_used_bytes FROM worker_samples w WHERE w.owner_id=o.owner_id ORDER BY sampled_at_ms DESC LIMIT 1) heap_used_bytes,
