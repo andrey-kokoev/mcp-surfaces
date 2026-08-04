@@ -24,8 +24,8 @@ It is launched against a site root and uses site-local task governance state and
 
 ```powershell
 pnpm --filter @narada-core/task-lifecycle-mcp build
-node packages/task-lifecycle-mcp/dist/src/task-lifecycle/task-mcp-server.js --prepare --site-root D:/code/site
-node packages/task-lifecycle-mcp/dist/src/task-lifecycle/task-mcp-server.js --site-root D:/code/site
+node packages/task-lifecycle-mcp/dist/src/task-lifecycle/task-mcp-server.js --prepare --site-root <src-root>/site
+node packages/task-lifecycle-mcp/dist/src/task-lifecycle/task-mcp-server.js --site-root <src-root>/site
 ```
 
 Preparation is an explicit preflight. It creates/upgrades the site-local

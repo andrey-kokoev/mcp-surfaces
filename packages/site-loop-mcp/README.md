@@ -152,7 +152,7 @@ database. For an existing site, prepare it first, then run the acknowledged
 cutover:
 
 ```powershell
-node packages/task-lifecycle-mcp/dist/src/task-lifecycle/task-mcp-server.js --prepare --site-root D:/code/site
+node packages/task-lifecycle-mcp/dist/src/task-lifecycle/task-mcp-server.js --prepare --site-root <src-root>/site
 ```
 
 If preparation has not happened, the cutover fails fast with
@@ -160,7 +160,7 @@ If preparation has not happened, the cutover fails fast with
 prepare-then-retry sequence.
 
 ```powershell
-pnpm --filter @narada-core/site-loop-mcp exec site-loop-storage-cutover --site-root D:/code/site --ack-cutover
+pnpm --filter @narada-core/site-loop-mcp exec site-loop-storage-cutover --site-root <src-root>/site --ack-cutover
 ```
 
 The cutover does not retain a legacy schema or runtime fallback. It preserves
@@ -188,13 +188,13 @@ explicit site root and acknowledgement; each invocation is bounded and
 advances its evidence cursor:
 
 ```powershell
-pnpm --filter @narada-core/site-loop-mcp exec site-loop-storage-maintenance --site-root D:/code/site --ack-maintenance
+pnpm --filter @narada-core/site-loop-mcp exec site-loop-storage-maintenance --site-root <src-root>/site --ack-maintenance
 ```
 
 Add `--compact` when a full SQLite rewrite is wanted after pruning:
 
 ```powershell
-pnpm --filter @narada-core/site-loop-mcp exec site-loop-storage-maintenance --site-root D:/code/site --ack-maintenance --compact
+pnpm --filter @narada-core/site-loop-mcp exec site-loop-storage-maintenance --site-root <src-root>/site --ack-maintenance --compact
 ```
 
 Full run reads fail closed when a referenced evidence artifact is missing,
@@ -207,7 +207,7 @@ available.
 
 ```powershell
 pnpm --filter @narada-core/site-loop-mcp build
-site-loop-mcp --site-root D:/code/site
+site-loop-mcp --site-root <src-root>/site
 ```
 
 ## Agent Guidance

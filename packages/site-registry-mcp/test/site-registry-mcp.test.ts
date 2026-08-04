@@ -1,10 +1,11 @@
 import assert from 'node:assert/strict';
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 import { createServerState, handleRequest, listTools } from '../src/main.js';
 
 const names = listTools().map((tool) => tool.name);
+assert.equal(createServerState({}, { NARADA_SRC_ROOT: 'C:/portable-src' }).naradaRoot, resolve('C:/portable-src/narada').replace(/\\/g, '/'));
 assert.deepEqual(names.sort(), [
   'site_registry_command_map',
   'site_registry_discover_plan',

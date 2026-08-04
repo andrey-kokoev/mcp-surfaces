@@ -64,7 +64,7 @@ try {
   assert.equal(artifactsDoctor(state).discovery && (artifactsDoctor(state).discovery as Record<string, unknown>).source, 'option:narsBaseUrl');
   assert.deepEqual(listTools().map((tool) => tool.name), ['artifacts_guidance', 'artifacts_doctor', 'artifact_register_file', 'artifact_list', 'artifact_read', 'artifact_present', 'artifact_message_part_create']);
 
-  const registered = await artifactRegisterFile({ path: 'D:/code/site/.ai/report.html', kind: 'html', title: 'HTML report' }, state);
+  const registered = await artifactRegisterFile({ path: 'C:/workspace/site/.ai/report.html', kind: 'html', title: 'HTML report' }, state);
   assert.equal(registered.status, 'registered');
   assert.equal((registered.message_part as Record<string, unknown>).type, 'artifact_ref');
   assert.equal((registered.message_part as Record<string, unknown>).artifact_id, 'art_html_1');
@@ -73,7 +73,7 @@ try {
   assert.equal(registered.operator_message, 'Artifact ready: HTML report');
   assert.equal(registered.content_url, `http://127.0.0.1:${address.port}/sessions/carrier_test/artifacts/art_html_1/content`);
   assert.equal(requests[0].url, '/sessions/carrier_test/artifacts');
-  assert.deepEqual(requests[0].body, { source_path: 'D:/code/site/.ai/report.html', kind: 'html', title: 'HTML report', render_hint: 'inline' });
+  assert.deepEqual(requests[0].body, { source_path: 'C:/workspace/site/.ai/report.html', kind: 'html', title: 'HTML report', render_hint: 'inline' });
 
   const read = await artifactRead({ artifact_id: 'art_html_1' }, state);
   assert.equal((read.message_part as Record<string, unknown>).title, 'HTML report');
@@ -97,7 +97,7 @@ try {
   assert.equal(artifactsDoctor(canonicalRootState).registration_configured, true);
   assert.equal((artifactsDoctor(canonicalRootState).discovery as Record<string, unknown>).session_index_path, join(canonicalSiteRoot, 'crew', 'nars-sessions', 'carrier_test', 'session-index-record.json'));
 
-  const discovered = await artifactRegisterFile({ path: 'D:/code/site/.ai/report.html', kind: 'html', title: 'Discovered report' }, discoveredState);
+  const discovered = await artifactRegisterFile({ path: 'C:/workspace/site/.ai/report.html', kind: 'html', title: 'Discovered report' }, discoveredState);
   assert.equal(discovered.content_url, `http://127.0.0.1:${address.port}/sessions/carrier_test/artifacts/art_html_1/content`);
   assert.equal(discovered.content_url, `http://127.0.0.1:${address.port}/sessions/carrier_test/artifacts/art_html_1/content`);
 

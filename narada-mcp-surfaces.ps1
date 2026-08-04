@@ -28,11 +28,18 @@ if ($Command -ne "agent-start") {
 if ($env:NARADA_LAUNCH_REGISTRY_SITE_ROOT) {
   $siteRoot = $env:NARADA_LAUNCH_REGISTRY_SITE_ROOT
 } else {
-  $nestedSiteRoot = Join-Path $PSScriptRoot ".narada"
-  $siteRoot = if (Test-Path -LiteralPath $nestedSiteRoot) { $nestedSiteRoot } else { $PSScriptRoot }
+  $siteRoot = $PSScriptRoot
 }
-$workspaceRoot = "D:\code"
-$naradaProperRoot = "D:\code\narada"
+$userHome = [Environment]::GetFolderPath('UserProfile')
+$sourceRoot = if ($env:NARADA_SRC_ROOT) { $env:NARADA_SRC_ROOT } else { Join-Path $userHome 'src' }
+$workspaceRoot = $sourceRoot
+$naradaProperRoot = if ($env:NARADA_PROPER_ROOT) {
+  $env:NARADA_PROPER_ROOT
+} elseif ($env:NARADA_ROOT) {
+  $env:NARADA_ROOT
+} else {
+  Join-Path $sourceRoot 'narada'
+}
 $agentStart = Join-Path $naradaProperRoot "packages\agent-start\src\narada-agent-start.ts"
 if (-not (Test-Path -LiteralPath $agentStart)) {
   throw "packaged_agent_start_missing: $agentStart"
@@ -60,7 +67,7 @@ $env:NARADA_AGENT_ID = $Agent
 $env:NARADA_TARGET_SITE_ROOT = $siteRoot
 $env:NARADA_LAUNCH_REGISTRY_SITE_ROOT = $siteRoot
 $env:NARADA_WORKSPACE_ROOT = $workspaceRoot
-$tsxLoader = "file:///D:/code/narada/node_modules/.pnpm/tsx@4.21.0/node_modules/tsx/dist/loader.mjs"
+$tsxLoader = [System.Uri]::new((Join-Path $naradaProperRoot 'node_modules\tsx\dist\loader.mjs')).AbsoluteUri
 
 Push-Location $workspaceRoot
 try {

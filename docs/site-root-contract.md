@@ -2,10 +2,10 @@
 
 Narada surfaces use one canonical Site root: the workspace directory that contains the Site's source tree. The `.narada` directory is the Site control root, not a second Site root.
 
-For a workspace such as `D:/code/mcp-surfaces`:
+For a workspace such as `<src-root>/mcp-surfaces`:
 
-- `site_root` and `workspace_root` are `D:/code/mcp-surfaces`.
-- `governance_root` and other control files live under `D:/code/mcp-surfaces/.narada`.
+- `site_root` and `workspace_root` are `<src-root>/mcp-surfaces`.
+- `governance_root` and other control files live under `<src-root>/mcp-surfaces/.narada`.
 - runtime state belongs under the workspace's `.ai` or the control root's documented runtime subdirectories.
 - `.narada/site.json` is a generated, machine-local identity marker. It is ignored by Git and may contain absolute paths. It must not be treated as a portable source file.
 

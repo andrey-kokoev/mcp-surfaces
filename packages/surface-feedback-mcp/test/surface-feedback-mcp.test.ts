@@ -10,8 +10,8 @@ let state: any;
 
 try {
   mkdirSync(join(root, '.ai'), { recursive: true });
-  assert.deepEqual(parseArgs(['--feedback-discovery-root', 'D:\\code\\one', '--feedback-discovery-root', 'D:\\code\\two']), {
-    feedbackDiscoveryRoots: ['D:\\code\\one', 'D:\\code\\two'],
+  assert.deepEqual(parseArgs(['--feedback-discovery-root', 'C:\\workspace\\one', '--feedback-discovery-root', 'C:\\workspace\\two']), {
+    feedbackDiscoveryRoots: ['C:\\workspace\\one', 'C:\\workspace\\two'],
   });
   const previousCanonicalRoot = process.env.NARADA_SURFACE_FEEDBACK_ROOT;
   delete process.env.NARADA_SURFACE_FEEDBACK_ROOT;

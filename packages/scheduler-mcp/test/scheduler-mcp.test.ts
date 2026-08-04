@@ -19,7 +19,7 @@ assert.deepEqual(splitScheduledTaskPath('\\Narada\\SonarOperatingProgramDispatch
 });
 const noWindowPlan = buildScheduledTaskLaunchPlan(
   'node.exe',
-  '"D:\\code\\narada.sonar\\scripts\\sonar-operating-program.ts" dispatch-once',
+  '"C:\\workspace\\narada.sonar\\scripts\\sonar-operating-program.ts" dispatch-once',
 );
 assert.equal(noWindowPlan.console_window_policy, 'native_create_no_window');
 assert.equal(noWindowPlan.launcher_argv[0], '--scheduled-v1');
@@ -28,7 +28,7 @@ assert.deepEqual(normalizeScheduledTaskDefinition({
   arguments: noWindowPlan.launcher_arguments,
 }), {
   execute: 'node.exe',
-  arguments: '"D:\\code\\narada.sonar\\scripts\\sonar-operating-program.ts" dispatch-once',
+  arguments: '"C:\\workspace\\narada.sonar\\scripts\\sonar-operating-program.ts" dispatch-once',
   console_window_policy: 'native_create_no_window',
   launcher_execute: noWindowPlan.launcher_path,
   launcher_arguments: noWindowPlan.launcher_arguments,
@@ -76,11 +76,11 @@ assert.deepEqual(buildCreateScheduleArgs('hourly', { interval_minutes: 15 }), ['
 assert.deepEqual(buildCreateScheduleArgs('hourly', { interval_minutes: 120 }), ['/sc', 'hourly', '/mo', '2']);
 assert.deepEqual(buildCreateScheduleArgs('hourly', { interval_minutes: 90 }), ['/sc', 'minute', '/mo', '90']);
 assert.ok(scheduledActionPolicyReasons('cmd.exe', '/c tool.cmd', null, state).some((reason) => reason.startsWith('scheduler_shell_action_disallowed:')));
-assert.ok(scheduledActionPolicyReasons('pwsh.exe', '-File D:\\code\\site\\tool.cmd', null, state).some((reason) => reason.startsWith('scheduler_transient_wrapper_refused:')));
-assert.ok(scheduledActionPolicyReasons('pwsh.exe', '-File D:\\code\\site\\.ai\\tmp\\tool.ps1', null, state).some((reason) => reason.startsWith('scheduler_transient_script_path_refused:')));
-assert.ok(scheduledActionPolicyReasons('pwsh.exe', '-File "D:\\code\\site\\.ai\\tmp\\tool.ps1"', null, state).some((reason) => reason.startsWith('scheduler_transient_script_path_refused:')));
-const rootedState = createServerState({ allowedRoots: ['D:\\code\\site'] });
-assert.ok(scheduledActionPolicyReasons('pwsh.exe', '-File D:\\code\\site\\tool.ps1', 'D:\\other-site', rootedState).some((reason) => reason.startsWith('scheduler_working_dir_outside_allowed_root:')));
+assert.ok(scheduledActionPolicyReasons('pwsh.exe', '-File C:\\workspace\\site\\tool.cmd', null, state).some((reason) => reason.startsWith('scheduler_transient_wrapper_refused:')));
+assert.ok(scheduledActionPolicyReasons('pwsh.exe', '-File C:\\workspace\\site\\.ai\\tmp\\tool.ps1', null, state).some((reason) => reason.startsWith('scheduler_transient_script_path_refused:')));
+assert.ok(scheduledActionPolicyReasons('pwsh.exe', '-File "C:\\workspace\\site\\.ai\\tmp\\tool.ps1"', null, state).some((reason) => reason.startsWith('scheduler_transient_script_path_refused:')));
+const rootedState = createServerState({ allowedRoots: ['C:\\workspace\\site'] });
+assert.ok(scheduledActionPolicyReasons('pwsh.exe', '-File C:\\workspace\\site\\tool.ps1', 'D:\\other-site', rootedState).some((reason) => reason.startsWith('scheduler_working_dir_outside_allowed_root:')));
 
 async function callTool(name: string, args: Record<string, unknown>): Promise<Record<string, any>> {
   return handleRequest({ jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name, arguments: args } }, state) as Promise<Record<string, any>>;
@@ -119,8 +119,8 @@ const dryRunUpdate = await callTool('scheduler_task_update_action', {
   task_name: '\\Narada-Sonar-Daemon',
   command: 'pwsh.exe',
   implementation_id: runtimeStatus.implementation_id,
-  arguments: '-NoProfile -File D:\\code\\narada.sonar\\scripts\\supervisor.ps1 start',
-  working_dir: 'D:\\code\\narada.sonar',
+  arguments: '-NoProfile -File C:\\workspace\\narada.sonar\\scripts\\supervisor.ps1 start',
+  working_dir: 'C:\\workspace\\narada.sonar',
   execution_time_limit_seconds: 180,
   multiple_instances: 'ignore_new',
   dry_run: true,
@@ -135,11 +135,11 @@ assert.equal(dryRunUpdateData.console_window_policy, 'native_create_no_window');
 assert.match(String(dryRunUpdateData.launcher_execute), /narada-process-supervisor\.exe$/i);
 assert.match(String(dryRunUpdateData.launcher_arguments), /^--scheduled-v1\s+[A-Za-z0-9_-]+$/);
 assert.equal(dryRunUpdateData.execute, 'pwsh.exe');
-assert.equal(dryRunUpdateData.arguments, '-NoProfile -File D:\\code\\narada.sonar\\scripts\\supervisor.ps1 start');
+assert.equal(dryRunUpdateData.arguments, '-NoProfile -File C:\\workspace\\narada.sonar\\scripts\\supervisor.ps1 start');
 assert.equal(dryRunUpdateData.schtasks_fallback, undefined);
 assert.equal(dryRunUpdateData.schtasks_preview_not_used_for_mutation, true);
 assert.deepEqual(dryRunUpdateData.schtasks_preview_args.slice(0, 4), ['/change', '/tn', '\\Narada-Sonar-Daemon', '/tr']);
-assert.equal(dryRunUpdateData.working_dir, 'D:\\code\\narada.sonar');
+assert.equal(dryRunUpdateData.working_dir, 'C:\\workspace\\narada.sonar');
 assert.equal(dryRunUpdateData.working_dir_applied, false);
 assert.equal(dryRunUpdateData.working_dir_would_apply, true);
 assert.equal(dryRunUpdateData.execution_time_limit_seconds, 180);

@@ -532,7 +532,8 @@ export function providerRegistryResolution(siteRoot: string, env: NodeJS.Process
   const configuredRegistryDbPath = configuredRegistryDb ? resolve(siteRoot, configuredRegistryDb) : null;
   const userSiteRoot = firstString(options.userSiteRoot) ?? siteRoot;
   const contextRegistryDbPath = intelligenceLaunchContextRegistryPath(siteRoot, userSiteRoot, env);
-  const properRoot = firstString(env.NARADA_PROPER_ROOT);
+  const properRoot = firstString(env.NARADA_PROPER_ROOT, env.NARADA_ROOT);
+  const sourceRoot = firstString(env.NARADA_SRC_ROOT) ?? join(homedir(), 'src');
   const candidates = [
     ...(configuredRegistryDbPath ? [configuredRegistryDbPath] : []),
     ...(properRoot ? [join(properRoot, 'packages', 'carrier-provider-contract', 'contracts', 'provider-registry.json')] : []),
@@ -540,7 +541,7 @@ export function providerRegistryResolution(siteRoot: string, env: NodeJS.Process
     join(siteRoot, '.ai', 'intelligence-registry.db'),
     join(siteRoot, 'packages', 'carrier-provider-contract', 'contracts', 'provider-registry.json'),
     join(siteRoot, '..', 'narada', 'packages', 'carrier-provider-contract', 'contracts', 'provider-registry.json'),
-    'D:\\code\\narada\\packages\\carrier-provider-contract\\contracts\\provider-registry.json',
+    join(properRoot ?? join(sourceRoot, 'narada'), 'packages', 'carrier-provider-contract', 'contracts', 'provider-registry.json'),
     join(siteRoot, '..', 'narada', '.ai', 'intelligence-registry.db'),
   ].map((candidate) => resolve(candidate)).filter((candidate, index, all) => all.indexOf(candidate) === index);
   const path = candidates.find((candidate) => existsSync(candidate)) ?? null;

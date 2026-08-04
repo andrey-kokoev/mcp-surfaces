@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { parseSiteLoopSupervisorArgs } from '../src/site-loop/site-loop-supervisor-runner.js';
 
 const parsed = parseSiteLoopSupervisorArgs([
-  '--site-root', 'D:/code/example-site',
+  '--site-root', 'C:/workspace/example-site',
   '--ensure-resident',
   '--cycles', '3',
   '--interval-ms', '1000',
@@ -16,7 +16,7 @@ const parsed = parseSiteLoopSupervisorArgs([
   '--runtime-lease-ttl-ms', '90000',
 ]);
 
-assert.equal(parsed.cwd, 'D:/code/example-site');
+assert.equal(parsed.cwd, 'C:/workspace/example-site');
 assert.equal(parsed.supervise, true);
 assert.equal(parsed.ensureResident, true);
 assert.equal(parsed.cycles, 3);

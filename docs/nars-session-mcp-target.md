@@ -5,7 +5,7 @@ site admission are explicit deployment steps.
 
 The canonical semantic contract is maintained in Narada proper:
 
-`D:/code/narada/docs/architecture/nars-session-input-contract.md`
+`<src-root>/narada/docs/architecture/nars-session-input-contract.md`
 
 This document defines the MCP-facing boundary only.
 

@@ -1,13 +1,14 @@
 import assert from 'node:assert/strict';
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 import { createServerState, handleRequest, listTools, runOverlayCommand } from '../src/main.js';
 import { surfaceDefinition } from '../src/surface-definition.js';
 
 const root = mkdtempSync(join(tmpdir(), 'operator-console-overlay-mcp-'));
 const entrypoint = join(root, 'overlay.mjs');
 const stateRoot = join(root, 'overlay-state');
+assert.equal(createServerState({}, { NARADA_SRC_ROOT: root }).naradaRoot, resolve(root, 'narada'));
 writeFileSync(entrypoint, [
   'const command = process.argv[2];',
   'console.log(JSON.stringify({ schema: "test.overlay.result.v1", state: command === "stop" ? "stopped" : command === "inspect" ? "running" : command, command, args: process.argv.slice(3) }));',

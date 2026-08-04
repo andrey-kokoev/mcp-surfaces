@@ -1,8 +1,8 @@
 import assert from 'node:assert/strict';
 import { normalizeBatchRequests, normalizeOptionalRunIds, normalizeRunIds } from '../src/tool-handlers/batch.js';
 
-assert.deepEqual(normalizeBatchRequests([{ cwd: 'D:/code/example' }, null, 'ignored-shape']), [
-  { cwd: 'D:/code/example' },
+assert.deepEqual(normalizeBatchRequests([{ cwd: 'C:/workspace/example' }, null, 'ignored-shape']), [
+  { cwd: 'C:/workspace/example' },
   {},
   {},
 ]);

@@ -17,7 +17,7 @@ Start a read-only audit worker with `worker_run`:
     "mode": "audit_only"
   },
   "constraints": {
-    "cwd": "D:/code/mcp-surfaces",
+    "cwd": "<src-root>/mcp-surfaces",
     "authority": "read",
     "cognition": "low"
   }
@@ -75,7 +75,7 @@ Only a small environment allowlist is passed to workers: `PATH`, `USERPROFILE`, 
 
 ```powershell
 pnpm --filter @narada-core/worker-delegation-mcp build
-node D:/code/mcp-surfaces/packages/worker-delegation-mcp/dist/src/main.js --allowed-root D:/code/mcp-surfaces --run-root D:/tmp/worker-runs
+node <src-root>/mcp-surfaces/packages/worker-delegation-mcp/dist/src/main.js --allowed-root <src-root>/mcp-surfaces --run-root D:/tmp/worker-runs
 ```
 
 Common flags:
@@ -221,8 +221,8 @@ DeepSeek is routed through `narada-agent-runtime-server` with `constraints.provi
     "mode": "audit_only"
   },
   "constraints": {
-    "cwd": "D:/code/mcp-surfaces",
-    "site_root": "D:/code/mcp-surfaces",
+    "cwd": "<src-root>/mcp-surfaces",
+    "site_root": "<src-root>/mcp-surfaces",
     "authority": "read",
     "provider": "deepseek-api",
     "overrides": {
@@ -243,7 +243,7 @@ Provider credentials and cognition defaults are loaded through the Narada provid
     "mode": "audit_only"
   },
   "constraints": {
-    "cwd": "D:/code/mcp-surfaces",
+    "cwd": "<src-root>/mcp-surfaces",
     "authority": "read",
     "cognition": "medium",
     "resumable": false,
@@ -265,13 +265,13 @@ Migration audit with explicit preflight:
     "mode": "audit_only"
   },
   "constraints": {
-    "cwd": "D:/code/mcp-surfaces",
+    "cwd": "<src-root>/mcp-surfaces",
     "authority": "read",
     "cognition": "medium",
     "wait_for_completion": false,
     "preflight_paths": [
-      { "label": "old authority", "path": "D:/code/narada.revolution", "access": "read" },
-      { "label": "new repo", "path": "D:/code/narada.revolution", "access": "create" }
+      { "label": "old authority", "path": "<src-root>/narada.revolution", "access": "read" },
+      { "label": "new repo", "path": "<src-root>/narada.revolution", "access": "create" }
     ],
     "required_mcp_tools": [
       "local-filesystem-read.fs_glob_search",
@@ -286,7 +286,7 @@ Edit shortcut:
 
 ```json
 {
-  "cwd": "D:/code/mcp-surfaces",
+  "cwd": "<src-root>/mcp-surfaces",
   "instruction": "Fix the narrow test failure, keep the change scoped, and report what changed.",
   "resumable": false
 }

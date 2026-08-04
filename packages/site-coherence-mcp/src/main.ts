@@ -2,7 +2,8 @@
 import { buildGuidanceResult } from './guidance.js';
 import { guidanceToolDefinition } from './guidance.js';
 import { readFileSync, existsSync, statSync } from 'node:fs';
-import { resolve } from 'node:path';
+import { homedir } from 'node:os';
+import { join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { buildPathMetadataTelemetryDeclaration, emitTelemetryEvent, telemetryErrorCodeFromUnknown, type TelemetryDeclaration, type TelemetryEventKind } from '@narada-core/mcp-telemetry';
 
@@ -10,7 +11,6 @@ const SERVER_NAME = 'site-coherence-mcp';
 const SERVER_VERSION = '0.1.0';
 const PROTOCOL_VERSION = '2024-11-05';
 
-const DEFAULT_REPO_ROOT = 'D:/code/narada';
 const DEFAULT_CONTINUITY_DIR = '.narada/site-continuity';
 const DEFAULT_HEALTH_FILE = '.narada/site-continuity/health/cloudflare-continuity-health-last.json';
 const DEFAULT_BINDINGS_FILE = '.narada/site-continuity/bindings.json';
@@ -30,8 +30,15 @@ type SiteCoherenceState = {
   workerUrl: string;
 };
 
-export function createServerState(options: JsonRecord = {}): SiteCoherenceState {
-  const repoRoot = String(options.repoRoot ?? options['repo-root'] ?? DEFAULT_REPO_ROOT).replace(/\\/g, '/');
+export function createServerState(options: JsonRecord = {}, env: NodeJS.ProcessEnv = process.env): SiteCoherenceState {
+  const sourceRoot = env.NARADA_SRC_ROOT?.trim() || join(homedir(), 'src');
+  const repoRoot = resolve(String(
+    options.repoRoot
+      ?? options['repo-root']
+      ?? env.NARADA_ROOT
+      ?? env.NARADA_PROPER_ROOT
+      ?? join(sourceRoot, 'narada'),
+  )).replace(/\\/g, '/');
   return {
     repoRoot,
     continuityDir: resolve(repoRoot, String(options.continuityDir ?? options['continuity-dir'] ?? DEFAULT_CONTINUITY_DIR)).replace(/\\/g, '/'),

@@ -12,7 +12,7 @@ import { assertExecutionBindingScope } from '../src/task-lifecycle/task-lifecycl
 import { bindTaskExecution, readTaskExecutionBinding } from '../src/task-lifecycle/task-execution-state.js';
 
 const userSiteRoot = 'C:\\Users\\Andrey\\Narada';
-const repositorySiteRoot = 'D:\\code\\narada';
+const repositorySiteRoot = 'C:\\workspace\\narada';
 const guardedTools = new Set(['task_lifecycle_create']);
 
 const mismatch = buildLifecycleTargetLocusStatus({

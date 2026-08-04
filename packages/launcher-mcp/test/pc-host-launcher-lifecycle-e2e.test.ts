@@ -10,7 +10,7 @@ import {
 } from 'node:fs';
 import { mkdtemp, mkdir, rm } from 'node:fs/promises';
 import { once } from 'node:events';
-import { tmpdir } from 'node:os';
+import { homedir, tmpdir } from 'node:os';
 import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
@@ -24,7 +24,10 @@ import {
 const TEST_ID = 'launcher-mcp-pc-host-lifecycle-e2e';
 const PACKAGE_ROOT = resolve(fileURLToPath(new URL('..', import.meta.url)), '..');
 const MCP_SURFACES_ROOT = resolve(PACKAGE_ROOT, '..', '..');
-const NARADA_ROOT = resolve(process.env.NARADA_E2E_NARADA_ROOT ?? 'D:/code/narada');
+const NARADA_ROOT = resolve(
+  process.env.NARADA_E2E_NARADA_ROOT
+    ?? join(process.env.NARADA_SRC_ROOT ?? join(homedir(), 'src'), 'narada'),
+);
 const CLI_PATH = resolve(process.env.NARADA_E2E_CLI_ENTRYPOINT ?? join(
   NARADA_ROOT,
   'packages',

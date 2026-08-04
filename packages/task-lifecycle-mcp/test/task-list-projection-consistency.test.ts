@@ -52,7 +52,7 @@ const store = {
 
 const handlers = createTaskLifecycleReadHandlers({
   store,
-  siteRoot: 'D:/code/mcp-surfaces',
+  siteRoot: 'C:/workspace/mcp-surfaces',
   jsonToolResult: (value: unknown) => value,
   stringField: (args: Record<string, unknown>, field: string) => typeof args?.[field] === 'string' ? args[field] : undefined,
   numberField: (args: Record<string, unknown>, field: string) => typeof args?.[field] === 'number' ? args[field] : undefined,

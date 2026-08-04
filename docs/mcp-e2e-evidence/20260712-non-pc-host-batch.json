@@ -2,7 +2,7 @@
   "schema": "narada.mcp.e2e.debt_evidence.v1",
   "evidence_id": "mcp-e2e-non-pc-host-batch-20260713",
   "generated_at": "2026-07-13T03:36:00Z",
-  "repository": "D:/code/mcp-surfaces",
+  "repository": "<src-root>/mcp-surfaces",
   "scope": {
     "objective": "zero outstanding non-PC-host code/test debt",
     "pc_host_authority": "excluded",

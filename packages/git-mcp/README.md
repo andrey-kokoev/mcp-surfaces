@@ -93,13 +93,13 @@ Git tools return bounded output directly in their own result payloads. For `git_
 
 ```powershell
 pnpm --filter @narada-core/git-mcp build
-node packages/git-mcp/dist/src/main.js --allowed-root D:/code/example --mode read
+node packages/git-mcp/dist/src/main.js --allowed-root <src-root>/example --mode read
 ```
 
 Use write mode only when mutation is intended:
 
 ```powershell
-node packages/git-mcp/dist/src/main.js --allowed-root D:/code/example --mode write
+node packages/git-mcp/dist/src/main.js --allowed-root <src-root>/example --mode write
 ```
 
 ## Verification

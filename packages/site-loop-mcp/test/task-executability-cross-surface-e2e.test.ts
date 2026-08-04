@@ -3,6 +3,7 @@ import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import { createServer, type Server } from 'node:http';
 import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
+import { homedir } from 'node:os';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import {
   createTemporaryE2eRoot,
@@ -27,7 +28,10 @@ const TEST_ID = 'site-loop-task-executability-live-e2e';
 const E2E_DEADLINE_MS = 150_000;
 const buildRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const packageRoot = resolve(buildRoot, '..');
-const naradaRoot = resolve(process.env.NARADA_E2E_NARADA_ROOT ?? 'D:/code/narada');
+const naradaRoot = resolve(
+  process.env.NARADA_E2E_NARADA_ROOT
+    ?? join(process.env.NARADA_SRC_ROOT ?? join(homedir(), 'src'), 'narada'),
+);
 const lifecycleServerPath = resolve(packageRoot, '..', 'task-lifecycle-mcp', 'dist', 'src', 'task-lifecycle', 'task-mcp-server.js');
 const siteLoopRunnerPath = join(buildRoot, 'src', 'site-loop', 'site-loop-engine.js');
 const runtimeServerPath = process.env.NARADA_E2E_RUNTIME_SERVER_ENTRYPOINT

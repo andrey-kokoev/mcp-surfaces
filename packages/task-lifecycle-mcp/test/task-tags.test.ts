@@ -297,7 +297,7 @@ try {
   try {
     rmSync(siteRoot, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
   } catch (error) {
-    if ((error as { code?: string }).code !== 'EBUSY') throw error;
+    if (!['EBUSY', 'EPERM'].includes((error as { code?: string }).code ?? '')) throw error;
   }
 }
 

@@ -30,7 +30,7 @@ export function buildGuidanceResult(args: GuidanceRecord = {}): GuidanceRecord {
     examples: [
       { intent: 'First use', call: 'artifacts_guidance({})' },
       { intent: 'Check endpoint', call: 'artifacts_doctor({})' },
-      { intent: 'Register local HTML report', call: "artifact_register_file({ path: \"D:/code/site/.ai/report.html\", kind: \"html\", title: \"Report\", render_hint: \"inline\" })" },
+      { intent: 'Register local HTML report', call: "artifact_register_file({ path: \"C:/workspace/site/.ai/report.html\", kind: \"html\", title: \"Report\", render_hint: \"inline\" })" },
       { intent: 'Show registered artifact inline', call: 'artifact_present({ artifact_id: result.artifact.artifact_id, text: \"Here is the report.\" })' }
     ],
     anti_patterns: [

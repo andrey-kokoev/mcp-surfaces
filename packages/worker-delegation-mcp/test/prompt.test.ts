@@ -3,7 +3,7 @@ import { buildWorkerPrompt } from '../src/prompt.js';
 
 const basePrompt = buildWorkerPrompt({
   intent: { instruction: 'Inspect the target module.', mode: 'audit_only' },
-  cwd: 'D:/code/example',
+  cwd: 'C:/workspace/example',
   mode: 'audit_only',
   runtime: 'codex',
   preflight: [
@@ -22,7 +22,7 @@ assert.doesNotMatch(basePrompt, /Exit interview/);
 
 const narsPrompt = buildWorkerPrompt({
   intent: { instruction: 'Make the requested edit.', mode: 'implement' },
-  cwd: 'D:/code/example',
+  cwd: 'C:/workspace/example',
   mode: 'implement',
   runtime: 'narada-agent-runtime-server',
   preflight: [{ name: 'requested_mode', status: 'ok', message: 'requested_mode=implement' }],

@@ -1,5 +1,6 @@
 import { existsSync } from 'node:fs';
-import { resolve } from 'node:path';
+import { homedir } from 'node:os';
+import { join, resolve } from 'node:path';
 import type { JsonRecord } from './protocol.js';
 
 export function buildListenAdapterArgs(adapterPath: string, provider: string, durationSeconds: number, _sessionId: string, calibrate: boolean): string[] {
@@ -27,7 +28,9 @@ export function resolveListenAdapterPath(options: JsonRecord): string | null {
   if (explicit) return resolve(explicit);
   const siteRoot = firstString(process.env.NARADA_SITE_ROOT, process.env.NARADA_WORKSPACE_ROOT);
   const siteCandidate = siteRoot ? resolve(siteRoot, 'tools/operator-surface-carriers/Start-VoiceIntentLocalMonitor.ps1') : null;
-  const naradaCandidate = 'D:\\code\\narada\\packages\\operator-surface-carriers\\src\\Start-VoiceIntentLocalMonitor.ps1';
+  const sourceRoot = firstString(process.env.NARADA_SRC_ROOT) ?? join(homedir(), 'src');
+  const naradaRoot = firstString(process.env.NARADA_ROOT, process.env.NARADA_PROPER_ROOT) ?? join(sourceRoot, 'narada');
+  const naradaCandidate = resolve(naradaRoot, 'packages/operator-surface-carriers/src/Start-VoiceIntentLocalMonitor.ps1');
   return [siteCandidate, naradaCandidate].filter((value): value is string => Boolean(value)).find((candidate) => existsSync(candidate)) ?? siteCandidate ?? naradaCandidate;
 }
 

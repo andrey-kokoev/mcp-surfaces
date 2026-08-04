@@ -194,7 +194,7 @@ export const DEFAULT_SITE_LOOP_CONFIG: SiteLoopConfig = {
   mcp: {
     task_lifecycle_config_path: '.ai/mcp/task-lifecycle-mcp.json',
     task_lifecycle_server_key: 'task-lifecycle',
-    task_lifecycle_entrypoint_hint: 'D:/code/mcp-surfaces/packages/task-lifecycle-mcp/dist/src/task-lifecycle/task-mcp-server.js',
+    task_lifecycle_entrypoint_hint: '<src-root>/mcp-surfaces/packages/task-lifecycle-mcp/dist/src/task-lifecycle/task-mcp-server.js',
   },
   scheduler: {
     default_task_name: '\\Narada-Site-Loop',

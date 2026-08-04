@@ -22,7 +22,7 @@ Tool calls provide a command, arguments, and working directory:
 {
   "command": "node",
   "args": ["--version"],
-  "working_directory": "D:/code/example"
+  "working_directory": "<src-root>/example"
 }
 ```
 
@@ -93,7 +93,7 @@ When an audit log directory is configured, command decisions and executions are 
 
 ```powershell
 pnpm --filter @narada-core/structured-command-mcp build
-node packages/structured-command-mcp/dist/src/main.js --allowed-root D:/code --allow-command node --allow-command git
+node packages/structured-command-mcp/dist/src/main.js --allowed-root <src-root> --allow-command node --allow-command git
 ```
 
 ## Agent Guidance

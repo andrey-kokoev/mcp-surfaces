@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import assert from 'node:assert/strict';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 import { mkdirSync, writeFileSync, rmSync, utimesSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { randomUUID } from 'node:crypto';
@@ -8,6 +8,9 @@ import { createServerState, handleRequest } from '../src/main.js';
 
 
 const root = join(tmpdir(), `cloudflare-carrier-mcp-${randomUUID()}`);
+const sourceRootState = createServerState({}, { NARADA_SRC_ROOT: root });
+assert.equal(sourceRootState.repoRoot, resolve(root, 'narada').replace(/\\/g, '/'));
+assert.equal(createServerState({}, { NARADA_SRC_ROOT: root, NARADA_ROOT: join(root, 'custom-narada') }).repoRoot, resolve(root, 'custom-narada').replace(/\\/g, '/'));
 mkdirSync(root, { recursive: true });
 mkdirSync(join(root, '.narada', 'auth'), { recursive: true });
 mkdirSync(join(root, '.narada', 'site-continuity', 'health'), { recursive: true });

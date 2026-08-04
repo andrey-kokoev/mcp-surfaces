@@ -1,7 +1,9 @@
 import assert from 'node:assert/strict';
+import { resolve } from 'node:path';
 import { createServerState, handleRequest, listTools } from '../src/main.js';
 
 const state = createServerState({ naradaRoot: 'D:/definitely/missing/narada' });
+assert.equal(createServerState({}, { NARADA_SRC_ROOT: 'C:/portable-src' }).naradaRoot, resolve('C:/portable-src/narada').replace(/\\/g, '/'));
 const tools = listTools();
 const names = tools.map((tool) => tool.name);
 

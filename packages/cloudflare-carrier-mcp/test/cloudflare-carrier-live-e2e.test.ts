@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { existsSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { homedir, tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
@@ -15,7 +15,10 @@ import {
 const TEST_ID = 'cloudflare-carrier.live-e2e';
 const DEFAULT_WORKER_URL = 'https://narada-cloudflare-carrier.andrei-kokoev.workers.dev';
 const packageRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..');
-const naradaRoot = resolve(process.env.NARADA_E2E_NARADA_ROOT ?? 'D:/code/narada');
+const naradaRoot = resolve(
+  process.env.NARADA_E2E_NARADA_ROOT
+    ?? join(process.env.NARADA_SRC_ROOT ?? join(homedir(), 'src'), 'narada'),
+);
 const workerUrl = (process.env.CLOUDFLARE_CARRIER_URL ?? DEFAULT_WORKER_URL).replace(/\/+$/, '');
 const sessionFile = process.env.CLOUDFLARE_CARRIER_OPERATOR_SESSION_FILE
   ?? join(naradaRoot, '.narada', 'auth', 'cloudflare-operator-session.json');

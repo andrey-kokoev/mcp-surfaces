@@ -45,7 +45,7 @@ const pipelineCaller = createTaskLifecycleToolCaller({
     inputSchema: { type: 'object' },
     annotations: { readOnlyHint: false, idempotentHint: false },
   }],
-  siteRoot: 'D:\\code\\mcp-surfaces',
+  siteRoot: 'C:\\workspace\\mcp-surfaces',
   dispatchTool: async () => {
     throw new Error('database is not open');
   },

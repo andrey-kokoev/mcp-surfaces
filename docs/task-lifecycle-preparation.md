@@ -16,7 +16,7 @@ Build the package, then run the package-owned preparation command:
 
 ```powershell
 pnpm --filter @narada-core/task-lifecycle-mcp build
-node packages/task-lifecycle-mcp/dist/src/task-lifecycle/task-mcp-server.js --prepare --site-root D:/code/site
+node packages/task-lifecycle-mcp/dist/src/task-lifecycle/task-mcp-server.js --prepare --site-root <src-root>/site
 ```
 
 Preparation creates or upgrades `.ai/task-lifecycle.db`, verifies the current
@@ -32,7 +32,7 @@ schema migration, or when the doctor reports `missing` or `stale`.
 A normal runtime launch should use the same explicit Site root:
 
 ```powershell
-node packages/task-lifecycle-mcp/dist/src/task-lifecycle/task-mcp-server.js --site-root D:/code/site
+node packages/task-lifecycle-mcp/dist/src/task-lifecycle/task-mcp-server.js --site-root <src-root>/site
 ```
 
 The following requests are store-independent and must remain available before

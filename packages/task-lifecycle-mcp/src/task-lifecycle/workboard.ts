@@ -443,7 +443,7 @@ function deriveDeferredActionability({ siteRoot, task, spec, observationText = '
 
 function detectExternalDeferredBlocker(normalizedText: any) {
   const hasBlockerLanguage = /\b(blocked|blocker|refused|rejects|rejected|invalid --kind|still fails|still rejects|unresolved)\b/.test(normalizedText);
-  const hasExternalBoundary = /\b(external|upstream|outside (?:this )?(?:workspace|user site|writable roots)|canonical .*cli|d:\\code\\narada|missing .*capability)\b/.test(normalizedText);
+  const hasExternalBoundary = /\b(external|upstream|outside (?:this )?(?:workspace|user site|writable roots)|canonical .*cli|narada proper|missing .*capability)\b/.test(normalizedText);
   const hasNoLocalPath = /\b(cannot honestly|cannot .* from .*workspace|no local executable path|outside .*authority|outside .*writable roots|awaiting upstream|until canonical)\b/.test(normalizedText);
   if (hasBlockerLanguage && hasExternalBoundary && hasNoLocalPath) {
     return {

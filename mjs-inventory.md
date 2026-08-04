@@ -1,6 +1,6 @@
 # MJS File Inventory
 
-Generated for `D:\code\mcp-surfaces` on 2026-06-02.
+Generated for `<src-root>\mcp-surfaces` on 2026-06-02.
 
 ## Current filesystem
 

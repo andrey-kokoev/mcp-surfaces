@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { existsSync } from 'node:fs';
+import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
@@ -16,8 +17,10 @@ import {
   type JsonRecord,
 } from '@narada-core/mcp-e2e-harness';
 
+const sourceRoot = process.env.NARADA_SRC_ROOT ?? join(homedir(), 'src');
+const naradaProperRoot = process.env.NARADA_PROPER_ROOT ?? process.env.NARADA_ROOT ?? join(sourceRoot, 'narada');
 const cliModulePath = process.env.NARADA_SITE_E2E_CLI_MODULE
-  ?? 'D:/code/narada/packages/layers/cli/dist/commands/sites.js';
+  ?? join(naradaProperRoot, 'packages/layers/cli/dist/commands/sites.js');
 const resultPath = join(fileURLToPath(new URL('../..', import.meta.url)), '.tmp', 'e2e-results', 'site-lifecycle.site-fabric.real-cli.json');
 const evidence = installE2eArtifactRecorder(resultPath, { test_id: 'site-lifecycle.site-fabric.real-cli', authority: 'A0' });
 

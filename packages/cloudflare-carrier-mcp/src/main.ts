@@ -2,6 +2,7 @@
 import { buildGuidanceResult } from './guidance.js';
 import { guidanceToolDefinition } from './guidance.js';
 import { readFileSync, existsSync, statSync } from 'node:fs';
+import { homedir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
@@ -9,12 +10,10 @@ const SERVER_NAME = 'cloudflare-carrier-mcp';
 const SERVER_VERSION = '0.1.0';
 const PROTOCOL_VERSION = '2024-11-05';
 
-const DEFAULT_REPO_ROOT = 'D:/code/narada';
 const DEFAULT_PACKAGE_FILTER = '@narada-core/cloudflare-carrier';
 const DEFAULT_SESSION_FILE = '.narada/auth/cloudflare-operator-session.json';
 const DEFAULT_WORKER_URL = 'https://narada-cloudflare-carrier.andrei-kokoev.workers.dev';
 const DEFAULT_HEALTH_FILE = '.narada/site-continuity/health/cloudflare-continuity-health-last.json';
-const DEFAULT_PROJECTION_REGISTRY_ROOT = resolve(DEFAULT_REPO_ROOT, '.narada/crew/nars-projections');
 
 type JsonRecord = Record<string, unknown>;
 
@@ -28,16 +27,23 @@ type CloudflareCarrierState = {
   fetchImpl?: typeof fetch;
 };
 
-export function createServerState(options: JsonRecord = {}): CloudflareCarrierState {
-  const repoRoot = String(options.repoRoot ?? options['repo_root'] ?? options['repo-root'] ?? DEFAULT_REPO_ROOT).replace(/\\/g, '/');
+export function createServerState(options: JsonRecord = {}, env: NodeJS.ProcessEnv = process.env): CloudflareCarrierState {
+  const sourceRoot = env.NARADA_SRC_ROOT?.trim() || join(homedir(), 'src');
+  const repoRoot = resolve(String(
+    options.repoRoot
+      ?? options['repo_root']
+      ?? options['repo-root']
+      ?? env.NARADA_ROOT
+      ?? env.NARADA_PROPER_ROOT
+      ?? join(sourceRoot, 'narada'),
+  )).replace(/\\/g, '/');
   const projectionRegistryRoot = String(
     options.projectionRegistryRoot
       ?? options['projection_registry_root']
       ?? options['projection-registry-root']
       ?? (options.siteRoot ?? options.site_root ? resolve(String(options.siteRoot ?? options.site_root), '.narada', 'crew', 'nars-projections') : null)
-      ?? process.env.NARADA_CLOUDFLARE_PROJECTION_REGISTRY_ROOT
-      ?? resolve(repoRoot, '.narada', 'crew', 'nars-projections')
-      ?? DEFAULT_PROJECTION_REGISTRY_ROOT,
+      ?? env.NARADA_CLOUDFLARE_PROJECTION_REGISTRY_ROOT
+      ?? resolve(repoRoot, '.narada', 'crew', 'nars-projections'),
   ).replace(/\\/g, '/');
   return {
     repoRoot,

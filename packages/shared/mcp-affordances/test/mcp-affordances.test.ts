@@ -51,7 +51,7 @@ const document: NaradaMcpAffordanceDocument = createAffordanceDocument({
     affordanceResourceRef({ id: 'latest_run', label: 'Latest run', uri: 'site-loop-run:latest' }),
   ],
   refresh: { mode: 'poll', interval_ms: 30000, actions: ['refresh_status'] },
-  source: { tool: 'site_loop_operator_affordances', site_id: 'narada-test', site_root: 'D:/code/narada.test' },
+  source: { tool: 'site_loop_operator_affordances', site_id: 'narada-test', site_root: 'C:/workspace/narada.test' },
 });
 
 assert.equal(document.schema, NARADA_MCP_AFFORDANCES_SCHEMA);

@@ -1444,7 +1444,7 @@ export function checkTaskGovernancePackageBoundary(siteRoot: any) {
       if (dependency !== 'workspace:*') {
         result.status = 'blocked';
         result.block_codes.push('blocked_by_wrong_dependency:@narada-core/task-governance-core');
-        result.remediation = 'Keep @narada-core/task-lifecycle-mcp dependencies on workspace:* and run pnpm install from D:/code/mcp-surfaces.';
+        result.remediation = 'Keep @narada-core/task-lifecycle-mcp dependencies on workspace:* and run pnpm install from the mcp-surfaces repository root.';
       }
       return result;
     }

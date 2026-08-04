@@ -72,12 +72,12 @@ const launchTemplateConfig = {
 assert.equal(
   renderResidentLaunchTemplate(
     '--target-site-id {site_id} --workspace-root {workspace_root} --agent {agent_id}',
-    'D:/code/narada.sonar',
+    'C:/workspace/narada.sonar',
     launchTemplateConfig,
     launchTemplateConfig.resident_launch,
     'agent-web-ui',
   ),
-  '--target-site-id sonar --workspace-root D:/code/narada.sonar --agent resident',
+  '--target-site-id sonar --workspace-root C:/workspace/narada.sonar --agent resident',
 );
 
 const legacyProjectionConfig = {
@@ -108,7 +108,7 @@ writeFileSync(join(modernSiteRoot, '.ai', 'mcp', 'narada-modern-mcp.json'), JSON
       transport: 'stdio',
       command: 'node',
       args: [
-        'D:/code/mcp-surfaces/packages/shared/mcp-runtime-proxy/dist/src/main.js',
+        'C:/workspace/mcp-surfaces/packages/shared/mcp-runtime-proxy/dist/src/main.js',
         '--surface-id',
         'task-lifecycle',
         '--entrypoint',

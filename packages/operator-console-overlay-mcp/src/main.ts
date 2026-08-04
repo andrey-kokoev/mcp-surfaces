@@ -9,7 +9,6 @@ import { buildGuidanceResult, guidanceToolDefinition } from './guidance.js';
 const SERVER_NAME = 'operator-console-overlay-mcp';
 const SERVER_VERSION = '0.1.0';
 const PROTOCOL_VERSION = '2024-11-05';
-const DEFAULT_NARADA_ROOT = 'D:/code/narada';
 const DEFAULT_TIMEOUT_MS = 120_000;
 const MAX_TIMEOUT_MS = 120_000;
 const MAX_OUTPUT_CHARS = 16_000;
@@ -123,11 +122,13 @@ export function createServerState(
   options: JsonRecord = {},
   env: NodeJS.ProcessEnv = process.env,
 ): OperatorConsoleOverlayState {
+  const sourceRoot = env.NARADA_SRC_ROOT?.trim() || join(homedir(), 'src');
   const naradaRoot = resolve(String(
     options.naradaRoot
     ?? options.narada_root
     ?? env.NARADA_ROOT
-    ?? DEFAULT_NARADA_ROOT,
+    ?? env.NARADA_PROPER_ROOT
+    ?? join(sourceRoot, 'narada'),
   ));
   const overlayEntrypoint = resolve(String(
     options.overlayEntrypoint

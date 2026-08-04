@@ -1,6 +1,6 @@
 # AGENTS.md - mcp-surfaces Narada Project Site
 
-This is the project-locus Narada Site for `D:\code\mcp-surfaces`.
+This is the project-locus Narada Site for `<src-root>\mcp-surfaces`.
 
 ## Posture
 

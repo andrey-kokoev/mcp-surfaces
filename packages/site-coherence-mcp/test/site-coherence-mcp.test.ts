@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import assert from 'node:assert/strict';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 import { mkdirSync, readFileSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { randomUUID } from 'node:crypto';
@@ -8,6 +8,7 @@ import { createServerState, handleRequest } from '../src/main.js';
 
 
 const root = join(tmpdir(), `site-coherence-mcp-${randomUUID()}`);
+assert.equal(createServerState({}, { NARADA_SRC_ROOT: root }).repoRoot, resolve(root, 'narada').replace(/\\/g, '/'));
 mkdirSync(root, { recursive: true });
 mkdirSync(join(root, '.ai'), { recursive: true });
 mkdirSync(join(root, '.narada', 'site-continuity', 'health'), { recursive: true });

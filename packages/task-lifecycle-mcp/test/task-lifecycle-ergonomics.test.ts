@@ -2954,7 +2954,7 @@ compatibility_record: true
   try {
     rmSync(siteRoot, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
   } catch (error) {
-    if ((error as { code?: string }).code !== 'EBUSY') {
+    if (!['EBUSY', 'EPERM'].includes((error as { code?: string }).code ?? '')) {
       throw error;
     }
   }
@@ -3550,7 +3550,7 @@ try {
   try {
     rmSync(scopedSiteRoot, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
   } catch (error) {
-    if ((error as { code?: string }).code !== 'EBUSY') {
+    if (!['EBUSY', 'EPERM'].includes((error as { code?: string }).code ?? '')) {
       throw error;
     }
   }

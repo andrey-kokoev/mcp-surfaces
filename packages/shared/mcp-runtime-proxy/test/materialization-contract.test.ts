@@ -144,7 +144,7 @@ test('Codex project trust updates do not invalidate the managed MCP projection',
   const sidecarPath = materializationSidecarPath(configPath);
   const args = f.args.map((arg) => arg === f.sidecarPath ? sidecarPath : arg);
   const content = [
-    "[projects.'D:/code']",
+    "[projects.'C:/workspace']",
     'trust_level = "trusted"',
     '',
     '[mcp_servers.fixture]',

@@ -20,7 +20,7 @@ configured local state root.
 
 ## Configuration
 
-By default the surface targets `D:\code\quota-meter` on Windows. Set
+By default the surface targets `<src-root>\quota-meter` on Windows. Set
 `QUOTA_METER_ROOT` when the checkout is elsewhere. `QUOTA_METER_NODE` can
 override the Node executable, and `QUOTA_METER_STATE_ROOT` can override the
 overlay PID/position directory. Native `codex login` and `kimi login` remain

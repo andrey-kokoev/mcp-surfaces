@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import { spawn } from 'node:child_process';
 import { existsSync, readFileSync } from 'node:fs';
+import { homedir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { buildGuidanceResult, guidanceToolDefinition } from './guidance.js';
@@ -52,7 +53,8 @@ if (isMainModule()) {
 }
 
 export function createServerState(options: JsonRecord = {}, env: NodeJS.ProcessEnv = process.env): QuotaMeterState {
-  const quotaMeterRoot = resolve(String(options.quotaMeterRoot ?? options.quota_meter_root ?? env.QUOTA_METER_ROOT ?? 'D:\\code\\quota-meter'));
+  const sourceRoot = env.NARADA_SRC_ROOT?.trim() || join(homedir(), 'src');
+  const quotaMeterRoot = resolve(String(options.quotaMeterRoot ?? options.quota_meter_root ?? env.QUOTA_METER_ROOT ?? join(sourceRoot, 'quota-meter')));
   const stateRoot = resolve(String(options.stateRoot ?? options.state_root ?? env.QUOTA_METER_STATE_ROOT ?? join(env.LOCALAPPDATA ?? env.TEMP ?? env.TMP ?? process.cwd(), 'quota-meter')));
   const stateEnv: NodeJS.ProcessEnv = { ...env, QUOTA_METER_STATE_ROOT: stateRoot };
   if (process.platform === 'win32' && !stateEnv.windir) {

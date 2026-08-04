@@ -89,7 +89,7 @@ Edits config files (JSON/TOML) but does not start or stop servers, mutate the su
 
 Carrier approval controls are treated as volatile carrier UX/admission mechanics, not Narada policy authority. The registrar may generate carrier availability metadata, such as Codex `approval_mode = "approve"`, so registered Narada MCP tools are available without redundant carrier prompts. Authorization, refusal, audit, and semantic constraints remain owned by the MCP surfaces themselves.
 
-This is the `CarrierAdmissionNeutralization` concept in Narada proper: `D:/code/narada/packages/domains/concepts/records/carrier-admission-neutralization.concept.json`.
+This is the `CarrierAdmissionNeutralization` concept in Narada proper: `<src-root>/narada/packages/domains/concepts/records/carrier-admission-neutralization.concept.json`.
 
 ## Wiring Surfaces
 

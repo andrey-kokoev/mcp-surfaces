@@ -426,7 +426,7 @@ Submit report with an old agent_roster schema.
   try {
     rmSync(siteRoot, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
   } catch (error) {
-    if ((error as { code?: string }).code !== 'EBUSY') {
+    if (!['EBUSY', 'EPERM'].includes((error as { code?: string }).code ?? '')) {
       throw error;
     }
   }

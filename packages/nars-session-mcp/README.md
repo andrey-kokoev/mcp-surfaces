@@ -5,7 +5,7 @@ input to an existing NARS session.
 
 The canonical semantic contract is maintained in Narada proper:
 
-`D:/code/narada/docs/architecture/nars-session-input-contract.md`
+`<src-root>/narada/docs/architecture/nars-session-input-contract.md`
 
 The MCP-facing target and boundary notes are in:
 

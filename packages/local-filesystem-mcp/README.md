@@ -63,5 +63,5 @@ Example:
 
 ```powershell
 pnpm --filter @narada-core/local-filesystem-mcp build
-node D:/code/mcp-surfaces/packages/local-filesystem-mcp/dist/src/main.js --mode read --allowed-root D:/code/narada
+node <src-root>/mcp-surfaces/packages/local-filesystem-mcp/dist/src/main.js --mode read --allowed-root <src-root>/narada
 ```

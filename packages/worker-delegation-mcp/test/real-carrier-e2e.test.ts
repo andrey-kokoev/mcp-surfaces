@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { createServer, type Server } from 'node:http';
 import { type ChildProcessWithoutNullStreams } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { homedir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import {
@@ -21,7 +22,10 @@ import {
 
 const TEST_ID = 'worker-delegation-real-carrier-e2e';
 const packageRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..');
-const naradaRoot = resolve(process.env.NARADA_E2E_NARADA_ROOT ?? 'D:/code/narada');
+const naradaRoot = resolve(
+  process.env.NARADA_E2E_NARADA_ROOT
+    ?? join(process.env.NARADA_SRC_ROOT ?? join(homedir(), 'src'), 'narada'),
+);
 const resultPath = join(packageRoot, '.tmp', 'e2e-results', `${TEST_ID}.json`);
 const startedAt = new Date().toISOString();
 const PRINCIPAL_BINDING = {

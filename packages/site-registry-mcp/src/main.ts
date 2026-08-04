@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import { existsSync } from 'node:fs';
+import { homedir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { buildGuidanceResult, guidanceToolDefinition } from './guidance.js';
@@ -7,7 +8,6 @@ import { buildGuidanceResult, guidanceToolDefinition } from './guidance.js';
 const SERVER_NAME = 'site-registry-mcp';
 const SERVER_VERSION = '0.1.0';
 const PROTOCOL_VERSION = '2024-11-05';
-const DEFAULT_NARADA_ROOT = 'D:/code/narada';
 
 type JsonRecord = Record<string, unknown>;
 type ServerState = { naradaRoot: string; cliModulePath: string };
@@ -49,8 +49,15 @@ const COMMANDS: RegistryCommandSpec[] = [
   },
 ];
 
-export function createServerState(options: JsonRecord = {}): ServerState {
-  const naradaRoot = normalizePath(String(options.naradaRoot ?? options.narada_root ?? process.env.NARADA_ROOT ?? DEFAULT_NARADA_ROOT));
+export function createServerState(options: JsonRecord = {}, env: NodeJS.ProcessEnv = process.env): ServerState {
+  const sourceRoot = env.NARADA_SRC_ROOT?.trim() || join(homedir(), 'src');
+  const naradaRoot = normalizePath(String(
+    options.naradaRoot
+      ?? options.narada_root
+      ?? env.NARADA_ROOT
+      ?? env.NARADA_PROPER_ROOT
+      ?? join(sourceRoot, 'narada'),
+  ));
   const cliModulePath = normalizePath(String(options.cliModulePath ?? options.cli_module_path ?? join(naradaRoot, 'packages', 'layers', 'cli', 'dist', 'commands', 'site-registry-management.js')));
   return { naradaRoot, cliModulePath };
 }

@@ -7,7 +7,7 @@ import { runMcpProtocolSmoke, spawnJsonlMcpServer } from '@narada-core/mcp-e2e-h
 
 const root = mkdtempSync(join(tmpdir(), 'quota-meter-mcp-protocol-'));
 const serverPath = fileURLToPath(new URL('../src/main.js', import.meta.url));
-const server = spawnJsonlMcpServer(process.execPath, [serverPath, '--quota-meter-root', 'D:\\code\\quota-meter', '--state-root', root], { label: 'quota-meter-mcp protocol smoke' });
+const server = spawnJsonlMcpServer(process.execPath, [serverPath, '--quota-meter-root', 'C:\\workspace\\quota-meter', '--state-root', root], { label: 'quota-meter-mcp protocol smoke' });
 
 try {
   const protocol = await runMcpProtocolSmoke(server.client, { expectedServerName: 'quota-meter-mcp' });

@@ -1,14 +1,15 @@
 import assert from 'node:assert/strict';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 import { createServerState, handleRequest, listTools, normalizeProviderSelection, normalizeRefreshSeconds, quotaMeterOverlayStatus } from '../src/main.js';
 import { surfaceDefinition } from '../src/surface-definition.js';
 
 const stateRoot = mkdtempSync(join(tmpdir(), 'quota-meter-mcp-'));
-const state = createServerState({ quotaMeterRoot: 'D:\\code\\quota-meter', stateRoot });
+assert.equal(createServerState({ stateRoot }, { NARADA_SRC_ROOT: stateRoot }).quotaMeterRoot, resolve(stateRoot, 'quota-meter'));
+const state = createServerState({ quotaMeterRoot: 'C:\\workspace\\quota-meter', stateRoot });
 const stateWithWindowsRoot = createServerState(
-  { quotaMeterRoot: 'D:\\code\\quota-meter', stateRoot },
+  { quotaMeterRoot: 'C:\\workspace\\quota-meter', stateRoot },
   { SystemRoot: 'C:\\Windows', LOCALAPPDATA: 'C:\\Users\\test\\AppData\\Local' },
 );
 

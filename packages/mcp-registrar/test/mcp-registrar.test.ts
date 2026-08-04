@@ -1152,7 +1152,7 @@ try {
         transport: 'stdio',
         command: 'node',
         args: [
-          'D:/code/mcp-surfaces/packages/work-lifecycle-mcp/dist/src/main.js',
+          'C:/workspace/mcp-surfaces/packages/work-lifecycle-mcp/dist/src/main.js',
           '--site-root',
           missingDefaultRoot,
         ],

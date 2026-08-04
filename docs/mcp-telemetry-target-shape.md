@@ -170,7 +170,7 @@ V1 event envelope:
   "schema": "narada.mcp_telemetry.event.v1",
   "recorded_at": "2026-07-02T18:00:00.000Z",
   "site_id": "narada.staccato",
-  "site_root": "D:/code/narada.staccato",
+  "site_root": "<src-root>/narada.staccato",
   "surface_id": "graph-mail",
   "tool_name": "graph_mail_query",
   "event_kind": "tool_completed",
@@ -181,7 +181,7 @@ V1 event envelope:
   "correlation_id": "...",
   "authority_locus": {
     "kind": "local_site",
-    "site_root": "D:/code/narada.staccato"
+    "site_root": "<src-root>/narada.staccato"
   },
   "policy_decision": {
     "status": "allowed"

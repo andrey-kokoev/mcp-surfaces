@@ -8,7 +8,7 @@ const root = mkdtempSync(tmpdir());
 const serverPath = fileURLToPath(new URL('../src/main.js', import.meta.url));
 const server = spawnJsonlMcpServer(
   process.execPath,
-  [serverPath, '--narada-root', 'D:/code/narada'],
+  [serverPath, '--narada-root', 'C:/workspace/narada'],
   { label: 'operator-console-overlay-mcp protocol smoke' },
 );
 
