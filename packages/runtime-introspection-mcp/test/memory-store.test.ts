@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { mkdirSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { cpus } from 'node:os';
 import { DatabaseSync } from 'node:sqlite';
 import test from 'node:test';
 import { memoryAttribution, memoryOwners, memoryStatus, memoryTimeline } from '../src/memory-store.js';
@@ -34,7 +35,8 @@ test('reads only the canonical Site observer store with bounded owner attributio
     const status = memoryStatus({}, root);
     assert.equal(status.status, 'ready');
     assert.equal((status.observer as Record<string, unknown>).p95_cycle_duration_ms, 20);
-    assert.equal((status.observer as Record<string, unknown>).average_cpu_percent, 0.1);
+    assert.equal((status.observer as Record<string, unknown>).average_cpu_percent, Number((0.1 / cpus().length).toFixed(3)));
+    assert.equal((status.observer as Record<string, unknown>).average_single_core_cpu_percent, 0.1);
     const ownerItems = memoryOwners({}, root).items as Array<Record<string, unknown>>;
     assert.equal(ownerItems.length, 2);
     assert.equal(ownerItems.find((item) => item.owner_id === 'observer-overhead')?.process_creation_ticks, '134302906815783249');

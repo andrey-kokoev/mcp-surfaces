@@ -1,6 +1,7 @@
 import { existsSync, statSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { join, resolve } from 'node:path';
+import { cpus } from 'node:os';
 import type { DatabaseSync as DatabaseSyncType } from 'node:sqlite';
 
 type JsonRecord = Record<string, unknown>;
@@ -155,13 +156,17 @@ function observerOverhead(db: DatabaseSyncType): JsonRecord {
   const last = processRows.at(-1);
   const elapsed = first && last ? Number(last.sampled_at_ms) - Number(first.sampled_at_ms) : 0;
   const cpu = first && last ? Number(last.cpu_time_ms) - Number(first.cpu_time_ms) : 0;
+  const logicalProcessorCount = Math.max(1, cpus().length);
+  const singleCoreCpuPercent = elapsed > 0 ? (cpu / elapsed) * 100 : null;
   return {
     cycles: cycleRows.length,
     last_cycle_at_ms: cycleRows.at(0)?.started_at_ms ?? null,
     average_cycle_duration_ms: durations.length ? Math.round(durations.reduce((sum, value) => sum + value, 0) / durations.length) : null,
     p95_cycle_duration_ms: durations.length ? durations[Math.ceil(durations.length * 0.95) - 1] : null,
     maximum_cycle_duration_ms: durations.at(-1) ?? null,
-    average_cpu_percent: elapsed > 0 ? Number(((cpu / elapsed) * 100).toFixed(3)) : null,
+    average_cpu_percent: singleCoreCpuPercent === null ? null : Number((singleCoreCpuPercent / logicalProcessorCount).toFixed(3)),
+    average_single_core_cpu_percent: singleCoreCpuPercent === null ? null : Number(singleCoreCpuPercent.toFixed(3)),
+    logical_processor_count: logicalProcessorCount,
     private_bytes: last?.private_bytes ?? null,
     sampled_processes: cycleRows.at(0)?.sampled_processes ?? null,
     window: 'last_hour_bounded_to_360_cycles',
