@@ -29,6 +29,7 @@ export function writeCanonicalPlanRegistry({
       CREATE TABLE plan_decision_snapshots (plan_id TEXT PRIMARY KEY, doc TEXT NOT NULL);
       CREATE TABLE resources (id TEXT PRIMARY KEY, kind TEXT NOT NULL, doc TEXT NOT NULL);
       CREATE TABLE catalog_records (id TEXT PRIMARY KEY, record_id TEXT NOT NULL, doc TEXT NOT NULL);
+      CREATE TABLE policies (id TEXT PRIMARY KEY, doc TEXT NOT NULL);
     `);
     const intentRef = `intent:${planRef.slice('plan:'.length)}`;
     const providerRef = `inference-provider:${provider}`;
@@ -123,6 +124,14 @@ export function writeCanonicalPlanRegistry({
         endpoint: { kind: 'inference-endpoint', id: endpointRef },
         invocation_model_key: model,
       },
+      {
+        id: endpointRef,
+        kind: 'inference-endpoint',
+        schema: 'narada.invokable-intelligence.inference-endpoint.v1',
+        inference_provider: { kind: 'inference-provider', id: providerRef },
+        adapter: { kind: 'adapter', id: adapterRef },
+        address: { kind: 'runtime-service', service: 'fixture' },
+      },
     ];
     const insertDocument = (table: string, idColumn: string, id: string, document: object) => {
       database.prepare(`INSERT INTO ${table} (${idColumn}, doc) VALUES (?, ?)`).run(id, JSON.stringify(document));
@@ -132,6 +141,22 @@ export function writeCanonicalPlanRegistry({
     insertDocument('plan_decision_snapshots', 'plan_id', planRef, snapshot);
     const insertResource = database.prepare('INSERT INTO resources (id, kind, doc) VALUES (?, ?, ?)');
     for (const resource of resources) insertResource.run(resource.id, resource.kind, JSON.stringify(resource));
+    database.prepare('INSERT INTO policies (id, doc) VALUES (?, ?)').run(
+      `policy:${targetSite}:${provider}`,
+      JSON.stringify({
+        schema: 'narada.invokable-intelligence.policy.v1',
+        id: `policy:${targetSite}:${provider}`,
+        rules: [
+          { option: 'route', value: `route:${provider}-${model}-local` },
+          { option: 'cognition.low.route', value: `route:${provider}-${model}-local` },
+          { option: 'cognition.low.reasoning_effort', value: 'low' },
+          { option: 'cognition.medium.route', value: `route:${provider}-${model}-local` },
+          { option: 'cognition.medium.reasoning_effort', value: 'medium' },
+          { option: 'cognition.high.route', value: `route:${provider}-${model}-local` },
+          { option: 'cognition.high.reasoning_effort', value: 'high' },
+        ],
+      }),
+    );
     const governance = {
       schema: 'narada.invokable-intelligence.data-governance-requirement.v1',
       id: governanceRef,

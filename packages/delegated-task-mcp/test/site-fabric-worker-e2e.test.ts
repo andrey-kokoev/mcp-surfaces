@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join, relative, resolve } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import {
   asRecord,
   createTemporaryE2eRoot,
@@ -30,9 +30,13 @@ async function main(): Promise<void> {
   const runtimeEvidencePath = join(root, '.ai', 'runtime', 'fixture-evidence.json');
   const fixturePath = join(root, '.ai', 'runtime', 'controlled-worker-runtime.cjs');
   const policyPath = join(root, '.narada', 'worker-policy.toml');
+  const intelligenceRegistryPath = join(root, '.ai', 'intelligence-registry.db');
+  const siteId = 'site:delegated-task-site-fabric-worker-e2e';
+  const planRef = 'plan:delegated-task-site-fabric-worker-e2e';
   const providerRegistryPath = join(root, 'packages', 'carrier-provider-contract', 'contracts', 'provider-registry.json');
   const delegatedTaskServerPath = fileURLToPath(new URL('../src/main.js', import.meta.url));
   const loaderServerPath = fileURLToPath(new URL('../../../mcp-loader-mcp/dist/src/main.js', import.meta.url));
+  const canonicalPlanFixturePath = fileURLToPath(new URL('../../../worker-delegation-mcp/dist/test/canonical-plan-fixture.js', import.meta.url));
   const fabricPath = join(root, '.ai', 'mcp', 'config.json');
   let loaderClient: JsonlMcpClient | null = null;
   let loaderConnectionId: string | null = null;
@@ -44,7 +48,7 @@ async function main(): Promise<void> {
   let runtimeEvidence: JsonRecord | null = null;
 
   try {
-    const missingPrerequisite = [delegatedTaskServerPath, loaderServerPath].find((path) => !existsSync(path));
+    const missingPrerequisite = [delegatedTaskServerPath, loaderServerPath, canonicalPlanFixturePath].find((path) => !existsSync(path));
     if (missingPrerequisite) {
       status = 'not_run';
       failureReason = `built prerequisite missing: ${missingPrerequisite}`;
@@ -56,6 +60,34 @@ async function main(): Promise<void> {
     mkdirSync(join(root, '.ai', 'mcp'), { recursive: true });
     mkdirSync(dirname(providerRegistryPath), { recursive: true });
     mkdirSync(dirname(runtimeEvidencePath), { recursive: true });
+    const { writeCanonicalPlanRegistry } = await import(pathToFileURL(canonicalPlanFixturePath).href);
+    writeCanonicalPlanRegistry({
+      databasePath: intelligenceRegistryPath,
+      planRef,
+      targetSite: siteId,
+      provider: 'codex-subscription',
+      model: 'fixture-low-model',
+      planOptions: { thinking: 'low' },
+    });
+    writeFileSync(join(root, '.narada', 'site.identity.json'), JSON.stringify({
+      schema: 'narada.site.identity.fixture.v1',
+      site_id: siteId,
+      generated_by: TEST_ID,
+    }, null, 2), 'utf8');
+    writeFileSync(join(root, '.narada', 'intelligence-launch-context.json'), JSON.stringify({
+      schema: 'narada.intelligence.launch_context.v1',
+      registry_db_path: '.ai\\intelligence-registry.db',
+      target_site_id: siteId,
+      user_site_id: `${siteId}-user`,
+      host_site_id: `${siteId}-host`,
+      principal_id: 'principal:test',
+      invocation_plan_ref: planRef,
+      principal_binding: {
+        schema: 'narada.intelligence.principal_binding.v1',
+        actor: { principal_id: 'principal:test', auth_type: 'test-fixture' },
+        memberships: [{ registry: 'site-roster', site_id: siteId, role: 'resident', evidence_ref: TEST_ID }],
+      },
+    }, null, 2), 'utf8');
     writeFileSync(targetPath, 'fixture-data\n', 'utf8');
     writeFileSync(providerRegistryPath, JSON.stringify({
       schema: 'narada.provider.registry.fixture.v1',
@@ -108,7 +140,7 @@ async function main(): Promise<void> {
       "  const content = String(frame.params && frame.params.content || '');",
       "  if (!content.includes('E2E_DELEGATED_TASK_TARGET=')) throw new Error('delegated task prompt marker missing');",
       "  const target = readFileSync(TARGET_PATH, 'utf8').trim();",
-      "  writeFileSync(EVIDENCE_PATH, JSON.stringify({ site_root: process.env.NARADA_SITE_ROOT || null, workspace_root: process.env.NARADA_WORKSPACE_ROOT || null, provider: process.env.NARADA_INTELLIGENCE_PROVIDER || null, model: process.env.NARADA_AI_MODEL || null, thinking: process.env.NARADA_AI_THINKING || null, target }, null, 2));",
+      "  writeFileSync(EVIDENCE_PATH, JSON.stringify({ site_root: process.env.NARADA_SITE_ROOT || null, workspace_root: process.env.NARADA_WORKSPACE_ROOT || null, provider: process.env.NARADA_INTELLIGENCE_PROVIDER || null, model: process.env.NARADA_AI_MODEL || null, thinking: process.env.NARADA_AI_THINKING || null, plan_ref: process.env.NARADA_INTELLIGENCE_PLAN_REF || null, registry_db: process.env.NARADA_INTELLIGENCE_REGISTRY_DB || null, target }, null, 2));",
       "  emit(frame, { summary: 'delegated task worker runtime completed', deliverables: [], open_questions: [], next_actions: [], edits_performed: false, target_state_changed: false, changes: [], verification: [{ tool: 'controlled-worker-runtime', command: null, status: 'passed', summary: 'read target=' + target, command_classification: 'not_applicable' }], verification_budget_respected: true, broad_unrelated_failures: [], exit_interview: null, review_verdict: 'accepted', acceptance_verdict: 'passed', completion_state: 'complete' });",
       "}",
     ].join('\n'), 'utf8');
@@ -216,10 +248,7 @@ async function main(): Promise<void> {
         authority: 'read',
         cwd: root,
         site_root: root,
-        provider: 'codex-subscription',
-        cognition: 'low',
         wait_for_completion: true,
-        overrides: { runtime: 'narada-agent-runtime-server' },
         preflight_paths: [{ path: targetPath, access: 'read', label: 'controlled target' }],
       },
       workflow: {
@@ -270,9 +299,11 @@ async function main(): Promise<void> {
     runtimeEvidence = JSON.parse(readFileSync(runtimeEvidencePath, 'utf8')) as JsonRecord;
     assert.equal(runtimeEvidence.site_root, root);
     assert.equal(runtimeEvidence.workspace_root, root);
-    assert.equal(runtimeEvidence.provider, 'codex-subscription');
-    assert.equal(runtimeEvidence.model, 'fixture-low-model');
-    assert.equal(runtimeEvidence.thinking, 'low');
+    assert.equal(runtimeEvidence.provider, null);
+    assert.equal(runtimeEvidence.model, null);
+    assert.equal(runtimeEvidence.thinking, null);
+    assert.equal(runtimeEvidence.plan_ref, planRef);
+    assert.equal(runtimeEvidence.registry_db, intelligenceRegistryPath);
     assert.equal(runtimeEvidence.target, 'fixture-data');
     status = 'passed';
     console.log(JSON.stringify({ schema: 'narada.mcp.e2e.result.v1', test_id: TEST_ID, status, site_fabric_admission: delegatedDiagnostic?.classification ?? null, task_id: taskId, worker_run_id: workerRunId, durable_task_verified: true, runtime_binding_verified: true }));
@@ -328,7 +359,39 @@ async function callAttached(client: JsonlMcpClient, connectionId: string, id: nu
   assert.equal(envelope.schema, 'narada.mcp_loader.tool_result.v1');
   const result = asRecord(envelope.result);
   assert.equal(result.isError, undefined, JSON.stringify(result));
+  if (result.schema === 'narada.producer_output_page.v1' && typeof result.output_ref === 'string') {
+    return readAttachedResult(client, connectionId, result.output_ref, id + 1000);
+  }
   return result;
+}
+
+async function readAttachedResult(client: JsonlMcpClient, connectionId: string, outputRef: string, firstId: number): Promise<JsonRecord> {
+  let offset = 0;
+  let outputText = '';
+  for (let pageIndex = 0; pageIndex < 16; pageIndex += 1) {
+    const response = await client.request(firstId + pageIndex, 'tools/call', {
+      name: 'mcp_loader_read_result',
+      arguments: { connection_id: connectionId, ref: outputRef, offset, limit: 10000 },
+    });
+    assert.equal(response.error, undefined, JSON.stringify(response));
+    const envelope = structured(response);
+    assert.equal(envelope.schema, 'narada.mcp_loader.result_page.v1', JSON.stringify(envelope));
+    const page = asRecord(envelope.result);
+    assert.equal(page.schema, 'narada.mcp_output_page.v1', JSON.stringify(page));
+    assert.equal(page.status, 'ok', JSON.stringify(page));
+    outputText += String(page.output_text ?? '');
+    const nextOffset = page.next_offset;
+    if (nextOffset === null || nextOffset === undefined) {
+      const materialized = JSON.parse(outputText) as unknown;
+      const result = asRecord(materialized);
+      assert.equal(result.isError, undefined, JSON.stringify(result));
+      return result;
+    }
+    if (typeof nextOffset !== 'number') throw new Error(`attached_result_invalid_next_offset:${JSON.stringify(page)}`);
+    assert.ok(nextOffset > offset, JSON.stringify(page));
+    offset = nextOffset;
+  }
+  throw new Error(`attached_result_pages_exceeded_limit:${outputRef}`);
 }
 
 function pathInside(candidate: string, root: string): boolean {
