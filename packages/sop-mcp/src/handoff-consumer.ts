@@ -22,6 +22,68 @@ export interface SopHandoffFabricCaller {
   ): Promise<JsonRecord>;
 }
 
+function boundedJson(value: unknown): string {
+  const text = JSON.stringify(value);
+  if (text === undefined) return 'null';
+  return text.length <= 16_384 ? text : `${text.slice(0, 16_384)}...[truncated]`;
+}
+
+function buildAgentContractRepairRequest(
+  handoff: ClaimedHandoff,
+  options: NormalizedAgentOptions,
+  invalidWorker: JsonRecord,
+  validationError: string,
+  originalWorkerKey: string,
+  maxRunMs: number,
+): JsonRecord {
+  const resultSchema = handoff.result_schema ?? { type: 'object' };
+  const candidate = isRecord(invalidWorker.structured_outputs)
+    ? invalidWorker.structured_outputs[AGENT_RESULT_KEY]
+    : null;
+  return {
+    idempotency_key: `${originalWorkerKey}:contract-repair:v1`,
+    intent: {
+      mode: 'audit_only',
+      instruction: [
+        'Repair only the structure of one already-produced SOP handoff result.',
+        'Do not repeat the domain judgment, gather new evidence, call tools, or change the substance of the answer.',
+        'This child execution has read-only authority.',
+        `Invalid candidate: ${boundedJson(candidate)}`,
+        `Validation error: ${validationError}`,
+        `Return the corrected result only at structured_outputs.${AGENT_RESULT_KEY}.`,
+        `Required result schema: ${JSON.stringify(resultSchema)}`,
+      ].join('\n'),
+      output_contract: {
+        schema: 'narada.sop.agent_handoff_output.v1',
+        strict: true,
+        structured_output_key: AGENT_RESULT_KEY,
+        structured_output_schema: resultSchema,
+      },
+    },
+    constraints: {
+      cwd: options.siteRoot,
+      site_root: options.siteRoot,
+      invocation_plan_ref: options.invocationPlanRef,
+      authority: 'read',
+      resumable: false,
+      wait_for_completion: true,
+      wait_timeout_ms: Math.min(180_000, maxRunMs),
+      max_run_ms: maxRunMs,
+      required_mcp_tools: options.requiredMcpTools,
+      overrides: {
+        runtime: 'narada-agent-runtime-server',
+        sandbox: 'read-only',
+      },
+    },
+  };
+}
+
+function workerCallOptions(requestTimeoutMs: number, maxRunMs: number): SiteFabricToolCallOptions {
+  return {
+    timeoutMs: Math.min(300_000, Math.max(requestTimeoutMs, Math.min(180_000, maxRunMs) + 5_000)),
+  };
+}
+
 function retryableWorkerError(error: unknown): string {
   const detail = boundedError(error);
   const value = `worker_retryable:${detail}`;
@@ -65,6 +127,9 @@ export interface SopAgentHandoffConsumerReport extends JsonRecord {
   worker_runs_replayed: number;
   worker_runs_blocked: number;
   worker_runs_reaped: number;
+  contract_repairs_started: number;
+  contract_repairs_completed: number;
+  contract_repairs_failed: number;
   errors: JsonRecord[];
 }
 
@@ -91,6 +156,9 @@ export async function runSopAgentHandoffConsumerPass(
     worker_runs_replayed: 0,
     worker_runs_blocked: 0,
     worker_runs_reaped: 0,
+    contract_repairs_started: 0,
+    contract_repairs_completed: 0,
+    contract_repairs_failed: 0,
     errors: [],
   };
 
@@ -115,6 +183,7 @@ export async function runSopAgentHandoffConsumerPass(
       });
       if (claimed.status === 'empty' || claimed.handoff === null || claimed.handoff === undefined) break;
       const handoff = parseClaimedHandoff(requireRecord(claimed.handoff, 'sop_handoff_claim_invalid'), 'agent');
+      const handoffStartedAt = Date.now();
       report.handoffs_claimed += 1;
       let settled = false;
       try {
@@ -155,9 +224,81 @@ export async function runSopAgentHandoffConsumerPass(
             result = parseAgentStructuredResult(workerRun.raw);
             validateAgentResult(result, handoff.result_schema);
           } catch (contractError) {
+            const originalWorkerKey = workerRun.idempotency_key ?? workerIdempotencyKey(handoff);
+            const remainingMs = options.maxRunMs - (Date.now() - handoffStartedAt);
+            if (remainingMs >= 1_000) {
+              let repairRaw: JsonRecord;
+              report.contract_repairs_started += 1;
+              try {
+                repairRaw = await fabric.call(
+                  options.workerSurfaceId,
+                  'worker_run',
+                  buildAgentContractRepairRequest(
+                    handoff,
+                    options,
+                    workerRun.raw,
+                    boundedError(contractError),
+                    originalWorkerKey,
+                    remainingMs,
+                  ),
+                  workerCallOptions(options.requestTimeoutMs, remainingMs),
+                );
+              } catch (repairError) {
+                await releaseHandoff(
+                  fabric,
+                  options.sopSurfaceId,
+                  handoff,
+                  options.consumerId,
+                  `${WORKER_IN_FLIGHT_PREFIX}${originalWorkerKey}`,
+                );
+                settled = true;
+                report.handoffs_deferred += 1;
+                report.errors.push(errorRecord('agent_contract_repair', repairError, handoff.handoff_id));
+                break;
+              }
+              const repairRun = parseWorkerRun(repairRaw);
+              if (repairRun.idempotency_replayed) report.worker_runs_replayed += 1;
+              else report.worker_runs_started += 1;
+              if (repairRun.status === 'running') {
+                await releaseHandoff(
+                  fabric,
+                  options.sopSurfaceId,
+                  handoff,
+                  options.consumerId,
+                  `${WORKER_IN_FLIGHT_PREFIX}${originalWorkerKey}`,
+                );
+                settled = true;
+                report.handoffs_deferred += 1;
+                break;
+              }
+              if (repairRun.status === 'completed' || repairRun.status === 'completed_with_errors') {
+                try {
+                  result = parseAgentStructuredResult(repairRun.raw);
+                  validateAgentResult(result, handoff.result_schema);
+                  await advanceHandoff(fabric, options.sopSurfaceId, handoff, {
+                    consumerId: options.consumerId,
+                    completionKey: `worker:${repairRun.run_id}`,
+                    principal: options.principal,
+                    outcome: 'completed',
+                    result,
+                  });
+                  settled = true;
+                  report.handoffs_completed += 1;
+                  report.contract_repairs_completed += 1;
+                  continue;
+                } catch (repairContractError) {
+                  contractError = new Error(
+                    `contract_repair_invalid:${boundedError(repairContractError)}`,
+                  );
+                }
+              } else {
+                contractError = new Error(`contract_repair_worker_${repairRun.status}`);
+              }
+              report.contract_repairs_failed += 1;
+            }
             await advanceHandoff(fabric, options.sopSurfaceId, handoff, {
               consumerId: options.consumerId,
-              completionKey: `worker:${workerRun.run_id}`,
+              completionKey: `worker:${workerRun.run_id}:contract-invalid`,
               principal: options.principal,
               outcome: 'failed',
               result: {
