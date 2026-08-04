@@ -17,6 +17,7 @@ import {
   type SurfaceDescriptorV2,
   type SurfaceExecutionDeclaration,
 } from '@narada-core/mcp-fabric-contracts';
+import { createRuntimeObservationSink, type RuntimeObservationSink } from '@narada-core/mcp-runtime-observation';
 import { buildBoundedToolResult, outputShow, outputShowAsync, payloadCreate, prunePayloadWorkspaces } from '@narada-core/mcp-transport';
 import { buildGuidanceResult, guidanceToolDefinition } from './guidance.js';
 import { loaderRuntimeLifecycle, loaderSupervisorRestartAction } from './runtime-lifecycle.js';
@@ -67,6 +68,7 @@ const LOADER_CONFIG_FILES = [
 const SERVER_NAME = 'mcp-loader-mcp';
 const SERVER_VERSION = '0.1.0';
 const PROTOCOL_VERSION = '2024-11-05';
+const observationSinks = new Map<string, RuntimeObservationSink>();
 
 const DEFAULT_MAX_CONNECTIONS = 8;
 const DEFAULT_MAX_REQUEST_BYTES = 1024 * 1024;
@@ -1115,6 +1117,7 @@ async function openConnection(input: {
   };
 
   state.connections.set(connectionId, connection);
+  emitLoaderConnectionOwner(connection);
 
   child.stdout?.setEncoding('utf8');
   child.stdout?.on('data', (chunk) => handleChildStdout(chunk as string, connection));
@@ -1122,7 +1125,10 @@ async function openConnection(input: {
     connection.stderrTail = tail(`${connection.stderrTail}${String(chunk)}`, STDERR_TAIL_LIMIT);
   });
   child.on('error', (error) => childError(connection, error));
-  child.on('exit', () => cleanupConnection(connection));
+  child.on('exit', () => {
+    emitLoaderConnectionLifecycle(connection, 'process_exited', child.exitCode === 0 ? 'ok' : 'failed');
+    cleanupConnection(connection);
+  });
 
   const initResult = await sendChildRequest(connection, 'initialize', { protocolVersion: PROTOCOL_VERSION }, state.policy.attachTimeoutMs);
   connection.initialized = true;
@@ -1548,6 +1554,7 @@ const SHARED_SURFACE_REGISTRY: Record<string, { entrypoint: string; args: string
   'site-loop': { entrypoint: `${MCP_SURFACES_ROOT}/site-loop-mcp/dist/src/site-loop-mcp-server.js`, args: ['--site-root', '{site_root}'] },
   'agent-context': { entrypoint: `${MCP_SURFACES_ROOT}/agent-context-mcp/dist/src/main.js`, args: ['--site-root', '{site_root}'] },
   'catalog-observation': { entrypoint: `${MCP_SURFACES_ROOT}/catalog-observation-mcp/dist/src/main.js`, args: [] },
+  'runtime-introspection': { entrypoint: `${MCP_SURFACES_ROOT}/runtime-introspection-mcp/dist/src/main.js`, args: [] },
   'worker-delegation': { entrypoint: `${MCP_SURFACES_ROOT}/worker-delegation-mcp/dist/src/main.js`, args: ['--allowed-root', '{site_root}', '--run-root', '{site_runtime_root}/worker-delegation'] },
   'delegated-task': { entrypoint: `${MCP_SURFACES_ROOT}/delegated-task-mcp/dist/src/main.js`, args: ['--task-root', '{site_root}', '--allowed-root', '{site_root}'] },
   'sop': { entrypoint: `${MCP_SURFACES_ROOT}/sop-mcp/dist/src/main.js`, args: ['--sop-root', '{site_root}', '--server-name', '{site_id}-sop'] },
@@ -1772,6 +1779,60 @@ function childError(connection: ChildConnection, error: Error) {
     pending.reject(diagnosticError('child_error', error.message, childRuntimeDiagnostic(connection)));
   }
   connection.pending.clear();
+}
+
+function observationSink(siteRoot: string): RuntimeObservationSink | null {
+  const existing = observationSinks.get(siteRoot);
+  if (existing) return existing;
+  try {
+    const created = createRuntimeObservationSink({ site_root: siteRoot, source_id: `mcp-loader-${process.pid}` });
+    observationSinks.set(siteRoot, created);
+    return created;
+  } catch {
+    return null;
+  }
+}
+
+function emitLoaderConnectionOwner(connection: ChildConnection): void {
+  const sink = observationSink(connection.siteRoot);
+  if (!sink) return;
+  const siteId = deriveSiteId(connection.siteRoot);
+  const authorityRef = `site:${siteId}:mcp-surfaces`;
+  const observedAt = new Date().toISOString();
+  const loaderOwner = `mcp-loader-${process.pid}`;
+  void sink.emit({
+    schema: 'narada.mcp_runtime.resource_owner.v1', owner_id: loaderOwner, site_id: siteId,
+    authority_ref: authorityRef, owner_kind: 'carrier_proxy', pid: process.pid, process_started_at: null,
+    parent_owner_id: null, surface_id: 'mcp-loader', instance_id: null, generation_id: null,
+    carrier_session_id: process.env.NARADA_CARRIER_SESSION_ID?.trim() || null,
+    executable_name: process.execPath, observed_at: observedAt,
+  });
+  void sink.emit({
+    schema: 'narada.mcp_runtime.resource_owner.v1', owner_id: `loader-child-${connection.connectionId}`,
+    site_id: siteId, authority_ref: authorityRef, owner_kind: 'loader_child', pid: connection.process.pid ?? null,
+    process_started_at: null, parent_owner_id: loaderOwner, surface_id: connection.surfaceId,
+    instance_id: connection.logicalConnectionId, generation_id: connection.generationId,
+    carrier_session_id: process.env.NARADA_CARRIER_SESSION_ID?.trim() || null,
+    executable_name: connection.entrypoint, observed_at: observedAt,
+  });
+  emitLoaderConnectionLifecycle(connection, 'process_started', 'ok');
+}
+
+function emitLoaderConnectionLifecycle(
+  connection: ChildConnection,
+  eventType: 'process_started' | 'process_exited',
+  status: 'ok' | 'failed',
+): void {
+  const sink = observationSink(connection.siteRoot);
+  if (!sink) return;
+  const siteId = deriveSiteId(connection.siteRoot);
+  void sink.emit({
+    schema: 'narada.mcp_runtime.lifecycle_event.v1', event_id: `event-${randomUUID()}`,
+    occurred_at: new Date().toISOString(), site_id: siteId, authority_ref: `site:${siteId}:mcp-surfaces`,
+    owner_id: `loader-child-${connection.connectionId}`, event_type: eventType, surface_id: connection.surfaceId,
+    instance_id: connection.logicalConnectionId, generation_id: connection.generationId,
+    request_id: null, status, inflight: connection.pending.size,
+  });
 }
 
 function cleanupConnection(connection: ChildConnection) {

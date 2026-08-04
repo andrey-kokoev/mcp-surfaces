@@ -18,6 +18,7 @@
   },
   "dependencies": {
     "@narada-core/mcp-fabric-contracts": "workspace:*",
+    "@narada-core/mcp-runtime-observation": "workspace:*",
     "@narada-core/mcp-runtime-client": "workspace:*",
     "ajv": "^8.20.0"
   },

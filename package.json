@@ -18,6 +18,7 @@
     "test:mcp-runtime-proxy": "pnpm --filter @narada-core/mcp-runtime-proxy test",
     "test:mcp-runtime-client": "pnpm --filter @narada-core/mcp-runtime-client test",
     "test:mcp-surface-runtime": "pnpm --filter @narada-core/mcp-surface-runtime test",
+    "test:mcp-runtime-observation": "pnpm --filter @narada-core/mcp-runtime-observation test",
     "test:mcp-e2e-harness": "pnpm --filter @narada-core/mcp-e2e-harness test",
     "test:mcp-fabric-contracts": "pnpm --filter @narada-core/mcp-fabric-contracts test",
     "test:mcp-fabric-compiler": "pnpm --filter @narada-core/mcp-fabric-compiler test",

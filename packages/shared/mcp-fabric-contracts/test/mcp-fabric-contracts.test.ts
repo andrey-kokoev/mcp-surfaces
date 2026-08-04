@@ -12,12 +12,42 @@ import {
   assertLiveToolsConform,
   CarrierRestartOutcomeV1Schema,
   CarrierRestartRequestV1Schema,
+  RuntimeLifecycleEventV1Schema,
+  RuntimeMemoryIncidentV1Schema,
+  RuntimeResourceOwnerV1Schema,
+  RuntimeResourceSampleV1Schema,
   defineSurface,
   defineNativeSurface,
   surfaceExecutionDeclaration,
   type SurfaceDescriptorV2,
 } from '../src/index.js';
 import { startHttpFixture } from '../src/http-fixture.js';
+
+test('runtime memory observation contracts are strict, versioned, and sanitized', () => {
+  const now = new Date().toISOString();
+  assert.equal(RuntimeResourceOwnerV1Schema.parse({
+    schema: 'narada.mcp_runtime.resource_owner.v1', owner_id: 'owner-1', site_id: 'site-1', authority_ref: 'site:site-1',
+    owner_kind: 'surface_worker', pid: 10, process_started_at: null, parent_owner_id: null, surface_id: 'fixture',
+    instance_id: 'instance-1', generation_id: 'generation-1', carrier_session_id: null, executable_name: 'node', observed_at: now,
+  }).pid, 10);
+  assert.equal(RuntimeLifecycleEventV1Schema.parse({
+    schema: 'narada.mcp_runtime.lifecycle_event.v1', event_id: 'event-1', occurred_at: now, site_id: 'site-1',
+    authority_ref: 'site:site-1', owner_id: 'owner-1', event_type: 'invocation_terminal', surface_id: 'fixture',
+    instance_id: 'instance-1', generation_id: 'generation-1', request_id: 'request-1', status: 'ok', inflight: 0,
+  }).status, 'ok');
+  assert.equal(RuntimeResourceSampleV1Schema.parse({
+    schema: 'narada.mcp_runtime.resource_sample.v1', sample_id: 'sample-1', sampled_at: now, owner_id: 'owner-1', pid: 10,
+    process_started_at: null, process: null, worker: { heap_total_bytes: 10, heap_used_bytes: 5, external_bytes: 2,
+      array_buffers_bytes: 1, heap_limit_bytes: 100, active_resource_counts: { Timeout: 1 }, invocation_count: 2, inflight: 0 },
+    sample_status: 'partial', unavailable_reason: 'process_probe_unavailable',
+  }).worker?.heap_used_bytes, 5);
+  assert.equal(RuntimeMemoryIncidentV1Schema.parse({
+    schema: 'narada.mcp_runtime.memory_incident.v1', incident_id: 'incident-1', site_id: 'site-1', authority_ref: 'site:site-1',
+    owner_id: 'owner-1', opened_at: now, updated_at: now, status: 'open', detector: 'worker_heap_growth', attribution: 'direct',
+    confidence: 0.9, baseline_bytes: 10, observed_bytes: 20, slope_bytes_per_minute: 2, evidence_refs: [], review_note: null,
+  }).detector, 'worker_heap_growth');
+  assert.throws(() => RuntimeLifecycleEventV1Schema.parse({ schema: 'narada.mcp_runtime.lifecycle_event.v1', secret: 'not-allowed' }));
+});
 
 function descriptor(): SurfaceDescriptorV2 {
   return {

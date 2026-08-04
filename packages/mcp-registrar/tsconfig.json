@@ -33,6 +33,7 @@
     { "path": "../artifacts-mcp" },
     { "path": "../nars-session-mcp" },
     { "path": "../quota-meter-mcp" },
+    { "path": "../runtime-introspection-mcp" },
     { "path": "../operator-console-overlay-mcp" },
     { "path": "../catalog-observation-mcp" },
     { "path": "../cloudflare-carrier-mcp" },

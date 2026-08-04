@@ -23,6 +23,12 @@ assert.deepEqual(tools.map((tool) => tool.name), [
   'runtime_introspection_top',
   'runtime_introspection_show',
   'runtime_introspection_show_event',
+  'runtime_introspection_memory_status',
+  'runtime_introspection_memory_owners',
+  'runtime_introspection_memory_timeline',
+  'runtime_introspection_memory_attribution',
+  'runtime_introspection_memory_incidents',
+  'runtime_introspection_memory_incident_show',
 ]);
 assert.equal(tools.every((tool) => tool.annotations.readOnlyHint === true), true);
 assert.equal(tools.every((tool) => tool.inputSchema.additionalProperties === false), true);

@@ -25,6 +25,7 @@
   },
   "dependencies": {
     "@narada-core/mcp-fabric-contracts": "workspace:*",
+    "@narada-core/mcp-runtime-observation": "workspace:*",
     "@narada-core/mcp-transport": "workspace:*"
   },
   "devDependencies": {

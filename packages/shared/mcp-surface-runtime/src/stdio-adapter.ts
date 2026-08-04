@@ -7,7 +7,7 @@ import type {
   SurfaceRuntimeRequest,
 } from '@narada-core/mcp-fabric-contracts';
 import { McpProcessClient } from '@narada-core/mcp-runtime-client';
-import type { AdapterStartInput, RuntimeGenerationAdapter } from './types.js';
+import type { AdapterStartInput, RuntimeGenerationAdapter, RuntimeWorkerResourceSnapshot } from './types.js';
 
 export class StdioSurfaceAdapter implements RuntimeGenerationAdapter {
   readonly kind = 'stdio' as const;
@@ -57,6 +57,14 @@ export class StdioSurfaceAdapter implements RuntimeGenerationAdapter {
 
   async assessReplacement(_candidate: SurfaceReplacementCandidate): Promise<SurfaceReplacementAssessment | null> {
     return null;
+  }
+
+  async resourceSnapshot(_inflight: number, _invocationCount: number): Promise<RuntimeWorkerResourceSnapshot | null> {
+    return null;
+  }
+
+  async writeHeapSnapshot(_path: string, _maxBytes: number): Promise<number> {
+    throw new Error('mcp_surface_runtime_heap_snapshot_stdio_unsupported');
   }
 
   close(): Promise<void> {

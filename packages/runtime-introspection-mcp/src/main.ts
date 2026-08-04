@@ -4,6 +4,14 @@ import { guidanceToolDefinition } from './guidance.js';
 import { emitTelemetryEvent, type TelemetryDeclaration, type TelemetryEventKind } from '@narada-core/mcp-telemetry';
 import { createHash } from 'node:crypto';
 import { pathToFileURL } from 'node:url';
+import {
+  memoryAttribution,
+  memoryIncidentShow,
+  memoryIncidents,
+  memoryOwners,
+  memoryStatus,
+  memoryTimeline,
+} from './memory-store.js';
 
 const SERVER_NAME = 'runtime-introspection-mcp';
 const SERVER_VERSION = '0.1.0';
@@ -202,6 +210,35 @@ export function listTools() {
       annotations: readOnlyAnnotations('runtime_introspection_show_event'),
       outputSchema: { type: 'object', additionalProperties: true },
     },
+    ...memoryToolDefinitions(),
+  ];
+}
+
+function memoryToolDefinitions() {
+  const tool = (name: string, description: string, properties: JsonRecord = {}, required: string[] = []) => ({
+    name,
+    description,
+    inputSchema: { type: 'object', properties, required, additionalProperties: false },
+    annotations: readOnlyAnnotations(name),
+    outputSchema: { type: 'object', additionalProperties: true },
+  });
+  return [
+    tool('runtime_introspection_memory_status', 'Show freshness, coverage, and incident counts from the canonical server-bound Site runtime observer store.'),
+    tool('runtime_introspection_memory_owners', 'List bounded runtime resource owners and their latest process/worker measurements.', {
+      active_only: { type: 'boolean' }, limit: { type: 'integer', minimum: 1, maximum: 200 },
+    }),
+    tool('runtime_introspection_memory_timeline', 'Read a bounded process and worker memory timeline for one exact runtime owner.', {
+      owner_id: { type: 'string' }, before_ms: { type: 'integer', minimum: 0 }, limit: { type: 'integer', minimum: 1, maximum: 500 },
+    }, ['owner_id']),
+    tool('runtime_introspection_memory_attribution', 'Explain current V8-attributed and residual process memory for one exact owner without double-counting ArrayBuffers.', {
+      owner_id: { type: 'string' },
+    }, ['owner_id']),
+    tool('runtime_introspection_memory_incidents', 'List bounded memory incidents from the canonical observer store.', {
+      status: { type: 'string', enum: ['open', 'reviewed', 'dismissed', 'all'] }, limit: { type: 'integer', minimum: 1, maximum: 200 },
+    }),
+    tool('runtime_introspection_memory_incident_show', 'Show one memory incident with sanitized evidence and artifact metadata.', {
+      incident_id: { type: 'string' },
+    }, ['incident_id']),
   ];
 }
 
@@ -290,6 +327,24 @@ function callTool(params: JsonRecord) {
         break;
       case 'runtime_introspection_show_event':
         result = runtimeIntrospectionShowEvent(args);
+        break;
+      case 'runtime_introspection_memory_status':
+        result = memoryStatus(args);
+        break;
+      case 'runtime_introspection_memory_owners':
+        result = memoryOwners(args);
+        break;
+      case 'runtime_introspection_memory_timeline':
+        result = memoryTimeline(args);
+        break;
+      case 'runtime_introspection_memory_attribution':
+        result = memoryAttribution(args);
+        break;
+      case 'runtime_introspection_memory_incidents':
+        result = memoryIncidents(args);
+        break;
+      case 'runtime_introspection_memory_incident_show':
+        result = memoryIncidentShow(args);
         break;
       default:
         throw diagnosticError('unknown_tool', `unknown_tool:${name}`, { tool_name: name });

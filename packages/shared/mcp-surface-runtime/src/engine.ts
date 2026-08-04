@@ -1,4 +1,7 @@
 import { randomUUID } from 'node:crypto';
+import { getHeapStatistics } from 'node:v8';
+import { writeHeapSnapshot } from 'node:v8';
+import { rename, rm, stat } from 'node:fs/promises';
 import { Ajv, type ValidateFunction } from 'ajv';
 import {
   stableDigest,
@@ -7,6 +10,8 @@ import {
   type SurfaceReplacementCandidate,
   type SurfaceRuntimeInit,
 } from '@narada-core/mcp-fabric-contracts';
+import type { RuntimeLifecycleEventV1, RuntimeResourceOwnerV1 } from '@narada-core/mcp-fabric-contracts';
+import type { RuntimeObservationSink } from '@narada-core/mcp-runtime-observation';
 import { StdioSurfaceAdapter } from './stdio-adapter.js';
 import type {
   AcquireSurfaceInput,
@@ -21,6 +26,7 @@ import type {
   SurfaceReplacementOutcome,
   SurfaceRuntimeHandle,
   SurfaceRuntimeInstanceStatus,
+  SurfaceRuntimeResourceSnapshot,
 } from './types.js';
 import { WorkerSurfaceAdapter } from './worker-adapter.js';
 
@@ -29,6 +35,7 @@ type Generation = {
   adapter: RuntimeGenerationAdapter;
   toolContractDigest: string;
   inflight: number;
+  invocationCount: number;
 };
 
 type Instance = {
@@ -57,6 +64,13 @@ export class McpSurfaceRuntimeEngine {
   #handles = new Map<string, HandleRecord>();
   #starting = new Map<string, Promise<Instance>>();
   #closed = false;
+  readonly #observationSink: RuntimeObservationSink | null;
+  readonly #observationParentOwnerId: string | null;
+
+  constructor(options: { observation_sink?: RuntimeObservationSink; observation_parent_owner_id?: string } = {}) {
+    this.#observationSink = options.observation_sink ?? null;
+    this.#observationParentOwnerId = options.observation_parent_owner_id ?? null;
+  }
 
   async acquire(input: AcquireSurfaceInput): Promise<SurfaceRuntimeHandle> {
     this.#assertOpen();
@@ -71,6 +85,7 @@ export class McpSurfaceRuntimeEngine {
     const handleId = `surface-handle-${randomUUID()}`;
     instance.handles.add(handleId);
     this.#handles.set(handleId, { instance, session: input.session });
+    this.#emitLifecycle(instance, reused ? 'instance_reused' : 'instance_acquired', null, 'ok');
     return {
       handle_id: handleId,
       instance_id: instance.id,
@@ -94,7 +109,9 @@ export class McpSurfaceRuntimeEngine {
     }
     assertInvocationContext(instance.binding, session, input);
     const admission = input.context.admission;
+    this.#emitLifecycle(instance, 'invocation_started', input.context.request_id, null);
     if (admission.decision !== 'admitted') {
+      this.#emitLifecycle(instance, 'invocation_terminal', input.context.request_id, 'refused');
       return {
         schema: 'narada.mcp_surface_runtime.invocation.v1',
         request_id: input.context.request_id,
@@ -110,13 +127,14 @@ export class McpSurfaceRuntimeEngine {
 
     const generation = instance.generation;
     generation.inflight += 1;
+    generation.invocationCount += 1;
     try {
       const result = await generation.adapter.call(input.request, input.context);
       const outputValidator = instance.outputValidators.get(declaration.name);
       if (outputValidator && !outputValidator(result)) {
         throw new Error(`mcp_surface_runtime_result_invalid:${declaration.name}:${formatValidationErrors(outputValidator.errors)}`);
       }
-      return {
+      const outcome: SurfaceInvocationOutcome = {
         schema: 'narada.mcp_surface_runtime.invocation.v1',
         request_id: input.context.request_id,
         instance_id: instance.id,
@@ -127,10 +145,12 @@ export class McpSurfaceRuntimeEngine {
         admission,
         result,
       };
+      this.#emitLifecycle(instance, 'invocation_terminal', input.context.request_id, 'ok');
+      return outcome;
     } catch (error) {
       const health = await generation.adapter.health().catch(() => ({ status: 'unavailable' as const }));
       if (health.status !== 'healthy') instance.state = health.status === 'unavailable' ? 'unavailable' : 'degraded';
-      return {
+      const outcome: SurfaceInvocationOutcome = {
         schema: 'narada.mcp_surface_runtime.invocation.v1',
         request_id: input.context.request_id,
         instance_id: instance.id,
@@ -144,6 +164,8 @@ export class McpSurfaceRuntimeEngine {
           message: error instanceof Error ? error.message : String(error),
         },
       };
+      this.#emitLifecycle(instance, 'invocation_terminal', input.context.request_id, 'failed');
+      return outcome;
     } finally {
       generation.inflight -= 1;
     }
@@ -171,6 +193,7 @@ export class McpSurfaceRuntimeEngine {
     }
 
     instance.replacementInProgress = true;
+    this.#emitLifecycle(instance, 'replacement_started', null, null);
     let completeReplacement: () => void = () => undefined;
     instance.replacementCompletion = new Promise<void>((resolve) => { completeReplacement = resolve; });
     const init = runtimeInit(instance.binding, candidateId, input.candidate_tool_contract_digest);
@@ -213,12 +236,14 @@ export class McpSurfaceRuntimeEngine {
         adapter: candidate,
         toolContractDigest: input.candidate_tool_contract_digest,
         inflight: 0,
+        invocationCount: 0,
       };
       candidate = null;
       instance.state = 'ready';
       releaseBarrier();
       instance.replacementBarrier = null;
       await previous.adapter.close();
+      this.#emitLifecycle(instance, 'replacement_terminal', null, 'ok');
       return {
         schema: 'narada.mcp_surface_runtime.replacement.v1',
         instance_id: instance.id,
@@ -232,6 +257,7 @@ export class McpSurfaceRuntimeEngine {
       if (barrierInstalled) releaseBarrier();
       instance.replacementBarrier = null;
       instance.state = 'ready';
+      this.#emitLifecycle(instance, 'replacement_terminal', null, 'failed');
       return {
         schema: 'narada.mcp_surface_runtime.replacement.v1',
         instance_id: instance.id,
@@ -268,11 +294,83 @@ export class McpSurfaceRuntimeEngine {
     };
   }
 
+  async resourceSnapshot(): Promise<SurfaceRuntimeResourceSnapshot> {
+    const sampledAt = new Date().toISOString();
+    const memory = process.memoryUsage();
+    const heap = getHeapStatistics();
+    const statuses = this.status().instances;
+    const instances = await Promise.all(statuses.map(async (status) => {
+      const instance = this.#instances.get(status.instance_id);
+      if (!instance) return { ...status, resource_status: 'unavailable' as const, resources: null, unavailable_reason: 'instance_retired_during_sample' };
+      try {
+        const resources = await instance.generation.adapter.resourceSnapshot(
+          instance.generation.inflight,
+          instance.generation.invocationCount,
+        );
+        return resources
+          ? { ...status, resource_status: 'complete' as const, resources, unavailable_reason: null }
+          : { ...status, resource_status: 'unavailable' as const, resources: null, unavailable_reason: 'adapter_resource_probe_unavailable' };
+      } catch (error) {
+        return { ...status, resource_status: 'unavailable' as const, resources: null, unavailable_reason: sanitizeProbeError(error) };
+      }
+    }));
+    return {
+      schema: 'narada.mcp_surface_runtime.resources.v1',
+      sampled_at: sampledAt,
+      parent: {
+        pid: process.pid,
+        sampled_at: sampledAt,
+        heap_total_bytes: memory.heapTotal,
+        heap_used_bytes: memory.heapUsed,
+        external_bytes: memory.external,
+        array_buffers_bytes: memory.arrayBuffers,
+        heap_limit_bytes: heap.heap_size_limit,
+        active_resource_counts: countActiveResourceClasses(),
+        invocation_count: [...this.#instances.values()].reduce((sum, value) => sum + value.generation.invocationCount, 0),
+        inflight: [...this.#instances.values()].reduce((sum, value) => sum + value.generation.inflight, 0),
+      },
+      instances,
+    };
+  }
+
+  async writeHeapSnapshot(input: {
+    target: 'service_parent' | 'surface_generation';
+    path: string;
+    max_bytes: number;
+    instance_id?: string;
+    expected_generation_id?: string;
+  }): Promise<{ path: string; bytes: number; generation_id: string | null }> {
+    if (!Number.isSafeInteger(input.max_bytes) || input.max_bytes < 1024 * 1024 || input.max_bytes > 512 * 1024 * 1024) {
+      throw new Error('mcp_surface_runtime_heap_snapshot_size_limit_invalid');
+    }
+    const temporary = `${input.path}.${process.pid}.tmp`;
+    await rm(temporary, { force: true });
+    if (input.target === 'service_parent') {
+      try {
+        writeHeapSnapshot(temporary);
+        const bytes = (await stat(temporary)).size;
+        if (bytes > input.max_bytes) throw new Error('mcp_surface_runtime_heap_snapshot_size_limit');
+        await rename(temporary, input.path);
+        return { path: input.path, bytes, generation_id: null };
+      } catch (error) {
+        await rm(temporary, { force: true });
+        throw error;
+      }
+    }
+    const instance = this.#instances.get(String(input.instance_id ?? ''));
+    if (!instance) throw new Error('mcp_surface_runtime_heap_snapshot_instance_unknown');
+    if (instance.generation.id !== input.expected_generation_id) throw new Error('mcp_surface_runtime_heap_snapshot_generation_mismatch');
+    const bytes = await instance.generation.adapter.writeHeapSnapshot(temporary, input.max_bytes);
+    await rename(temporary, input.path);
+    return { path: input.path, bytes, generation_id: instance.generation.id };
+  }
+
   async release(handleId: string): Promise<void> {
     const record = this.#handles.get(handleId);
     if (!record) return;
     this.#handles.delete(handleId);
     record.instance.handles.delete(handleId);
+    this.#emitLifecycle(record.instance, 'instance_released', null, 'ok');
     if (record.instance.handles.size === 0) {
       if (record.instance.replacementCompletion) await record.instance.replacementCompletion;
       await waitForDrain(record.instance.generation, 10_000);
@@ -336,7 +434,7 @@ export class McpSurfaceRuntimeEngine {
         adapterFingerprint: adapterFingerprint(input.adapter),
         execution,
         state: 'ready',
-        generation: { id, adapter, toolContractDigest: input.binding.tool_contract_digest, inflight: 0 },
+        generation: { id, adapter, toolContractDigest: input.binding.tool_contract_digest, inflight: 0, invocationCount: 0 },
         handles: new Set(),
         replacementBarrier: null,
         replacementCompletion: null,
@@ -345,6 +443,9 @@ export class McpSurfaceRuntimeEngine {
       };
       this.#assertOpen();
       this.#instances.set(instanceId, instance);
+      this.#emitOwner(instance);
+      this.#emitLifecycle(instance, 'generation_started', null, 'ok');
+      this.#emitLifecycle(instance, 'generation_activated', null, 'ok');
       return instance;
     } catch (error) {
       await adapter.close();
@@ -360,6 +461,52 @@ export class McpSurfaceRuntimeEngine {
 
   #assertOpen(): void {
     if (this.#closed) throw new Error('mcp_surface_runtime_engine_closed');
+  }
+
+  #emitOwner(instance: Instance): void {
+    if (!this.#observationSink) return;
+    const now = new Date().toISOString();
+    const owner: RuntimeResourceOwnerV1 = {
+      schema: 'narada.mcp_runtime.resource_owner.v1',
+      owner_id: instance.id,
+      site_id: instance.binding.site_id,
+      authority_ref: instance.binding.authority_ref,
+      owner_kind: instance.generation.adapter.kind === 'surface_factory' ? 'surface_worker' : 'nars_stdio_child',
+      pid: instance.generation.adapter.runtime.pid > 0 ? instance.generation.adapter.runtime.pid : null,
+      process_started_at: null,
+      parent_owner_id: this.#observationParentOwnerId,
+      surface_id: instance.binding.surface_id,
+      instance_id: instance.id,
+      generation_id: instance.generation.id,
+      carrier_session_id: null,
+      executable_name: instance.generation.adapter.runtime.executable || null,
+      observed_at: now,
+    };
+    void this.#observationSink.emit(owner);
+  }
+
+  #emitLifecycle(
+    instance: Instance,
+    eventType: RuntimeLifecycleEventV1['event_type'],
+    requestId: string | null,
+    status: RuntimeLifecycleEventV1['status'],
+  ): void {
+    if (!this.#observationSink) return;
+    void this.#observationSink.emit({
+      schema: 'narada.mcp_runtime.lifecycle_event.v1',
+      event_id: `event-${randomUUID()}`,
+      occurred_at: new Date().toISOString(),
+      site_id: instance.binding.site_id,
+      authority_ref: instance.binding.authority_ref,
+      owner_id: instance.id,
+      event_type: eventType,
+      surface_id: instance.binding.surface_id,
+      instance_id: instance.id,
+      generation_id: instance.generation.id,
+      request_id: requestId,
+      status,
+      inflight: instance.generation.inflight,
+    });
   }
 }
 
@@ -514,4 +661,18 @@ function compileToolValidators(binding: AdmittedSurfaceBinding): {
 function formatValidationErrors(errors: ValidateFunction['errors']): string {
   if (!errors?.length) return 'unknown';
   return errors.slice(0, 3).map((error) => `${error.instancePath || '/'}:${error.keyword}`).join(',');
+}
+
+function countActiveResourceClasses(): Record<string, number> {
+  const counts: Record<string, number> = {};
+  for (const name of process.getActiveResourcesInfo()) {
+    const safe = String(name).replace(/[^A-Za-z0-9_.-]/g, '_').slice(0, 80) || 'unknown';
+    counts[safe] = (counts[safe] ?? 0) + 1;
+  }
+  return counts;
+}
+
+function sanitizeProbeError(error: unknown): string {
+  const code = String((error as { code?: unknown })?.code ?? 'resource_probe_failed');
+  return code.replace(/[^A-Za-z0-9_.:-]/g, '_').slice(0, 160);
 }

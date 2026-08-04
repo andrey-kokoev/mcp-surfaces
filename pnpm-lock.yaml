@@ -247,6 +247,9 @@ importers:
       '@narada-core/mcp-fabric-contracts':
         specifier: workspace:*
         version: link:../shared/mcp-fabric-contracts
+      '@narada-core/mcp-runtime-observation':
+        specifier: workspace:*
+        version: link:../shared/mcp-runtime-observation
       '@narada-core/mcp-transport':
         specifier: workspace:*
         version: link:../shared/mcp-transport
@@ -320,6 +323,9 @@ importers:
       '@narada-core/quota-meter-mcp':
         specifier: workspace:*
         version: link:../quota-meter-mcp
+      '@narada-core/runtime-introspection-mcp':
+        specifier: workspace:*
+        version: link:../runtime-introspection-mcp
       '@narada-core/scheduler-mcp':
         specifier: workspace:*
         version: link:../scheduler-mcp
@@ -414,6 +420,9 @@ importers:
       '@narada-core/mcp-e2e-harness':
         specifier: workspace:*
         version: link:../shared/mcp-e2e-harness
+      '@narada-core/mcp-fabric-contracts':
+        specifier: workspace:*
+        version: link:../shared/mcp-fabric-contracts
       '@narada-core/mcp-telemetry':
         specifier: workspace:*
         version: link:../shared/mcp-telemetry
@@ -468,11 +477,20 @@ importers:
 
   packages/shared/mcp-runtime-client: {}
 
+  packages/shared/mcp-runtime-observation:
+    dependencies:
+      '@narada-core/mcp-fabric-contracts':
+        specifier: workspace:*
+        version: link:../mcp-fabric-contracts
+
   packages/shared/mcp-runtime-proxy:
     dependencies:
       '@narada-core/mcp-fabric-contracts':
         specifier: workspace:*
         version: link:../mcp-fabric-contracts
+      '@narada-core/mcp-runtime-observation':
+        specifier: workspace:*
+        version: link:../mcp-runtime-observation
       '@narada-core/process-launch-posture':
         specifier: workspace:*
         version: link:../../../../narada/packages/process-launch-posture
@@ -489,6 +507,9 @@ importers:
       '@narada-core/mcp-runtime-client':
         specifier: workspace:*
         version: link:../mcp-runtime-client
+      '@narada-core/mcp-runtime-observation':
+        specifier: workspace:*
+        version: link:../mcp-runtime-observation
       ajv:
         specifier: ^8.20.0
         version: 8.20.0

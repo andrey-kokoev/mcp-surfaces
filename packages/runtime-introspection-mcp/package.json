@@ -9,6 +9,10 @@
   },
   "types": "./dist/src/main.d.ts",
   "exports": {
+    "./surface-definition": {
+      "types": "./dist/src/surface-definition.d.ts",
+      "default": "./dist/src/surface-definition.js"
+    },
     ".": {
       "types": "./dist/src/main.d.ts",
       "default": "./dist/src/main.js"
@@ -17,10 +21,11 @@
   "scripts": {
     "build": "tsc -b",
     "typecheck": "tsc -b --pretty false",
-    "test": "pnpm --filter @narada-core/mcp-e2e-harness build && pnpm build && node dist/test/protocol-smoke.test.js && node dist/test/runtime-introspection-mcp.test.js && node dist/test/site-fabric-introspection-e2e.test.js",
+    "test": "pnpm --filter @narada-core/mcp-e2e-harness build && pnpm build && node dist/test/protocol-smoke.test.js && node dist/test/runtime-introspection-mcp.test.js && node --test dist/test/memory-store.test.js && node dist/test/site-fabric-introspection-e2e.test.js",
     "test:e2e:site-fabric": "pnpm --filter @narada-core/mcp-e2e-harness build && pnpm build && node dist/test/site-fabric-introspection-e2e.test.js"
   },
   "dependencies": {
+    "@narada-core/mcp-fabric-contracts": "workspace:*",
     "@narada-core/mcp-e2e-harness": "workspace:*",
     "@narada-core/mcp-telemetry": "workspace:*"
   },

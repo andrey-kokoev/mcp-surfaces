@@ -14,4 +14,6 @@ export type {
   SurfaceReplacementOutcome,
   SurfaceRuntimeHandle,
   SurfaceRuntimeInstanceStatus,
+  RuntimeWorkerResourceSnapshot,
+  SurfaceRuntimeResourceSnapshot,
 } from './types.js';

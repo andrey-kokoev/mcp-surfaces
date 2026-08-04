@@ -5,6 +5,7 @@ import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'no
 import { basename, dirname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { processSupervisorEntrypoint } from '@narada-core/process-launch-posture';
+import { createRuntimeObservationSink, type RuntimeObservationSink } from '@narada-core/mcp-runtime-observation';
 import {
   RUNTIME_STATUS_TOOL_NAME,
   captureRuntimeFreshness,
@@ -146,6 +147,61 @@ function parseArgs(argv: string[]): ProxyOptions {
     livenessCheckMs,
     orphanGraceMs,
   };
+}
+
+function createProxyObservationSink(options: ProxyOptions): RuntimeObservationSink | null {
+  const siteRoot = process.env.NARADA_SITE_ROOT?.trim();
+  if (!siteRoot) return null;
+  try {
+    return createRuntimeObservationSink({
+      site_root: siteRoot,
+      source_id: `carrier-proxy-${options.surfaceId ?? process.pid}`,
+    });
+  } catch {
+    return null;
+  }
+}
+
+function emitProxyOwners(sink: RuntimeObservationSink | null, options: ProxyOptions, childPid: number | null): void {
+  if (!sink) return;
+  const siteId = process.env.NARADA_SITE_ID?.trim() || 'unknown-site';
+  const authorityRef = process.env.NARADA_AUTHORITY_REF?.trim() || `site:${siteId}:mcp-surfaces`;
+  const observedAt = new Date().toISOString();
+  const proxyOwner = `carrier-proxy-${process.pid}`;
+  void sink.emit({
+    schema: 'narada.mcp_runtime.resource_owner.v1', owner_id: proxyOwner, site_id: siteId,
+    authority_ref: authorityRef, owner_kind: 'carrier_proxy', pid: process.pid, process_started_at: null,
+    parent_owner_id: null, surface_id: options.surfaceId, instance_id: null, generation_id: null,
+    carrier_session_id: process.env.NARADA_CARRIER_SESSION_ID?.trim() || null,
+    executable_name: process.execPath, observed_at: observedAt,
+  });
+  if (childPid) void sink.emit({
+    schema: 'narada.mcp_runtime.resource_owner.v1', owner_id: `proxy-child-${childPid}`, site_id: siteId,
+    authority_ref: authorityRef, owner_kind: 'nars_stdio_child', pid: childPid, process_started_at: null,
+    parent_owner_id: proxyOwner, surface_id: options.surfaceId, instance_id: null,
+    generation_id: null, carrier_session_id: process.env.NARADA_CARRIER_SESSION_ID?.trim() || null,
+    executable_name: options.entrypoint, observed_at: observedAt,
+  });
+  emitProxyLifecycle(sink, options, 'process_started', 'ok', childPid);
+}
+
+function emitProxyLifecycle(
+  sink: RuntimeObservationSink | null,
+  options: ProxyOptions,
+  eventType: 'process_started' | 'process_exited',
+  status: 'ok' | 'failed',
+  childPid: number | null,
+): void {
+  if (!sink) return;
+  const siteId = process.env.NARADA_SITE_ID?.trim() || 'unknown-site';
+  void sink.emit({
+    schema: 'narada.mcp_runtime.lifecycle_event.v1', event_id: `event-${randomUUID()}`,
+    occurred_at: new Date().toISOString(), site_id: siteId,
+    authority_ref: process.env.NARADA_AUTHORITY_REF?.trim() || `site:${siteId}:mcp-surfaces`,
+    owner_id: childPid ? `proxy-child-${childPid}` : `carrier-proxy-${process.pid}`,
+    event_type: eventType, surface_id: options.surfaceId, instance_id: null, generation_id: null,
+    request_id: null, status, inflight: null,
+  });
 }
 
 function stringDetail(details: JsonRecord, key: string): string | null {
@@ -504,6 +560,8 @@ export async function runProxy(argv = process.argv.slice(2)): Promise<void> {
   let parentFramed = false;
   const childLaunch = spawnProxyChild(options, supervisorPath);
   const child = childLaunch.child;
+  const observation = createProxyObservationSink(options);
+  emitProxyOwners(observation, options, child.pid ?? null);
   const childIdentity = buildChildIdentity(options.entrypoint, options.childArgs, childLaunch);
   const startupTrace = createStartupTrace(options, child, childIdentity);
   startupTrace.runtimeContractVersion = options.runtimeContractVersion;
@@ -806,6 +864,7 @@ export async function runProxy(argv = process.argv.slice(2)): Promise<void> {
       });
     }
     childClosed = true;
+    emitProxyLifecycle(observation, options, 'process_exited', code === 0 ? 'ok' : 'failed', child.pid ?? null);
     clearInterval(livenessTimer);
     if (orphanTerminationTimer) clearTimeout(orphanTerminationTimer);
     if (orphanForceKillTimer) clearTimeout(orphanForceKillTimer);

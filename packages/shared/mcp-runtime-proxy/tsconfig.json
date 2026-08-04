@@ -8,6 +8,7 @@
   },
   "references": [
     { "path": "../mcp-fabric-contracts" },
+    { "path": "../mcp-runtime-observation" },
     { "path": "../mcp-e2e-harness" }
   ],
   "include": ["src/**/*.ts", "test/**/*.ts"]

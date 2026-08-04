@@ -31,7 +31,9 @@ export function buildGuidanceResult(args: GuidanceRecord = {}): GuidanceRecord {
     examples: [
       { intent: 'First use', call: 'runtime_introspection_guidance({})' },
       { intent: 'Tool-specific help', call: "runtime_introspection_guidance({ tool: \"<tool_name>\" })" },
-      { intent: 'Workflow-specific help', call: "runtime_introspection_guidance({ workflow: \"<workflow_name>\" })" }
+      { intent: 'Workflow-specific help', call: "runtime_introspection_guidance({ workflow: \"<workflow_name>\" })" },
+      { intent: 'Runtime memory health', call: 'runtime_introspection_memory_status({})' },
+      { intent: 'Attribute one owner', call: 'runtime_introspection_memory_attribution({ owner_id: "<owner_id>" })' }
     ],
     anti_patterns: [
       'Do not guess hidden state from a tool name; use doctor/status/list/show tools for evidence.',

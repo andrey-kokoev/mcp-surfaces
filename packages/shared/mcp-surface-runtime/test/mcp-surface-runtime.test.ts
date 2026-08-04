@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import test from 'node:test';
+import type { RuntimeObservationRecord } from '@narada-core/mcp-runtime-observation';
 import type {
   SurfaceAdmissionDecision,
   SurfaceInvocationContext,
@@ -21,6 +22,31 @@ const digestA = 'a'.repeat(64);
 const fixture = (name: string) => fileURLToPath(new URL(`./fixtures/${name}.js`, import.meta.url));
 
 test.after(() => rmSync(root, { recursive: true, force: true }));
+
+test('resource snapshots expose worker V8 counters while lifecycle evidence stays sanitized', async () => {
+  const records: RuntimeObservationRecord[] = [];
+  const engine = new McpSurfaceRuntimeEngine({ observation_sink: {
+    source_id: 'test', path: 'memory://test', async emit(record) { records.push(record); return true; },
+  } });
+  const admitted = binding();
+  const boundSession = session('resources');
+  const handle = await engine.acquire({ binding: admitted, session: boundSession, adapter: { kind: 'surface_factory', module_path: fixture('shared-surface') } });
+  await invoke(engine, handle, admitted, boundSession, 'fixture_read');
+  const snapshot = await engine.resourceSnapshot();
+  assert.equal(snapshot.parent.pid, process.pid);
+  assert.equal(snapshot.instances.length, 1);
+  assert.equal(snapshot.instances[0]?.resource_status, 'complete');
+  assert.equal((snapshot.instances[0]?.resources?.heap_used_bytes ?? 0) > 0, true);
+  assert.equal(snapshot.instances[0]?.resources?.invocation_count, 1);
+  await engine.release(handle.handle_id);
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  assert.equal(records.some((record) => record.schema === 'narada.mcp_runtime.resource_owner.v1'), true);
+  assert.equal(records.some((record) => record.schema === 'narada.mcp_runtime.lifecycle_event.v1' && record.event_type === 'invocation_terminal'), true);
+  const serialized = JSON.stringify(records);
+  assert.equal(serialized.includes('arguments'), false);
+  assert.equal(serialized.includes('result'), false);
+  await engine.close();
+});
 
 function tool(name: string, effect: ToolContractV2['effect']['class'] = 'read'): ToolContractV2 {
   return {

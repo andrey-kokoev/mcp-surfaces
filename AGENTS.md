@@ -13,6 +13,7 @@ Current packages:
 - `@narada-core/mcp-affordances`: shared UI-neutral MCP affordance schema and validation helpers.
 - `@narada-core/mcp-runtime-proxy`: shared carrier stdio proxy for MCP startup diagnostics.
 - `@narada-core/mcp-surface-runtime`: policy-neutral authority-bound surface execution engine with factory and stdio adapters.
+- `@narada-core/mcp-runtime-observation`: mandatory-but-best-effort sanitized runtime ownership and lifecycle observation producer.
 - `@narada-core/mcp-e2e-harness`: shared bounded mechanics for real MCP end-to-end tests.
 - `@narada-core/mcp-fabric-contracts`: shared versioned MCP descriptor, manifest, carrier projection, observation, and reconciliation contracts.
 - `@narada-core/mcp-fabric-compiler`: pure manifest and Codex/Kimi/OpenCode carrier projection compiler with strict Moonshot schema validation.
@@ -64,7 +65,7 @@ workspace is the canonical Site root, `.narada` is the control root, and
 - Layout: runnable MCP surfaces live in `packages/*`, shared libraries in `packages/shared/*`, design and doctrine docs in `docs/`, and the root UI-neutrality boundary test in `test/`.
 - Root `pnpm test` runs the boundary gates and every package under this repository's `./packages/**`; linked sibling workspaces may provide dependencies but their own test suites remain owned by those repositories.
 - The root `README.md` gives repo-level framing; each package has its own `README.md` with setup details.
-- Key docs: `docs/mcp-taxonomy.md` (generic versus Narada-specific split), `docs/mcp-wiring.md` and `docs/mcp-injection-scopes.md` (how surfaces reach carriers and sites), `docs/mcp-surfaces-target-shape.md` (target architecture), `docs/site-loop-doctrine.md` (Site Loop doctrine), `docs/mcp-output-refusal-conventions.md` (output-ref and refusal patterns).
+- Key docs: `docs/mcp-taxonomy.md` (generic versus Narada-specific split), `docs/mcp-wiring.md` and `docs/mcp-injection-scopes.md` (how surfaces reach carriers and sites), `docs/mcp-surfaces-target-shape.md` (target architecture), `docs/mcp-runtime-memory-observation.md` (authority-bound memory attribution), `docs/site-loop-doctrine.md` (Site Loop doctrine), `docs/mcp-output-refusal-conventions.md` (output-ref and refusal patterns).
 - Task Lifecycle MCP runtime startup is prepared-only: run `task-lifecycle-mcp --prepare --site-root <site-root>` explicitly before attaching a stateful runtime; see `docs/task-lifecycle-preparation.md` for the readiness contract and remediation path.
 
 ## Carrier and Site MCP Fabric
@@ -153,6 +154,7 @@ pnpm test:mcp-telemetry
 pnpm test:mcp-affordances
 pnpm test:mcp-runtime-proxy
 pnpm test:mcp-surface-runtime
+pnpm test:mcp-runtime-observation
 pnpm test:mcp-e2e-harness
 pnpm test:mcp-fabric-contracts
 pnpm test:mcp-fabric-compiler
@@ -244,6 +246,7 @@ Do all of the following in the same change:
 - `mcp-affordances` owns UI-neutral MCP affordance document types, builders, and validation helpers. It must not encode renderer-specific components or bypass MCP tool schemas and policy checks.
 - `mcp-runtime-proxy` owns carrier-facing startup diagnostics and transport-neutral generation replacement for eligible stdio and Streamable HTTP surfaces. It must not authorize tools, mutate policy, interpret surface domain behavior, or hot-replace `restart_required` surfaces.
 - `mcp-surface-runtime` owns authority-bound instance tenancy, worker/stdio adapter lifecycle, admitted-call validation, and explicitly assessed generation swaps. It does not discover Sites, decide admission, authenticate carriers, or provide a security boundary between worker threads.
+- `mcp-runtime-observation` owns only sanitized best-effort ownership/lifecycle source spools. It must never carry tool arguments, results, environment values, or become a control dependency.
 - `mcp-e2e-harness` owns bounded child-process transport (JSONL and Content-Length), temporary roots, cleanup, and result artifacts for real MCP E2E tests. It must not create Site fabric, define surface policy, or encode domain assertions.
 - `mcp-fabric-contracts` owns policy-neutral, versioned fabric document schemas, canonicalization, and digests. It must not discover Sites, authorize tools, launch runtimes, or own carrier configuration.
 - `mcp-fabric-compiler` owns deterministic manifest resolution, carrier projection documents, effect-derived approvals, and semantics-preserving carrier schema transforms. It must not write host files or actuate carrier/runtime lifecycle.

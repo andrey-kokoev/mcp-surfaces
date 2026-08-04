@@ -9,6 +9,7 @@ const EnvironmentVariableSchema = z.string().trim().regex(/^[A-Za-z_][A-Za-z0-9_
 const HeaderNameSchema = z.string().trim().regex(/^[A-Za-z0-9][A-Za-z0-9_-]*$/);
 const VersionSchema = z.string().trim().min(1);
 const JsonObjectSchema = z.record(z.string(), z.unknown());
+const ActiveResourceClassSchema = z.string().trim().min(1).max(80).regex(/^[A-Za-z0-9_.-]+$/);
 
 export const ToolEffectSchema = z.object({
   class: z.enum(['read', 'local_write', 'external_write', 'command', 'runtime_admin']),
@@ -284,6 +285,113 @@ export const RuntimeObservationV2Schema = z.object({
   );
 });
 
+export const RuntimeResourceOwnerV1Schema = z.object({
+  schema: z.literal('narada.mcp_runtime.resource_owner.v1'),
+  owner_id: IdentifierSchema,
+  site_id: IdentifierSchema,
+  authority_ref: z.string().trim().min(1),
+  owner_kind: z.enum([
+    'pc_site_service',
+    'surface_worker',
+    'carrier_proxy',
+    'loader_child',
+    'nars_stdio_child',
+    'observer_overhead',
+  ]),
+  pid: z.number().int().positive().nullable(),
+  process_started_at: z.string().datetime().nullable(),
+  parent_owner_id: IdentifierSchema.nullable(),
+  surface_id: IdentifierSchema.nullable(),
+  instance_id: IdentifierSchema.nullable(),
+  generation_id: IdentifierSchema.nullable(),
+  carrier_session_id: IdentifierSchema.nullable(),
+  executable_name: z.string().trim().min(1).nullable(),
+  observed_at: z.string().datetime(),
+}).strict();
+
+export const RuntimeLifecycleEventV1Schema = z.object({
+  schema: z.literal('narada.mcp_runtime.lifecycle_event.v1'),
+  event_id: IdentifierSchema,
+  occurred_at: z.string().datetime(),
+  site_id: IdentifierSchema,
+  authority_ref: z.string().trim().min(1),
+  owner_id: IdentifierSchema,
+  event_type: z.enum([
+    'process_started',
+    'process_exited',
+    'generation_started',
+    'generation_activated',
+    'generation_draining',
+    'generation_terminated',
+    'instance_acquired',
+    'instance_reused',
+    'instance_released',
+    'replacement_started',
+    'replacement_terminal',
+    'invocation_started',
+    'invocation_terminal',
+  ]),
+  surface_id: IdentifierSchema.nullable(),
+  instance_id: IdentifierSchema.nullable(),
+  generation_id: IdentifierSchema.nullable(),
+  request_id: IdentifierSchema.nullable(),
+  status: z.enum(['ok', 'failed', 'refused', 'cancelled', 'unknown']).nullable(),
+  inflight: z.number().int().nonnegative().nullable(),
+}).strict();
+
+const RuntimeProcessMetricsV1Schema = z.object({
+  working_set_bytes: z.number().int().nonnegative(),
+  private_bytes: z.number().int().nonnegative(),
+  commit_bytes: z.number().int().nonnegative(),
+  virtual_bytes: z.number().int().nonnegative(),
+  handle_count: z.number().int().nonnegative(),
+  thread_count: z.number().int().nonnegative(),
+  cpu_time_ms: z.number().nonnegative(),
+}).strict();
+
+const RuntimeWorkerMetricsV1Schema = z.object({
+  heap_total_bytes: z.number().int().nonnegative(),
+  heap_used_bytes: z.number().int().nonnegative(),
+  external_bytes: z.number().int().nonnegative(),
+  array_buffers_bytes: z.number().int().nonnegative(),
+  heap_limit_bytes: z.number().int().nonnegative(),
+  active_resource_counts: z.record(ActiveResourceClassSchema, z.number().int().nonnegative()),
+  invocation_count: z.number().int().nonnegative(),
+  inflight: z.number().int().nonnegative(),
+}).strict();
+
+export const RuntimeResourceSampleV1Schema = z.object({
+  schema: z.literal('narada.mcp_runtime.resource_sample.v1'),
+  sample_id: IdentifierSchema,
+  sampled_at: z.string().datetime(),
+  owner_id: IdentifierSchema,
+  pid: z.number().int().positive().nullable(),
+  process_started_at: z.string().datetime().nullable(),
+  process: RuntimeProcessMetricsV1Schema.nullable(),
+  worker: RuntimeWorkerMetricsV1Schema.nullable(),
+  sample_status: z.enum(['complete', 'partial', 'unavailable', 'stale']),
+  unavailable_reason: z.string().trim().min(1).nullable(),
+}).strict();
+
+export const RuntimeMemoryIncidentV1Schema = z.object({
+  schema: z.literal('narada.mcp_runtime.memory_incident.v1'),
+  incident_id: IdentifierSchema,
+  site_id: IdentifierSchema,
+  authority_ref: z.string().trim().min(1),
+  owner_id: IdentifierSchema,
+  opened_at: z.string().datetime(),
+  updated_at: z.string().datetime(),
+  status: z.enum(['open', 'reviewed', 'dismissed']),
+  detector: z.enum(['process_growth', 'worker_heap_growth', 'post_release_residual', 'handle_growth', 'thread_growth']),
+  attribution: z.enum(['direct', 'partial', 'residual']),
+  confidence: z.number().min(0).max(1),
+  baseline_bytes: z.number().int().nonnegative().nullable(),
+  observed_bytes: z.number().int().nonnegative().nullable(),
+  slope_bytes_per_minute: z.number().nullable(),
+  evidence_refs: z.array(IdentifierSchema),
+  review_note: z.string().trim().min(1).nullable(),
+}).strict();
+
 export const ReconciliationActionV2Schema = z.object({
   action: z.enum([
     'no_op',
@@ -385,6 +493,10 @@ export type RuntimeGenerationV2 = z.infer<typeof RuntimeGenerationV2Schema>;
 export type RuntimeRecoveryActionV2 = z.infer<typeof RuntimeRecoveryActionV2Schema>;
 export type RuntimeServerObservationV2 = z.infer<typeof RuntimeServerObservationV2Schema>;
 export type RuntimeObservationV2 = z.infer<typeof RuntimeObservationV2Schema>;
+export type RuntimeResourceOwnerV1 = z.infer<typeof RuntimeResourceOwnerV1Schema>;
+export type RuntimeLifecycleEventV1 = z.infer<typeof RuntimeLifecycleEventV1Schema>;
+export type RuntimeResourceSampleV1 = z.infer<typeof RuntimeResourceSampleV1Schema>;
+export type RuntimeMemoryIncidentV1 = z.infer<typeof RuntimeMemoryIncidentV1Schema>;
 export type ReconciliationActionV2 = z.infer<typeof ReconciliationActionV2Schema>;
 export type ReconciliationPlanV2 = z.infer<typeof ReconciliationPlanV2Schema>;
 export type CarrierRestartRequestV1 = z.infer<typeof CarrierRestartRequestV1Schema>;
@@ -838,6 +950,10 @@ export const McpFabricJsonSchemas = {
   fabric_manifest: z.toJSONSchema(FabricManifestV2Schema),
   carrier_projection: z.toJSONSchema(CarrierProjectionV2Schema),
   runtime_observation: z.toJSONSchema(RuntimeObservationV2Schema),
+  runtime_resource_owner: z.toJSONSchema(RuntimeResourceOwnerV1Schema),
+  runtime_lifecycle_event: z.toJSONSchema(RuntimeLifecycleEventV1Schema),
+  runtime_resource_sample: z.toJSONSchema(RuntimeResourceSampleV1Schema),
+  runtime_memory_incident: z.toJSONSchema(RuntimeMemoryIncidentV1Schema),
   reconciliation_plan: z.toJSONSchema(ReconciliationPlanV2Schema),
   carrier_restart_request: z.toJSONSchema(CarrierRestartRequestV1Schema),
   carrier_restart_outcome: z.toJSONSchema(CarrierRestartOutcomeV1Schema),

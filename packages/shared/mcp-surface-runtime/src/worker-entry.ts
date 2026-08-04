@@ -1,5 +1,6 @@
 import { parentPort, workerData } from 'node:worker_threads';
 import { pathToFileURL } from 'node:url';
+import { getHeapStatistics } from 'node:v8';
 import type {
   SurfaceInvocationContext,
   SurfaceReplacementCandidate,
@@ -11,7 +12,7 @@ import type {
 
 type WorkerRequest = {
   id: number;
-  method: 'call' | 'health' | 'assess_replacement' | 'dispose' | 'cancel';
+  method: 'call' | 'health' | 'assess_replacement' | 'resource_snapshot' | 'dispose' | 'cancel';
   payload?: Record<string, unknown>;
 };
 
@@ -32,6 +33,7 @@ if (toolNames.length === 0 || toolNames.some((name) => typeof name !== 'string' 
   throw new Error('mcp_surface_runtime_factory_tool_inventory_invalid');
 }
 const controllers = new Map<number, AbortController>();
+let invocationCount = 0;
 
 port.postMessage({ type: 'ready', tool_names: toolNames });
 port.on('message', async (request: WorkerRequest) => {
@@ -42,6 +44,7 @@ port.on('message', async (request: WorkerRequest) => {
   try {
     let result: unknown;
     if (request.method === 'call') {
+      invocationCount += 1;
       const controller = new AbortController();
       controllers.set(request.id, controller);
       const context = request.payload?.context as SurfaceInvocationContext;
@@ -56,6 +59,20 @@ port.on('message', async (request: WorkerRequest) => {
       result = runtime.assessReplacement
         ? await runtime.assessReplacement(request.payload?.candidate as SurfaceReplacementCandidate)
         : null;
+    } else if (request.method === 'resource_snapshot') {
+      const memory = process.memoryUsage();
+      const heap = getHeapStatistics();
+      result = {
+        sampled_at: new Date().toISOString(),
+        heap_total_bytes: memory.heapTotal,
+        heap_used_bytes: memory.heapUsed,
+        external_bytes: memory.external,
+        array_buffers_bytes: memory.arrayBuffers,
+        heap_limit_bytes: heap.heap_size_limit,
+        active_resource_counts: countActiveResourceClasses(),
+        invocation_count: invocationCount,
+        inflight: controllers.size,
+      };
     } else if (request.method === 'dispose') {
       await runtime.dispose();
       result = { disposed: true };
@@ -75,3 +92,12 @@ port.on('message', async (request: WorkerRequest) => {
     });
   }
 });
+
+function countActiveResourceClasses(): Record<string, number> {
+  const counts: Record<string, number> = {};
+  for (const name of process.getActiveResourcesInfo()) {
+    const safe = String(name).replace(/[^A-Za-z0-9_.-]/g, '_').slice(0, 80) || 'unknown';
+    counts[safe] = (counts[safe] ?? 0) + 1;
+  }
+  return counts;
+}

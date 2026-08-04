@@ -1,4 +1,8 @@
 import { Worker } from 'node:worker_threads';
+import { createWriteStream } from 'node:fs';
+import { rm, stat } from 'node:fs/promises';
+import { pipeline } from 'node:stream/promises';
+import { Transform } from 'node:stream';
 import type {
   SurfaceInvocationContext,
   SurfaceReplacementAssessment,
@@ -7,7 +11,7 @@ import type {
   SurfaceRuntimeJson,
   SurfaceRuntimeRequest,
 } from '@narada-core/mcp-fabric-contracts';
-import type { AdapterStartInput, RuntimeGenerationAdapter } from './types.js';
+import type { AdapterStartInput, RuntimeGenerationAdapter, RuntimeWorkerResourceSnapshot } from './types.js';
 
 type Pending = {
   resolve(value: unknown): void;
@@ -100,6 +104,28 @@ export class WorkerSurfaceAdapter implements RuntimeGenerationAdapter {
 
   assessReplacement(candidate: SurfaceReplacementCandidate): Promise<SurfaceReplacementAssessment | null> {
     return this.#request('assess_replacement', { candidate }) as Promise<SurfaceReplacementAssessment | null>;
+  }
+
+  resourceSnapshot(): Promise<RuntimeWorkerResourceSnapshot> {
+    return this.#request('resource_snapshot') as Promise<RuntimeWorkerResourceSnapshot>;
+  }
+
+  async writeHeapSnapshot(path: string, maxBytes: number): Promise<number> {
+    const stream = await this.worker.getHeapSnapshot();
+    let bytes = 0;
+    const limiter = new Transform({
+      transform(chunk: Buffer, _encoding, callback) {
+        bytes += chunk.length;
+        callback(bytes > maxBytes ? new Error('mcp_surface_runtime_heap_snapshot_size_limit') : null, chunk);
+      },
+    });
+    try {
+      await pipeline(stream, limiter, createWriteStream(path, { flags: 'wx', mode: 0o600 }));
+      return (await stat(path)).size;
+    } catch (error) {
+      await rm(path, { force: true });
+      throw error;
+    }
   }
 
   async close(): Promise<void> {

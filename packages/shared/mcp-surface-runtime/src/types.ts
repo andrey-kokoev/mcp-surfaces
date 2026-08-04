@@ -115,6 +115,29 @@ export type SurfaceRuntimeInstanceStatus = {
   };
 };
 
+export type RuntimeWorkerResourceSnapshot = {
+  sampled_at: string;
+  heap_total_bytes: number;
+  heap_used_bytes: number;
+  external_bytes: number;
+  array_buffers_bytes: number;
+  heap_limit_bytes: number;
+  active_resource_counts: Record<string, number>;
+  invocation_count: number;
+  inflight: number;
+};
+
+export type SurfaceRuntimeResourceSnapshot = {
+  schema: 'narada.mcp_surface_runtime.resources.v1';
+  sampled_at: string;
+  parent: RuntimeWorkerResourceSnapshot & { pid: number };
+  instances: Array<SurfaceRuntimeInstanceStatus & {
+    resource_status: 'complete' | 'unavailable';
+    resources: RuntimeWorkerResourceSnapshot | null;
+    unavailable_reason: string | null;
+  }>;
+};
+
 export interface RuntimeGenerationAdapter {
   readonly kind: SurfaceAdapterSpec['kind'];
   readonly toolNames: readonly string[];
@@ -122,6 +145,8 @@ export interface RuntimeGenerationAdapter {
   call(request: SurfaceRuntimeRequest, context: SurfaceInvocationContext): Promise<SurfaceRuntimeJson>;
   health(): Promise<SurfaceRuntimeHealth>;
   assessReplacement(candidate: SurfaceReplacementCandidate): Promise<SurfaceReplacementAssessment | null>;
+  resourceSnapshot(inflight: number, invocationCount: number): Promise<RuntimeWorkerResourceSnapshot | null>;
+  writeHeapSnapshot(path: string, maxBytes: number): Promise<number>;
   close(): Promise<void>;
 }
 
