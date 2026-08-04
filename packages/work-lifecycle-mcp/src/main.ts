@@ -10,6 +10,7 @@ import {
 import { runJsonRpcStdioServer } from '@narada-core/task-lifecycle-mcp/stdio-json-rpc';
 import {
   inspectPreparedWorkLifecycleStore,
+  migrateLegacyTaskLifecycleToWorkLifecycle,
   openPreparedWorkLifecycleStore,
   prepareWorkLifecycleStore,
   type TicketStatus,
@@ -803,9 +804,22 @@ function optionalInteger(value: unknown): number | undefined {
   return typeof value === 'number' && Number.isInteger(value) ? value : undefined;
 }
 
-function parseArgs(argv: string[]): { siteRoot?: string; prepare: boolean; help: boolean } {
-  const parsed: { siteRoot?: string; prepare: boolean; help: boolean } = {
+function parseArgs(argv: string[]): {
+  siteRoot?: string;
+  prepare: boolean;
+  migrateLegacy: boolean;
+  sourceDatabasePath?: string;
+  help: boolean;
+} {
+  const parsed: {
+    siteRoot?: string;
+    prepare: boolean;
+    migrateLegacy: boolean;
+    sourceDatabasePath?: string;
+    help: boolean;
+  } = {
     prepare: false,
+    migrateLegacy: false,
     help: false,
   };
   for (let index = 0; index < argv.length; index += 1) {
@@ -815,6 +829,11 @@ function parseArgs(argv: string[]): { siteRoot?: string; prepare: boolean; help:
       index += 1;
     } else if (arg === '--prepare') {
       parsed.prepare = true;
+    } else if (arg === '--migrate-legacy') {
+      parsed.migrateLegacy = true;
+    } else if (arg === '--source-database-path' && argv[index + 1]) {
+      parsed.sourceDatabasePath = argv[index + 1];
+      index += 1;
     } else if (arg === '--help' || arg === '-h') {
       parsed.help = true;
     }
@@ -849,10 +868,20 @@ export async function runWorkLifecycleMcpServer(options: {
   const stderr = options.stderr ?? process.stderr;
   const parsed = parseArgs(argv);
   if (parsed.help) {
-    stdout.write('Usage: work-lifecycle-mcp [--prepare] --site-root <path>\n');
+    stdout.write('Usage: work-lifecycle-mcp [--prepare | --migrate-legacy --source-database-path <path>] --site-root <path>\n');
     return;
   }
   const siteRoot = parsed.siteRoot ?? env.NARADA_SITE_ROOT ?? process.cwd();
+  if (parsed.prepare && parsed.migrateLegacy) {
+    throw new Error('work_lifecycle_prepare_and_migrate_are_mutually_exclusive');
+  }
+  if (parsed.migrateLegacy) {
+    if (!parsed.sourceDatabasePath) throw new Error('work_lifecycle_migration_source_database_path_required');
+    stdout.write(`${JSON.stringify(migrateLegacyTaskLifecycleToWorkLifecycle(siteRoot, {
+      sourceDatabasePath: parsed.sourceDatabasePath,
+    }))}\n`);
+    return;
+  }
   if (parsed.prepare) {
     stdout.write(`${JSON.stringify(prepareWorkLifecycleStore(siteRoot))}\n`);
     return;
