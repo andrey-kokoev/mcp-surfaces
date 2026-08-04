@@ -20,11 +20,21 @@ export type GraphMailPolicy = {
   send_approval_token: string | null;
   allow_folder_create: boolean;
   allow_message_move: boolean;
+  allow_message_mark_read: boolean;
   mailbox_organization_approval_token: string | null;
 };
 
 function asRecord(value: unknown): GraphMailRecord {
   return value && typeof value === 'object' && !Array.isArray(value) ? value as GraphMailRecord : {};
+}
+
+export function decideMessageMarkRead(
+  policy: GraphMailPolicy,
+  args: GraphMailRecord,
+): { status: 'allowed' | 'refused'; reason?: string } {
+  if (!policy.allow_message_mark_read) return { status: 'refused', reason: 'message_mark_read_disallowed_by_policy' };
+  if (args.confirm_write !== true && args.confirmWrite !== true) return { status: 'refused', reason: 'confirm_write_required' };
+  return { status: 'allowed' };
 }
 
 function asStringArray(value: unknown): string[] {
@@ -62,6 +72,7 @@ export function loadGraphMailPolicy(siteRootInput: string): GraphMailPolicy {
         : null,
     allow_folder_create: config.allow_folder_create === true || config.allowFolderCreate === true,
     allow_message_move: config.allow_message_move === true || config.allowMessageMove === true,
+    allow_message_mark_read: config.allow_message_mark_read === true || config.allowMessageMarkRead === true,
     mailbox_organization_approval_token: typeof config.mailbox_organization_approval_token === 'string'
       ? config.mailbox_organization_approval_token
       : typeof config.mailboxOrganizationApprovalToken === 'string'

@@ -4,7 +4,7 @@ import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import {
   loadControlPlaneRuntime,
-  loadSiteGraphEnvironment,
+  buildDelegatedGraphTokenProvider,
   type ControlPlaneRuntime,
   type Fact,
   type FactStore,
@@ -70,7 +70,6 @@ export class MailboxDomainService {
   }
 
   async syncGeneration(args: JsonRecord): Promise<JsonRecord> {
-    await loadSiteGraphEnvironment(this.siteRoot);
     const kernel = await this.runtime();
     const idempotencyKey = requiredBoundedString(args.idempotency_key, 'mailbox_sync_idempotency_key_required', MAX_IDEMPOTENCY_KEY);
     const loaded = await this.loadScope(args, kernel);
@@ -151,7 +150,7 @@ export class MailboxDomainService {
         generationId,
         leaseToken,
         store,
-        source: this.options.sourceFactory?.(loaded.scope) ?? createGraphSource(kernel, loaded.scope),
+        source: this.options.sourceFactory?.(loaded.scope) ?? createGraphSource(kernel, loaded.scope, this.siteRoot),
         sourceRecordToFact: kernel.sourceRecordToFact,
         artifactPath: this.generationArtifactPath(generationId),
         assertLease,
@@ -666,7 +665,7 @@ class GenerationSource implements Source {
   }
 }
 
-function createGraphSource(kernel: ControlPlaneRuntime, scope: ScopeConfig): Source {
+function createGraphSource(kernel: ControlPlaneRuntime, scope: ScopeConfig, siteRoot: string): Source {
   const configured = scope.graph ?? scope.sources.find((source) => source.type === 'graph');
   if (!configured?.user_id) throw new Error(`mailbox_scope_graph_source_required:${scope.scope_id}`);
   const graph = {
@@ -677,7 +676,9 @@ function createGraphSource(kernel: ControlPlaneRuntime, scope: ScopeConfig): Sou
     base_url: configured.base_url,
     prefer_immutable_ids: configured.prefer_immutable_ids ?? true,
   };
-  const tokenProvider = kernel.buildGraphTokenProvider({ graph });
+  const tokenProvider = configured.auth_mode === 'delegated_token_store'
+    ? buildDelegatedGraphTokenProvider(siteRoot)
+    : kernel.buildGraphTokenProvider({ graph });
   const client = new kernel.GraphHttpClient({
     tokenProvider,
     baseUrl: graph.base_url,

@@ -1,4 +1,5 @@
-import { readFile } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
+import { readFile, rename, writeFile } from 'node:fs/promises';
 import { dirname, join, parse, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
@@ -44,6 +45,7 @@ export interface ScopeConfig {
   root_dir: string;
   sources: Array<JsonRecord & { type: string; user_id?: string; base_url?: string; prefer_immutable_ids?: boolean; tenant_id?: string; client_id?: string; client_secret?: string }>;
   graph?: {
+    auth_mode?: 'delegated_token_store' | 'control_plane_default';
     tenant_id?: string;
     client_id?: string;
     client_secret?: string;
@@ -179,54 +181,73 @@ export async function loadControlPlaneRuntime(siteRoot: string): Promise<Control
   return runtime;
 }
 
-const SITE_GRAPH_ENV_KEYS = [
-  'GRAPH_ACCESS_TOKEN',
-  'GRAPH_TENANT_ID',
-  'GRAPH_CLIENT_ID',
-  'GRAPH_CLIENT_SECRET',
-] as const;
+type DelegatedGraphToken = {
+  schema: 'narada.graph_mail_mcp.delegated_token.v1';
+  tenant_id: string;
+  client_id: string;
+  scope: string;
+  access_token: string;
+  refresh_token?: string;
+  expires_at_ms: number;
+  acquired_at: string;
+};
 
-export async function loadSiteGraphEnvironment(siteRoot: string): Promise<void> {
-  const envPath = resolve(siteRoot, '.env');
-  let content: string;
-  try {
-    content = await readFile(envPath, 'utf8');
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return;
-    throw new Error(`mailbox_graph_credential_file_unreadable:${envPath}`, { cause: error });
-  }
+export function buildDelegatedGraphTokenProvider(siteRoot: string): { getAccessToken(): Promise<string>; invalidateAccessToken(): void } {
+  const tokenPath = join(resolve(siteRoot), '.ai', 'runtime', 'graph-mail-mcp', 'delegated-token.json');
+  if (!existsSync(tokenPath)) throw new Error(`mailbox_graph_delegated_token_missing:${tokenPath}`);
+  return {
+    async getAccessToken(): Promise<string> {
+      const token = await readDelegatedGraphToken(tokenPath);
+      if (token.expires_at_ms > Date.now() + 60_000) return token.access_token;
+      if (!token.refresh_token) throw new Error('mailbox_graph_delegated_token_expired_reauthorization_required');
+      return refreshDelegatedGraphToken(tokenPath, token);
+    },
+    invalidateAccessToken(): void {
+      // Durable state is re-read on every request; no in-memory token cache exists.
+    },
+  };
+}
 
-  const values = new Map<string, string>();
-  for (const rawLine of content.split(/\r?\n/)) {
-    const line = rawLine.trim();
-    if (line.length === 0 || line.startsWith('#')) continue;
-    const assignment = line.startsWith('export ') ? line.slice('export '.length).trim() : line;
-    const separator = assignment.indexOf('=');
-    if (separator <= 0) continue;
-    const key = assignment.slice(0, separator).trim();
-    if (!(SITE_GRAPH_ENV_KEYS as readonly string[]).includes(key)) continue;
-    if (values.has(key)) throw new Error(`mailbox_graph_credential_duplicate:${key}`);
-    let value = assignment.slice(separator + 1).trim();
-    if (
-      value.length >= 2
-      && ((value.startsWith('"') && value.endsWith('"'))
-        || (value.startsWith("'") && value.endsWith("'")))
-    ) {
-      value = value.slice(1, -1);
-    }
-    if (value.length === 0) throw new Error(`mailbox_graph_credential_empty:${key}`);
-    values.set(key, value);
-  }
+async function readDelegatedGraphToken(path: string): Promise<DelegatedGraphToken> {
+  const value = JSON.parse(await readFile(path, 'utf8')) as Partial<DelegatedGraphToken>;
+  if (
+    value.schema !== 'narada.graph_mail_mcp.delegated_token.v1'
+    || typeof value.tenant_id !== 'string'
+    || typeof value.client_id !== 'string'
+    || typeof value.scope !== 'string'
+    || typeof value.access_token !== 'string'
+    || typeof value.expires_at_ms !== 'number'
+  ) throw new Error('mailbox_graph_delegated_token_invalid');
+  return value as DelegatedGraphToken;
+}
 
-  if (values.size === 0) return;
-  if (!values.has('GRAPH_ACCESS_TOKEN')) {
-    for (const key of ['GRAPH_TENANT_ID', 'GRAPH_CLIENT_ID', 'GRAPH_CLIENT_SECRET'] as const) {
-      if (!values.has(key)) throw new Error(`mailbox_graph_credential_missing:${key}`);
-    }
-    // A complete Site-owned app binding must not be shadowed by an ambient token.
-    delete process.env.GRAPH_ACCESS_TOKEN;
+async function refreshDelegatedGraphToken(path: string, token: DelegatedGraphToken): Promise<string> {
+  const endpoint = `https://login.microsoftonline.com/${encodeURIComponent(token.tenant_id)}/oauth2/v2.0/token`;
+  const body = new URLSearchParams({
+    grant_type: 'refresh_token',
+    client_id: token.client_id,
+    refresh_token: token.refresh_token!,
+    scope: token.scope,
+  });
+  const response = await fetch(endpoint, { method: 'POST', body });
+  const text = await response.text();
+  if (!response.ok) throw new Error(`mailbox_graph_delegated_token_refresh_failed:${response.status}`);
+  const payload = JSON.parse(text) as JsonRecord;
+  if (typeof payload.access_token !== 'string' || payload.access_token.trim() === '') {
+    throw new Error('mailbox_graph_delegated_token_refresh_response_invalid');
   }
-  for (const [key, value] of values) process.env[key] = value;
+  const expiresIn = Number(payload.expires_in ?? 3599);
+  const refreshed: DelegatedGraphToken = {
+    ...token,
+    access_token: payload.access_token,
+    refresh_token: typeof payload.refresh_token === 'string' ? payload.refresh_token : token.refresh_token,
+    expires_at_ms: Date.now() + Math.max(60, Number.isFinite(expiresIn) ? expiresIn : 3599) * 1000,
+    acquired_at: new Date().toISOString(),
+  };
+  const temporary = `${path}.${process.pid}.tmp`;
+  await writeFile(temporary, `${JSON.stringify(refreshed)}\n`, { encoding: 'utf8', flag: 'wx' });
+  await rename(temporary, path);
+  return refreshed.access_token;
 }
 
 async function resolveControlPlaneEntrypoint(siteRoot: string): Promise<string> {

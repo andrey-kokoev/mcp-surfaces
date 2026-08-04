@@ -26,6 +26,7 @@ try {
     'graph_mail_folder_list',
     'graph_mail_folder_create',
     'graph_mail_message_move',
+    'graph_mail_message_mark_read',
     'graph_mail_attachment_list',
     'graph_mail_attachment_get',
     'graph_mail_attachment_add',
@@ -55,6 +56,8 @@ try {
   assert.equal(toolRows.find((tool) => tool.name === 'graph_mail_folder_list')?.annotations.readOnlyHint, true);
   assert.equal(toolRows.find((tool) => tool.name === 'graph_mail_folder_create')?.annotations.readOnlyHint, false);
   assert.equal(toolRows.find((tool) => tool.name === 'graph_mail_message_move')?.annotations.destructiveHint, true);
+  assert.equal((toolRows.find((tool) => tool.name === 'graph_mail_message_mark_read') as any)?.annotations.idempotentHint, true);
+  assert.equal(toolRows.find((tool) => tool.name === 'graph_mail_message_mark_read')?.annotations.destructiveHint, false);
   assert.equal(toolRows.find((tool) => tool.name === 'graph_mail_attachment_list')?.annotations.readOnlyHint, true);
   assert.equal(toolRows.find((tool) => tool.name === 'graph_mail_attachment_delete')?.annotations.destructiveHint, true);
   assert.equal(toolRows.find((tool) => tool.name === 'graph_mail_draft_create')?.annotations.readOnlyHint, false);
@@ -68,6 +71,7 @@ try {
   assert.equal(toolRows.find((tool) => tool.name === 'graph_mail_folder_list')?.inputSchema.properties.limit.default, 50);
   assert.equal(toolRows.find((tool) => tool.name === 'graph_mail_folder_create')?.inputSchema.properties.confirm_write.default, false);
   assert.equal(toolRows.find((tool) => tool.name === 'graph_mail_message_move')?.inputSchema.properties.confirm_write.default, false);
+  assert.equal(toolRows.find((tool) => tool.name === 'graph_mail_message_mark_read')?.inputSchema.properties.confirm_write.default, false);
   assert.equal(toolRows.find((tool) => tool.name === 'graph_mail_auth_clear')?.inputSchema.properties.confirm_clear.default, false);
   assert.equal((toolRows.find((tool) => tool.name === 'graph_mail_folder_create') as any)?.inputSchema?.required?.join(','), 'display_name');
   assert.equal((toolRows.find((tool) => tool.name === 'graph_mail_message_move') as any)?.inputSchema?.required?.join(','), 'message_id,destination_folder_id');

@@ -5,7 +5,7 @@ import { closeSync, existsSync, mkdirSync, openSync, readFileSync, readSync, sta
 import { createHash, randomUUID } from 'node:crypto';
 import { basename, dirname, join, resolve } from 'node:path';
 import { assertAttachmentUploadUrlAllowed, buildGraphUrl, graphMailboxPath, graphRequest, graphTop, messagePatchFromArgs, recipients, requiredString } from './graph-client.js';
-import { decideDraftSend, decideMailboxOrganizationWrite, loadGraphMailPolicy, recordGraphMailAudit } from './policy.js';
+import { decideDraftSend, decideMailboxOrganizationWrite, decideMessageMarkRead, loadGraphMailPolicy, recordGraphMailAudit } from './policy.js';
 import { buildGraphMailTelemetryDeclaration, emitTelemetryEvent, telemetryErrorCodeFromUnknown, telemetryRefusalCodeFromResult, type TelemetryDeclaration, type TelemetryEventKind } from '@narada-core/mcp-telemetry';
 import { buildBoundedToolResult, outputShowAsync } from '@narada-core/mcp-transport';
 import {
@@ -34,6 +34,7 @@ const GRAPH_MAIL_TELEMETRY_TOOL_NAMES = new Set([
   'graph_mail_folder_list',
   'graph_mail_folder_create',
   'graph_mail_message_move',
+  'graph_mail_message_mark_read',
   'graph_mail_attachment_list',
   'graph_mail_attachment_get',
   'graph_mail_attachment_add',
@@ -93,12 +94,83 @@ type DelegatedTokenState = {
   client_id: string;
   scope: string;
   access_token: string;
+  refresh_token?: string;
   expires_at_ms: number;
   acquired_at: string;
 };
 
 function asRecord(value: unknown): GraphMailRecord {
   return value && typeof value === 'object' && !Array.isArray(value) ? value as GraphMailRecord : {};
+}
+
+async function graphMailMessageMarkRead(args: GraphMailRecord, state: GraphMailServerState): Promise<GraphMailRecord> {
+  const policy = loadGraphMailPolicy(state.siteRoot);
+  const messageId = requiredString(args, 'message_id');
+  const decision = decideMessageMarkRead(policy, args);
+  if (decision.status !== 'allowed') {
+    recordGraphMailAudit(state.siteRoot, {
+      event_kind: 'message_mark_read_refused',
+      mailbox_id: args.mailbox_id ?? 'me',
+      message_id: messageId,
+      reason: decision.reason,
+    });
+    return {
+      schema: 'narada.graph_mail_mcp.message_mark_read.v1',
+      status: 'refused',
+      reason: decision.reason,
+      message_id: messageId,
+    };
+  }
+  const { accessToken, fetchImpl } = await clientParts(state, policy);
+  const path = graphMailboxPath(args.mailbox_id, `messages/${encodeURIComponent(messageId)}`, policy);
+  recordGraphMailAudit(state.siteRoot, {
+    event_kind: 'message_mark_read_requested',
+    mailbox_id: args.mailbox_id ?? 'me',
+    message_id: messageId,
+  });
+  await graphRequest({ policy, accessToken, fetchImpl }, { method: 'PATCH', path, body: { isRead: true } });
+  recordGraphMailAudit(state.siteRoot, {
+    event_kind: 'message_mark_read_completed',
+    mailbox_id: args.mailbox_id ?? 'me',
+    message_id: messageId,
+  });
+  return {
+    schema: 'narada.graph_mail_mcp.message_mark_read.v1',
+    status: 'marked_read',
+    message_id: messageId,
+  };
+}
+
+async function refreshDelegatedToken(state: GraphMailServerState, token: DelegatedTokenState): Promise<DelegatedTokenState> {
+  const endpoint = `https://login.microsoftonline.com/${encodeURIComponent(token.tenant_id)}/oauth2/v2.0/token`;
+  const body = new URLSearchParams({
+    grant_type: 'refresh_token',
+    client_id: token.client_id,
+    refresh_token: token.refresh_token!,
+    scope: token.scope,
+  });
+  const response = await state.fetchImpl(endpoint, { method: 'POST', body } as any);
+  const text = typeof response.text === 'function' ? await response.text() : '';
+  if (!response.ok || response.status < 200 || response.status >= 300) {
+    throw new Error(`ms_graph_delegated_token_refresh_failed:${response.status}:${redactTokenResponse(text || response.statusText || 'unknown_error')}`);
+  }
+  const payload = parseJsonRecord(text);
+  const accessToken = requiredString(payload, 'access_token');
+  const expiresInSeconds = positiveInteger(payload.expires_in, 3599);
+  const refreshed: DelegatedTokenState = {
+    ...token,
+    access_token: accessToken,
+    refresh_token: stringOption(payload.refresh_token) ?? token.refresh_token,
+    expires_at_ms: Date.now() + Math.max(60, expiresInSeconds) * 1000,
+    acquired_at: new Date().toISOString(),
+  };
+  writeJson(delegatedTokenPath(state.siteRoot), refreshed);
+  recordGraphMailAudit(state.siteRoot, {
+    event_kind: 'delegated_token_refreshed',
+    scope: refreshed.scope,
+    expires_at_ms: refreshed.expires_at_ms,
+  });
+  return refreshed;
 }
 
 async function graphMailTicketDraftDiscard(
@@ -448,6 +520,12 @@ export function listTools(): unknown[] {
       confirm_write: { type: 'boolean', default: false, description: 'Must be true for message move attempts.' },
       approval_token: { type: 'string', description: 'Optional site-configured mailbox organization approval token.' },
     }, ['message_id', 'destination_folder_id']),
+    tool('graph_mail_message_mark_read', 'Idempotently mark one live Microsoft Graph message read after durable downstream admission.', {
+      mailbox_id: { type: 'string', default: 'me', description: 'Mailbox id or user principal. Defaults to the only allowed mailbox when policy has one, otherwise me.' },
+      message_id: { type: 'string', description: 'Graph message id.' },
+      confirm_write: { type: 'boolean', default: false, description: 'Must be true for mark-read attempts.' },
+      idempotency_key: { type: 'string', description: 'Stable SOP action occurrence key.' },
+    }, ['message_id']),
     tool('graph_mail_attachment_list', 'List attachments for a live message or draft.', {
       mailbox_id: { type: 'string', default: 'me', description: 'Mailbox id or user principal. Defaults to the only allowed mailbox when policy has one, otherwise me.' },
       message_id: { type: 'string', description: 'Message id or draft id.' },
@@ -825,6 +903,9 @@ async function callTool(params: GraphMailRecord, state: GraphMailServerState) {
       case 'graph_mail_message_move':
         result = await graphMailMessageMove(args, state);
         break;
+      case 'graph_mail_message_mark_read':
+        result = await graphMailMessageMarkRead(args, state);
+        break;
       case 'graph_mail_attachment_list':
         result = await graphMailAttachmentList(args, state);
         break;
@@ -968,6 +1049,7 @@ async function graphMailDoctor(state: GraphMailServerState): Promise<GraphMailRe
     send_approval_token_configured: !!policy.send_approval_token,
     allow_folder_create: policy.allow_folder_create,
     allow_message_move: policy.allow_message_move,
+    allow_message_mark_read: policy.allow_message_mark_read,
     mailbox_organization_approval_token_configured: !!policy.mailbox_organization_approval_token,
     server_name: state.serverName,
   };
@@ -1070,6 +1152,9 @@ async function graphMailAuthDeviceCodePoll(args: GraphMailRecord, state: GraphMa
     client_id: flow.client_id,
     scope: flow.scope,
     access_token: accessToken,
+    ...(typeof payload.refresh_token === 'string' && payload.refresh_token.trim() !== ''
+      ? { refresh_token: payload.refresh_token }
+      : {}),
     expires_at_ms: Date.now() + Math.max(60, expiresInSeconds) * 1000,
     acquired_at: new Date().toISOString(),
   };
@@ -1904,15 +1989,22 @@ async function clientParts(state: GraphMailServerState, policy = loadGraphMailPo
 async function resolveAccessToken(state: GraphMailServerState, options: { probeOnly?: boolean } = {}): Promise<{ available: true; accessToken: string; authMode: string } | { available: false; accessToken: null; authMode: 'missing' }> {
   if (state.accessToken) return { available: true, accessToken: state.accessToken, authMode: 'access_token' };
   const delegatedToken = readDelegatedToken(state.siteRoot);
-  if (delegatedToken && delegatedToken.expires_at_ms > Date.now() + 60_000) {
+  if (delegatedToken) {
     const policy = loadGraphMailPolicy(state.siteRoot);
     if (policy.allow_device_code_auth && scopeAllowed(policy, delegatedToken.scope)) {
-      return { available: true, accessToken: options.probeOnly ? '<delegated_device_code_available>' : delegatedToken.access_token, authMode: 'delegated_device_code' };
+      if (delegatedToken.expires_at_ms > Date.now() + 60_000) {
+        return { available: true, accessToken: options.probeOnly ? '<delegated_device_code_available>' : delegatedToken.access_token, authMode: 'delegated_device_code' };
+      }
+      if (delegatedToken.refresh_token) {
+        if (options.probeOnly) return { available: true, accessToken: '<delegated_device_code_refreshable>', authMode: 'delegated_device_code' };
+        const refreshed = await refreshDelegatedToken(state, delegatedToken);
+        return { available: true, accessToken: refreshed.access_token, authMode: 'delegated_device_code' };
+      }
     }
   }
   if (!state.tenantId || !state.clientId || !state.clientSecret) {
     if (options.probeOnly) return { available: false, accessToken: null, authMode: 'missing' };
-    throw new Error('ms_graph_auth_required: set MS_GRAPH_ACCESS_TOKEN or GRAPH_TENANT_ID/GRAPH_CLIENT_ID/GRAPH_CLIENT_SECRET');
+    throw new Error('ms_graph_auth_required: authorize the configured delegated device-code account');
   }
   if (state.tokenCache && state.tokenCache.expiresAtMs > Date.now() + 60_000) {
     return { available: true, accessToken: state.tokenCache.accessToken, authMode: 'client_credentials' };
@@ -1969,8 +2061,9 @@ function delegatedTokenSummary(siteRoot: string): GraphMailRecord {
   const token = readDelegatedToken(siteRoot);
   if (!token) return { status: 'missing', fresh: false };
   return {
-    status: token.expires_at_ms > Date.now() + 60_000 ? 'available' : 'expired',
+    status: token.expires_at_ms > Date.now() + 60_000 ? 'available' : token.refresh_token ? 'refreshable' : 'expired',
     fresh: token.expires_at_ms > Date.now() + 60_000,
+    refreshable: !!token.refresh_token,
     auth_mode: token.auth_mode,
     tenant_id: token.tenant_id,
     client_id: token.client_id,
@@ -1998,6 +2091,7 @@ function readDelegatedToken(siteRoot: string): DelegatedTokenState | null {
     client_id: clientId,
     scope,
     access_token: accessToken,
+    ...(stringOption(record.refresh_token) ? { refresh_token: stringOption(record.refresh_token)! } : {}),
     expires_at_ms: expiresAtMs,
     acquired_at: stringOption(record.acquired_at) ?? '',
   };
@@ -2066,20 +2160,10 @@ function boundedInteger(value: unknown, fallback: number, minimum: number, maxim
 }
 
 function loadGraphMailEnvironment(siteRoot: string): Record<string, string> {
-  const env: Record<string, string> = { ...readEnvFile(resolve(siteRoot, '..', '.env')), ...readEnvFile(resolve(siteRoot, '.env')) };
+  void siteRoot;
+  const env: Record<string, string> = {};
   for (const [key, value] of Object.entries(process.env)) {
     if (typeof value === 'string') env[key] = value;
-  }
-  return env;
-}
-
-function readEnvFile(path: string): Record<string, string> {
-  if (!existsSync(path)) return {};
-  const env: Record<string, string> = {};
-  for (const line of readFileSync(path, 'utf8').split(/\r?\n/)) {
-    const match = /^\s*([^#=\s]+)\s*=\s*(.*)\s*$/.exec(line);
-    if (!match) continue;
-    env[match[1]] = match[2].replace(/^['"]|['"]$/g, '');
   }
   return env;
 }
@@ -2141,6 +2225,7 @@ const GRAPH_MAIL_IDEMPOTENT_TOOLS = new Set([
   'graph_mail_ticket_draft_disposition_scan',
   'graph_mail_ticket_draft_disposition_list',
   'graph_mail_ticket_draft_disposition_ack',
+  'graph_mail_message_mark_read',
 ]);
 
 function tool(name: string, description: string, properties: unknown, required: string[] = []): unknown {

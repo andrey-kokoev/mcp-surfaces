@@ -79,6 +79,7 @@ try {
   assert.equal(doctor.result.structuredContent.allow_send_draft, false);
   assert.equal(doctor.result.structuredContent.allow_folder_create, false);
   assert.equal(doctor.result.structuredContent.allow_message_move, false);
+  assert.equal(doctor.result.structuredContent.allow_message_mark_read, false);
   assert.equal(doctor.result.structuredContent.mailbox_organization_approval_token_configured, false);
   assert.deepEqual(doctor.result.structuredContent.allowed_attachment_roots, [root]);
 
@@ -97,6 +98,7 @@ try {
     'graph_mail_folder_list',
     'graph_mail_folder_create',
     'graph_mail_message_move',
+    'graph_mail_message_mark_read',
     'graph_mail_attachment_list',
     'graph_mail_attachment_get',
     'graph_mail_attachment_add',
@@ -127,6 +129,8 @@ try {
   assert.equal(toolRows.find((tool: DynamicTestValue) => tool.name === 'graph_mail_folder_list')?.annotations.readOnlyHint, true);
   assert.equal(toolRows.find((tool: DynamicTestValue) => tool.name === 'graph_mail_folder_create')?.annotations.readOnlyHint, false);
   assert.equal(toolRows.find((tool: DynamicTestValue) => tool.name === 'graph_mail_message_move')?.annotations.destructiveHint, true);
+  assert.equal(toolRows.find((tool: DynamicTestValue) => tool.name === 'graph_mail_message_mark_read')?.annotations.idempotentHint, true);
+  assert.equal(toolRows.find((tool: DynamicTestValue) => tool.name === 'graph_mail_message_mark_read')?.annotations.destructiveHint, false);
   assert.equal(toolRows.find((tool: DynamicTestValue) => tool.name === 'graph_mail_attachment_upload_chunk')?.annotations.readOnlyHint, false);
   assert.equal(toolRows.find((tool: DynamicTestValue) => tool.name === 'graph_mail_ticket_draft_upsert')?.annotations.idempotentHint, true);
   assert.equal(toolRows.find((tool: DynamicTestValue) => tool.name === 'graph_mail_ticket_draft_discard')?.annotations.destructiveHint, true);
@@ -138,6 +142,7 @@ try {
   assert.equal(toolRows.find((tool: DynamicTestValue) => tool.name === 'graph_mail_folder_list')?.inputSchema.properties.limit.default, 50);
   assert.equal(toolRows.find((tool: DynamicTestValue) => tool.name === 'graph_mail_folder_create')?.inputSchema.properties.confirm_write.default, false);
   assert.equal(toolRows.find((tool: DynamicTestValue) => tool.name === 'graph_mail_message_move')?.inputSchema.properties.confirm_write.default, false);
+  assert.equal(toolRows.find((tool: DynamicTestValue) => tool.name === 'graph_mail_message_mark_read')?.inputSchema.properties.confirm_write.default, false);
   assert.equal(toolRows.find((tool: DynamicTestValue) => tool.name === 'graph_mail_auth_clear')?.inputSchema.properties.confirm_clear.default, false);
   assert.equal(toolRows.find((tool: DynamicTestValue) => tool.name === 'graph_mail_attachment_get')?.inputSchema.properties.include_content.default, true);
   assert.equal(toolRows.find((tool: DynamicTestValue) => tool.name === 'graph_mail_attachment_list')?.inputSchema.properties.limit.default, 20);
@@ -211,10 +216,27 @@ try {
   assert.equal(blockedMessageMove.error, undefined);
   assert.equal(blockedMessageMove.result.structuredContent.status, 'refused');
   assert.equal(blockedMessageMove.result.structuredContent.reason, 'message_move_disallowed_by_policy');
+  const blockedMessageMarkRead = await rpc({
+    jsonrpc: '2.0',
+    id: 351,
+    method: 'tools/call',
+    params: {
+      name: 'graph_mail_message_mark_read',
+      arguments: {
+        mailbox_id: 'support@example.test',
+        message_id: 'message-1',
+        confirm_write: true,
+      },
+    },
+  }, blockedFolderState);
+  assert.equal(blockedMessageMarkRead.error, undefined);
+  assert.equal(blockedMessageMarkRead.result.structuredContent.status, 'refused');
+  assert.equal(blockedMessageMarkRead.result.structuredContent.reason, 'message_mark_read_disallowed_by_policy');
   assert.equal(blockedFolderCalls.length, 1);
   const blockedMailboxOrganizationAudit = readFileSync(join(root, '.ai', 'audit', 'graph-mail-mcp.jsonl'), 'utf8');
   assert.match(blockedMailboxOrganizationAudit, /folder_create_refused/);
   assert.match(blockedMailboxOrganizationAudit, /message_move_refused/);
+  assert.match(blockedMailboxOrganizationAudit, /message_mark_read_refused/);
 
   const blockedAuth = await rpc({
     jsonrpc: '2.0',
@@ -394,6 +416,7 @@ try {
     allowed_mailboxes: ['support@example.test'],
     allow_folder_create: true,
     allow_message_move: true,
+    allow_message_mark_read: true,
     mailbox_organization_approval_token: 'organize-123',
   }));
   const folderCalls: CapturedRequest[] = [];
@@ -403,6 +426,7 @@ try {
     fetchImpl: mockFetch(folderCalls, [
       { body: { id: 'folder-2', displayName: 'Customers' } },
       { body: { id: 'message-2', parentFolderId: 'folder-2' } },
+      { status: 204, text: '' },
     ]),
   });
 
@@ -483,9 +507,28 @@ try {
   assert.equal(folderCalls[1].url, 'https://graph.example.test/v1.0/users/support%40example.test/messages/message-1/move');
   assert.equal(JSON.parse(folderCalls[1].init.body).destinationId, 'folder-2');
   assert.equal(messageMove.result.structuredContent.message.id, 'message-2');
+  const messageMarkRead = await rpc({
+    jsonrpc: '2.0',
+    id: 331,
+    method: 'tools/call',
+    params: {
+      name: 'graph_mail_message_mark_read',
+      arguments: {
+        mailbox_id: 'support@example.test',
+        message_id: 'message-1',
+        confirm_write: true,
+      },
+    },
+  }, folderState);
+  assert.equal(messageMarkRead.error, undefined);
+  assert.equal(folderCalls[2].init.method, 'PATCH');
+  assert.equal(folderCalls[2].url, 'https://graph.example.test/v1.0/users/support%40example.test/messages/message-1');
+  assert.deepEqual(JSON.parse(folderCalls[2].init.body), { isRead: true });
+  assert.equal(messageMarkRead.result.structuredContent.status, 'marked_read');
   const allowedMailboxOrganizationAudit = readFileSync(join(root, '.ai', 'audit', 'graph-mail-mcp.jsonl'), 'utf8');
   assert.match(allowedMailboxOrganizationAudit, /folder_create_completed/);
   assert.match(allowedMailboxOrganizationAudit, /message_move_completed/);
+  assert.match(allowedMailboxOrganizationAudit, /message_mark_read_completed/);
 
   const attachmentList = await rpc({
     jsonrpc: '2.0',
