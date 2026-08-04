@@ -5,10 +5,11 @@
   "type": "module",
   "description": "Standalone MCP surface packages shared by Narada sites and carriers.",
   "scripts": {
-    "build": "node --import tsx scripts/clean-workspace-dist.ts && pnpm --filter @narada-core/process-launch-posture build && pnpm --filter @narada-core/site-operating-loop build && tsc -b --force && pnpm -r --filter \"./packages/**\" --if-present run build:postcompile && node --import tsx scripts/build-workspace-artifact-manifest.ts",
+    "build": "node --import tsx scripts/prepare-workspace-build.ts && pnpm --filter @narada-core/process-launch-posture build && pnpm --filter @narada-core/site-operating-loop build && tsc -b --force && pnpm -r --filter \"./packages/**\" --if-present run build:postcompile && node --import tsx scripts/build-workspace-artifact-manifest.ts",
     "materialize:carrier": "node packages/mcp-registrar/dist/src/main.js",
     "typecheck": "tsc -b --pretty false",
-    "test": "pnpm run test:typescript-boundary && pnpm run test:ui-boundary && pnpm -r --filter \"./packages/**\" --workspace-concurrency=1 test",
+    "test": "pnpm run test:typescript-boundary && pnpm run test:ui-boundary && pnpm run test:build-availability-boundary && pnpm -r --filter \"./packages/**\" --workspace-concurrency=1 test",
+    "test:build-availability-boundary": "node --import tsx --test test/build-availability-boundary.test.ts",
     "test:typescript-boundary": "node --import tsx test/typescript-source-boundary.test.ts",
     "test:ui-boundary": "node --import tsx test/ui-neutral-boundary.test.ts",
     "test:local-filesystem": "pnpm --filter @narada-core/local-filesystem-mcp test",

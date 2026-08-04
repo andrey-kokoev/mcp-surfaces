@@ -36,8 +36,19 @@ Standalone MCP surface packages shared by Narada sites and carriers.
 
 ```powershell
 pnpm install
+pnpm build
 pnpm test
 ```
+
+## Build Availability
+
+`pnpm build` validates the project-reference graph without deleting existing
+`dist/` trees, force-emits the current graph, runs package post-compilation,
+and publishes the workspace artifact manifest only after those steps succeed.
+An interrupted or failed build therefore leaves the last successful MCP
+entrypoints present. The manifest and runtime proxy remain responsible for
+refusing stale or partially replaced artifacts; do not add workspace-wide
+pre-build cleanup to the routine build path.
 
 ## Surface Target And Ergonomics
 

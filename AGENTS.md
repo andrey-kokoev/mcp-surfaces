@@ -60,7 +60,7 @@ workspace is the canonical Site root, `.narada` is the control root, and
 ## Getting Started
 
 - Use `pnpm@10.9.0` (pinned via `packageManager` in the root `package.json`; `corepack enable` provides it).
-- Run `pnpm install` after cloning or pulling workspace changes, then `pnpm build`. Package test scripts compile through `tsc -b` into `dist/` and run the compiled output, so a successful build is a prerequisite for any test run.
+- Run `pnpm install` after cloning or pulling workspace changes, then `pnpm build`. Package test scripts compile through `tsc -b` into `dist/` and run the compiled output, so a successful build is a prerequisite for any test run. Routine builds preserve the last successful `dist/` artifacts until replacements are emitted; never add destructive workspace-wide pre-build cleanup because interrupted builds must not remove carrier entrypoints.
 - After editing the root `tsconfig.json` (or any shared build configuration), run a full rebuild with `pnpm exec tsc -b --force`. Incremental builds will not re-emit unchanged packages, and the `mcp-loader-mcp` freshness test compares build-configuration mtimes against `dist/` and will fail until everything is re-emitted.
 - Layout: runnable MCP surfaces live in `packages/*`, shared libraries in `packages/shared/*`, design and doctrine docs in `docs/`, and the root UI-neutrality boundary test in `test/`.
 - Root `pnpm test` runs the boundary gates and every package under this repository's `./packages/**`; linked sibling workspaces may provide dependencies but their own test suites remain owned by those repositories.
@@ -148,6 +148,7 @@ pnpm build
 pnpm materialize:carrier -- --materialize-all [--output-dir <directory>]
 pnpm typecheck
 pnpm test
+pnpm test:build-availability-boundary
 pnpm test:ui-boundary
 pnpm test:mcp-transport
 pnpm test:mcp-telemetry
