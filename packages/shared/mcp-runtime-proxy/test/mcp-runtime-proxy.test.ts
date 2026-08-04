@@ -66,7 +66,8 @@ const manifestForFreshness = {
   packages: [],
   artifacts: [],
 };
-utimesSync(freshnessChildRuntime, new Date(), new Date());
+const rebuiltAt = new Date(statSync(join(freshnessSourceRoot, 'child.ts')).mtimeMs + 2_000);
+utimesSync(freshnessChildRuntime, rebuiltAt, rebuiltAt);
 writeFileSync(manifestForFreshnessPath, `${JSON.stringify({
   ...manifestForFreshness,
   manifest_fingerprint: fingerprintWorkspaceArtifactManifest(manifestForFreshness),
@@ -220,7 +221,7 @@ try {
     child.stdin.end();
 
     const exitCode = await new Promise<number | null>((resolve) => child.on('close', resolve));
-    assert.equal(exitCode, 42);
+    assert.equal(exitCode, 42, `proxy stderr:\n${stderr}`);
     assert.match(stderr, /missing shared dist/);
 
     const response = JSON.parse(stdout.trim());

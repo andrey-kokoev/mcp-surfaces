@@ -30,6 +30,7 @@ export function memoryStatus(_args: JsonRecord = {}, explicitSiteRoot?: string):
     const workerStats = row(db, 'SELECT COUNT(*) samples,MAX(sampled_at_ms) last_sample_at_ms,COUNT(DISTINCT owner_id) sampled_owners FROM worker_samples');
     const owners = row(db, 'SELECT COUNT(*) owners,SUM(CASE WHEN active=1 THEN 1 ELSE 0 END) active_owners FROM owners');
     const incidents = row(db, "SELECT COUNT(*) incidents,SUM(CASE WHEN status='open' THEN 1 ELSE 0 END) open_incidents FROM incidents");
+    const observer = observerOverhead(db);
     const last = Math.max(Number(processStats.last_sample_at_ms ?? 0), Number(workerStats.last_sample_at_ms ?? 0));
     return {
       schema: 'narada.runtime_introspection.memory_status.v1',
@@ -41,6 +42,7 @@ export function memoryStatus(_args: JsonRecord = {}, explicitSiteRoot?: string):
       workers: workerStats,
       ...owners,
       ...incidents,
+      observer,
       authority: 'server_bound_site',
       response: 'evidence_only_no_automatic_actuation',
     };
@@ -135,6 +137,33 @@ export function memoryIncidentShow(args: JsonRecord = {}, explicitSiteRoot?: str
 type SqlValue = string | number | bigint | Uint8Array | null;
 function row(db: DatabaseSyncType, sql: string, ...args: SqlValue[]): JsonRecord { return (db.prepare(sql).get(...args) ?? {}) as JsonRecord; }
 function rows(db: DatabaseSyncType, sql: string, ...args: SqlValue[]): JsonRecord[] { return db.prepare(sql).all(...args) as JsonRecord[]; }
+function tableExists(db: DatabaseSyncType, name: string): boolean { return Boolean(row(db, "SELECT 1 present FROM sqlite_master WHERE type='table' AND name=?1", name).present); }
+function observerOverhead(db: DatabaseSyncType): JsonRecord {
+  if (!tableExists(db, 'observer_cycles')) return {
+    cycles: 0, last_cycle_at_ms: null, average_cycle_duration_ms: null,
+    p95_cycle_duration_ms: null, maximum_cycle_duration_ms: null,
+    average_cpu_percent: null, private_bytes: null,
+  };
+  const cutoff = Date.now() - 60 * 60_000;
+  const cycleRows = rows(db, 'SELECT started_at_ms,duration_ms,sampled_processes FROM observer_cycles WHERE started_at_ms>=?1 ORDER BY started_at_ms DESC LIMIT 360', cutoff);
+  const durations = cycleRows.map((value) => Number(value.duration_ms)).filter(Number.isFinite).sort((a, b) => a - b);
+  const processRows = rows(db, "SELECT sampled_at_ms,cpu_time_ms,private_bytes FROM process_samples WHERE owner_id='observer-overhead' AND sampled_at_ms>=?1 ORDER BY sampled_at_ms ASC", cutoff);
+  const first = processRows.at(0);
+  const last = processRows.at(-1);
+  const elapsed = first && last ? Number(last.sampled_at_ms) - Number(first.sampled_at_ms) : 0;
+  const cpu = first && last ? Number(last.cpu_time_ms) - Number(first.cpu_time_ms) : 0;
+  return {
+    cycles: cycleRows.length,
+    last_cycle_at_ms: cycleRows.at(0)?.started_at_ms ?? null,
+    average_cycle_duration_ms: durations.length ? Math.round(durations.reduce((sum, value) => sum + value, 0) / durations.length) : null,
+    p95_cycle_duration_ms: durations.length ? durations[Math.ceil(durations.length * 0.95) - 1] : null,
+    maximum_cycle_duration_ms: durations.at(-1) ?? null,
+    average_cpu_percent: elapsed > 0 ? Number(((cpu / elapsed) * 100).toFixed(3)) : null,
+    private_bytes: last?.private_bytes ?? null,
+    sampled_processes: cycleRows.at(0)?.sampled_processes ?? null,
+    window: 'last_hour_bounded_to_360_cycles',
+  };
+}
 function parsePayload(value: JsonRecord): JsonRecord { try { return { ...value, payload: JSON.parse(String(value.payload_json)), payload_json: undefined }; } catch { return value; } }
 function requiredString(value: unknown, name: string): string { const result = typeof value === 'string' ? value.trim() : ''; if (!result) throw new Error(`runtime_introspection_memory_argument_required:${name}`); return result; }
 function boundedInt(value: unknown, fallback: number, min: number, max: number): number { const n = Number(value ?? fallback); if (!Number.isInteger(n) || n < min || n > max) throw new Error('runtime_introspection_memory_limit_invalid'); return n; }

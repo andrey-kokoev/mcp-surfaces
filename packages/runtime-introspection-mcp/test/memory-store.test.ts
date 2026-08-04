@@ -18,15 +18,24 @@ test('reads only the canonical Site observer store with bounded owner attributio
     CREATE TABLE incidents(incident_id TEXT,owner_id TEXT,opened_at_ms INTEGER,updated_at_ms INTEGER,status TEXT,detector TEXT,attribution TEXT,confidence REAL,baseline_bytes INTEGER,observed_bytes INTEGER,slope_bytes_per_minute REAL,review_note TEXT);
     CREATE TABLE evidence(evidence_id TEXT,incident_id TEXT,created_at_ms INTEGER,evidence_type TEXT,payload_json TEXT);
     CREATE TABLE artifacts(artifact_id TEXT,incident_id TEXT,created_at_ms INTEGER,path TEXT,kind TEXT,bytes INTEGER);
+    CREATE TABLE observer_cycles(cycle_id TEXT,started_at_ms INTEGER,duration_ms INTEGER,sampled_processes INTEGER,status TEXT);
   `);
   const now = Date.now();
   db.prepare('INSERT INTO owners VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)').run('worker-1','site-1','site:site-1:mcp','surface_worker',100,null,'fixture','instance-1','generation-1',null,'node',new Date().toISOString(),1);
   db.prepare('INSERT INTO process_samples VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)').run('p1',now,'worker-1',100,1,1,1000,1000,1000,0,2,3,4,'node','complete');
   db.prepare('INSERT INTO worker_samples VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)').run('w1',now,'worker-1','instance-1','generation-1',800,600,200,100,4096,2,0,'{}','complete');
+  db.prepare('INSERT INTO owners VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)').run('observer-overhead','site-1','site:site-1:mcp','observer_overhead',200,null,null,null,null,null,'observer',new Date().toISOString(),1);
+  db.prepare('INSERT INTO process_samples VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)').run('op1',now-10_000,'observer-overhead',200,1,1,1500,1500,1500,0,2,3,10,'observer','complete');
+  db.prepare('INSERT INTO process_samples VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)').run('op2',now,'observer-overhead',200,1,1,2000,2000,2000,0,2,3,20,'observer','complete');
+  db.prepare('INSERT INTO observer_cycles VALUES(?,?,?,?,?)').run('c1',now-10_000,10,2,'complete');
+  db.prepare('INSERT INTO observer_cycles VALUES(?,?,?,?,?)').run('c2',now,20,2,'complete');
   db.close();
   try {
-    assert.equal(memoryStatus({}, root).status, 'ready');
-    assert.equal((memoryOwners({}, root).items as unknown[]).length, 1);
+    const status = memoryStatus({}, root);
+    assert.equal(status.status, 'ready');
+    assert.equal((status.observer as Record<string, unknown>).p95_cycle_duration_ms, 20);
+    assert.equal((status.observer as Record<string, unknown>).average_cpu_percent, 0.1);
+    assert.equal((memoryOwners({}, root).items as unknown[]).length, 2);
     assert.equal(memoryAttribution({ owner_id: 'worker-1' }, root).attribution, 'direct');
     assert.equal((memoryTimeline({ owner_id: 'worker-1' }, root).items as unknown[]).length, 2);
   } finally { rmSync(root, { recursive: true, force: true }); }
