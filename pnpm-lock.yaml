@@ -85,6 +85,15 @@ importers:
 
   ../narada/packages/site-paths: {}
 
+  ../narada/packages/sqlite:
+    devDependencies:
+      '@types/node':
+        specifier: ^22.0.0
+        version: 22.19.19
+      typescript:
+        specifier: ^5.3.0
+        version: 5.9.3
+
   packages/agent-context-mcp:
     dependencies:
       '@narada-core/mcp-fabric-contracts':
@@ -93,6 +102,9 @@ importers:
       '@narada-core/mcp-transport':
         specifier: workspace:*
         version: link:../shared/mcp-transport
+      '@narada-core/sqlite':
+        specifier: workspace:*
+        version: link:../../../narada/packages/sqlite
     devDependencies:
       '@narada-core/mcp-e2e-harness':
         specifier: workspace:*
@@ -350,6 +362,9 @@ importers:
       '@narada-core/speech-mcp':
         specifier: workspace:*
         version: link:../speech-mcp
+      '@narada-core/sqlite':
+        specifier: workspace:*
+        version: link:../../../narada/packages/sqlite
       '@narada-core/structured-command-mcp':
         specifier: workspace:*
         version: link:../structured-command-mcp

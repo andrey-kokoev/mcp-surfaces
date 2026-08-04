@@ -6,7 +6,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawn } from 'node:child_process';
-import { DatabaseSync } from 'node:sqlite';
+import { DatabaseSync } from '@narada-core/sqlite';
 
 const siteRoot = mkdtempSync(join(tmpdir(), 'agent-context-mcp-'));
 writeFileSync(join(siteRoot, 'AGENTS.md'), '# Fixture Site\n', 'utf8');

@@ -1,7 +1,7 @@
 
 import assert from 'node:assert/strict';
 import { mkdirSync, writeFileSync } from 'node:fs';
-import { DatabaseSync } from 'node:sqlite';
+import { DatabaseSync } from '@narada-core/sqlite';
 import { fileURLToPath } from 'node:url';
 import {
   createTemporaryE2eRoot,

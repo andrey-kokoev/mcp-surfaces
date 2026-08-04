@@ -27,6 +27,7 @@
     "test:kimi-live": "pnpm -w build && node dist/test/kimi-carrier-live-e2e.test.js"
   },
   "dependencies": {
+    "@narada-core/sqlite": "workspace:*",
     "@narada-core/local-filesystem-mcp": "workspace:*",
     "@narada-core/structured-command-mcp": "workspace:*",
     "@narada-core/git-mcp": "workspace:*",

@@ -14,6 +14,10 @@ Use this package to identify a site-bound agent session, start durable session e
 
 ## Runtime
 
+This is a Bun-first surface. Registrar-generated carrier bindings launch it with
+`bun`; Node remains a supported compatibility runtime through the shared SQLite
+adapter.
+
 The server uses a site root and these environment variables when present:
 
 - `NARADA_AGENT_ID`
@@ -24,7 +28,7 @@ It expects site-local evidence such as `AGENTS.md` and `.ai/agents/roster.json` 
 
 ```powershell
 pnpm --filter @narada-core/agent-context-mcp build
-node packages/agent-context-mcp/dist/src/main.js --site-root D:/code/site --site-id narada.example
+bun packages/agent-context-mcp/dist/src/main.js --site-root <src-root>/site --site-id narada.example
 ```
 
 ## Tools
@@ -62,4 +66,5 @@ Agents should hydrate at startup, checkpoint meaningful state transitions, and r
 
 ```powershell
 pnpm --filter @narada-core/agent-context-mcp test
+pnpm --filter @narada-core/agent-context-mcp run test:node
 ```

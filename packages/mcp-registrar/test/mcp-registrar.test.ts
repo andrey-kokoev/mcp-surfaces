@@ -2,13 +2,22 @@ import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { DatabaseSync } from 'node:sqlite';
+import { DatabaseSync } from '@narada-core/sqlite';
 import { payloadCreate } from '@narada-core/mcp-transport';
 import { buildGuidanceResult } from '../src/guidance.js';
 import { appendLoaderAllowedSiteRoots, buildSiteBindConfig, buildSiteSurfaceRegistry, checkOutputReaderClosureForRegistry, checkSiteRegistryConformance, checkSiteRegistryConformanceFromObservation, compareCarrierProjection, createServerState, handleRequest, readCodexPluginOverrides, readSiteSurfaceOverrides, sharedSurfaceIdsForBinding, siteBindSidecarRefusal, siteSurfaceServerKey, validateSiteMcpFabric, validateSiteToolInventoryObservation } from '../src/main.js';
 
+const workspaceRoot = fileURLToPath(new URL('../../../../', import.meta.url));
+const portableWorkspaceRoot = workspaceRoot.replace(/\\/g, '/').replace(/\/$/, '');
+const workspacePath = (...segments: string[]): string => join(workspaceRoot, ...segments).replace(/\\/g, '/');
+const expectedUserSiteRoot = resolve(
+  process.env.NARADA_USER_SITE_ROOT?.trim()
+    || (process.env.USERPROFILE ? join(process.env.USERPROFILE, 'Narada') : '')
+    || (process.env.HOME ? join(process.env.HOME, 'Narada') : '')
+    || join(workspaceRoot, '.narada', 'user-site'),
+).replace(/\\/g, '/');
 const root: any = mkdtempSync(join(tmpdir(), 'mcp-registrar-behavior-'));
 const siteOverrideConfig = join(root, 'site-overrides.json');
 writeFileSync(siteOverrideConfig, JSON.stringify({ surface_overrides: { 'task-lifecycle': { enabled: false } } }), 'utf8');
@@ -122,9 +131,9 @@ try {
   function view(res: Record<string, any>): Record<string, any> {
     return res.result.structuredContent as Record<string, any>;
   }
-  function assertRuntimeProxy(server: Record<string, any>, childEntrypoint: string): void {
+  function assertRuntimeProxy(server: Record<string, any>, childEntrypoint: string, runtime = 'node'): void {
     const args: any = server.args as string[];
-    assert.equal(server.command, 'node');
+    assert.equal(server.command, runtime);
     assert.match(args[0].replace(/\\/g, '/'), /packages\/shared\/mcp-runtime-proxy\/dist\/src\/main\.js$/);
     assert.equal(args[args.indexOf('--entrypoint') + 1].replace(/\\/g, '/'), childEntrypoint.replace(/\\/g, '/'));
     assert.ok(args.includes('--'));
@@ -219,7 +228,7 @@ try {
   assert.equal((speech.narada_scope as Record<string, any>).scope_source, 'registrar_surface_catalog');
   assert.equal((speech.narada_scope as Record<string, any>).injection_scope, 'host');
   assert.equal(speech.default_injection, 'all_carrier_sessions');
-  assert.deepEqual(speech.args, ['--provider-registry-path', 'D:/code/mcp-surfaces/packages/speech-mcp/config/provider-registry.v2.json']);
+  assert.deepEqual(speech.args, ['--provider-registry-path', workspacePath('packages', 'speech-mcp', 'config', 'provider-registry.v2.json')]);
   assert.deepEqual(speech.tools, ['speech_guidance', 'speech_speak', 'speech_voices', 'speech_listen_status', 'speech_capture_transcribe', 'speech_prompt_capture_response', 'speech_listen_start', 'speech_listen_stop']);
   const operatorRouting: any = (surfaceData.items as Array<Record<string, any>>).find((s) => s.id === 'operator-routing');
   assert.ok(operatorRouting);
@@ -265,6 +274,7 @@ try {
   };
   const agentContextBindConfig: any = buildSiteBindConfig(fixtureSite, agentContextSurface as any);
   const agentContextBoundServer: any = (agentContextBindConfig.config.mcpServers as Record<string, any>)[agentContextBindConfig.serverKey];
+  assertRuntimeProxy(agentContextBoundServer, agentContextSurface.entrypoint, 'bun');
   assert.deepEqual(agentContextBoundServer.env_vars, ['NARADA_AGENT_ID', 'NARADA_AGENT_START_EVENT_ID', 'NARADA_CARRIER_SESSION_ID', 'NARADA_SITE_ROOT']);
   assert.throws(
     () => buildSiteBindConfig(fixtureSite, narsSession as any),
@@ -322,7 +332,7 @@ try {
   const registrar: any = (surfaceData.items as Array<Record<string, any>>).find((s) => s.id === 'mcp-registrar');
   assert.ok(registrar);
   assert.equal(registrar.injection_scope, 'user_site');
-  assert.deepEqual(registrar.authority_locus, { kind: 'user_site', site_root: 'C:/Users/Andrey/Narada' });
+  assert.deepEqual(registrar.authority_locus, { kind: 'user_site', site_root: expectedUserSiteRoot });
   assert.ok(registrar.tools.includes('registrar_surface_tool_inventory_check'));
   assert.ok(registrar.tools.includes('registrar_site_registry_conformance_check'));
   assert.ok(registrar.tools.includes('registrar_site_output_reader_closure_check'));
@@ -412,7 +422,7 @@ try {
     mcpServers: {
       'fixture-mailbox': {
         command: 'node',
-        args: ['D:/code/mcp-surfaces/packages/mailbox-mcp/dist/src/main.js', '--site-root', conformanceSiteRoot],
+        args: ['C:/workspace/mcp-surfaces/packages/mailbox-mcp/dist/src/main.js', '--site-root', conformanceSiteRoot],
         tools: mailboxCatalogTools,
         surface_id: 'mailbox',
       },
@@ -541,7 +551,7 @@ try {
       'fixture-git': {
         transport: 'stdio',
         command: 'node',
-        args: ['D:/code/mcp-surfaces/packages/git-mcp/dist/src/main.js'],
+        args: ['C:/workspace/mcp-surfaces/packages/git-mcp/dist/src/main.js'],
         tools: ['git_add', 'git_begin_work_scope', 'git_branch_create', 'git_branch_delete', 'git_branch_delete_remote', 'git_branch_list', 'git_branch_rename', 'git_branch_set_upstream', 'git_branch_switch', 'git_branch_unset_upstream', 'git_changed_summary', 'git_commit', 'git_diff', 'git_fetch', 'git_guidance', 'git_log', 'git_merge', 'git_merge_abort', 'git_merge_continue', 'git_output_show', 'git_policy_inspect', 'git_push', 'git_rebase', 'git_rebase_abort', 'git_rebase_continue', 'git_repositories_summary', 'git_show', 'git_status', 'git_sync_status', 'git_unstage', 'git_workflow_record'],
         surface_id: 'git',
       },
@@ -815,6 +825,8 @@ try {
   const carrierData: any = view(carriers);
   assert.ok((carrierData.items as Array<unknown>).length >= 3);
   const registeredSites: any = view(await call('registrar_site_list', {}));
+  const registeredUserSiteRoot: any = String((registeredSites.items as Array<Record<string, any>>)
+    .find((site) => site.site_id === 'andrey-user')?.root).replace(/\\/g, '/');
   const registeredSiteRoots: any = (registeredSites.items as Array<Record<string, any>>)
     .map((site) => String(site.root).replace(/\\/g, '/'));
   assert.ok(registeredSiteRoots.length > 0);
@@ -831,12 +843,12 @@ try {
   assert.deepEqual(progressiveBootstrap, ['agent-context', 'mcp-registrar', 'mcp-loader', 'local-filesystem']);
   assert.deepEqual(
     appendLoaderAllowedSiteRoots(
-      ['--allowed-site-root', 'D:\\code\\narada.sonar'],
-      ['D:\\code\\narada.sonar', 'D:\\code\\smart-scheduling'],
+      ['--allowed-site-root', 'C:\\workspace\\narada.sonar'],
+      ['C:\\workspace\\narada.sonar', 'C:\\workspace\\smart-scheduling'],
     ),
     [
-      '--allowed-site-root', 'D:\\code\\narada.sonar',
-      '--allowed-site-root', 'D:/code/smart-scheduling',
+      '--allowed-site-root', 'C:\\workspace\\narada.sonar',
+      '--allowed-site-root', 'C:/workspace/smart-scheduling',
     ],
   );
   assert.throws(
@@ -861,7 +873,9 @@ try {
   assert.equal((matData.carriers as Array<Record<string, any>>).some((carrier) => carrier.output_path === materializedPath), true);
   const materializedConfig: any = JSON.parse(readFileSync(materializedPath, 'utf8')) as Record<string, any>;
   const materializedFilesystem: any = materializedConfig.mcpServers['narada-site-andrey-user-local-filesystem'];
-  assertRuntimeProxy(materializedFilesystem, 'D:/code/mcp-surfaces/packages/local-filesystem-mcp/dist/src/main.js');
+  assertRuntimeProxy(materializedFilesystem, workspacePath('packages', 'local-filesystem-mcp', 'dist', 'src', 'main.js'));
+  const materializedAgentContext: any = materializedConfig.mcpServers['narada-site-andrey-user-agent-context'];
+  assertRuntimeProxy(materializedAgentContext, workspacePath('packages', 'agent-context-mcp', 'dist', 'src', 'main.js'), 'bun');
   assert.ok(materializedConfig.mcpServers['narada-site-andrey-user-mcp-loader']);
   assert.ok(materializedConfig.mcpServers['narada-site-andrey-user-mcp-registrar']);
   assert.equal(materializedConfig.mcpServers['narada-site-andrey-user-site-loop'], undefined);
@@ -877,7 +891,7 @@ try {
     const normalizedGeneratedText: any = generatedText.replace(/\\\\/g, '/').replace(/\\/g, '/');
     assert.equal(normalizedGeneratedText.includes('mcp-loader-mcp/dist/src/main.js'), true);
     assert.equal(normalizedGeneratedText.includes('--allowed-site-root'), true);
-    assert.equal(normalizedGeneratedText.includes('D:/code/mcp-surfaces'), true);
+    assert.equal(normalizedGeneratedText.includes(portableWorkspaceRoot), true);
     for (const registeredSiteRoot of registeredSiteRoots) {
       assert.equal(normalizedGeneratedText.includes(registeredSiteRoot), true);
     }
@@ -892,7 +906,7 @@ try {
     assert.equal(normalizedGeneratedText.includes('site-loop-mcp/dist/src/main.js'), false);
     assert.equal(normalizedGeneratedText.includes('site-inbox-mcp/dist/src/main.js'), false);
     assert.equal(normalizedGeneratedText.includes('speech-mcp/dist/src/main.js'), false);
-    assert.equal(normalizedGeneratedText.includes('C:/Users/Andrey/Narada'), true);
+    assert.equal(normalizedGeneratedText.includes(registeredUserSiteRoot), true);
     if (carrierId === 'codex-andrey') {
       assert.match(generatedText, /\[features\]\r?\napps = false\r?\n/);
       assert.equal(generatedText.includes('mcp_loader_open_surface'), true);
@@ -934,14 +948,14 @@ try {
   assert.equal(siteSurfaceServerKey('andrey-user', 'task-lifecycle'), 'narada-site-andrey-user-task-lifecycle');
   const userTaskBindConfig: any = buildSiteBindConfig(
     { site_id: 'andrey-user', root, config_path: join(root, 'site.json'), surfaces: [] },
-    { id: 'task-lifecycle', package: 'task-lifecycle-mcp', entrypoint: 'D:/code/mcp-surfaces/packages/task-lifecycle-mcp/dist/src/task-lifecycle/task-mcp-server.js', kind: 'mcp_surface', args: ['--site-root', '{site_root}'], tools: ['task_lifecycle_guidance'] },
+    { id: 'task-lifecycle', package: 'task-lifecycle-mcp', entrypoint: 'C:/workspace/mcp-surfaces/packages/task-lifecycle-mcp/dist/src/task-lifecycle/task-mcp-server.js', kind: 'mcp_surface', args: ['--site-root', '{site_root}'], tools: ['task_lifecycle_guidance'] },
   );
   const userTaskServer: any = (userTaskBindConfig.config.mcpServers as Record<string, any>)['narada-site-andrey-user-task-lifecycle'];
   assert.ok(userTaskServer.args.includes(root));
   assert.ok(!userTaskServer.args.includes('{site_root}'));
   const bindConfig: any = buildSiteBindConfig(
     { site_id: 'narada-sonar', root, config_path: join(root, 'site.json'), surfaces: [] },
-    { id: 'scheduler', package: 'scheduler-mcp', entrypoint: 'D:/code/mcp-surfaces/packages/scheduler-mcp/dist/src/main.js', kind: 'mcp_surface', args: ['--allowed-root', '{site_root}'], tools: ['scheduler_task_list'] },
+    { id: 'scheduler', package: 'scheduler-mcp', entrypoint: 'C:/workspace/mcp-surfaces/packages/scheduler-mcp/dist/src/main.js', kind: 'mcp_surface', args: ['--allowed-root', '{site_root}'], tools: ['scheduler_task_list'] },
   );
   assert.equal(bindConfig.fileName, 'narada-sonar-scheduler-mcp.json');
   assert.equal(bindConfig.serverKey, 'narada-sonar-scheduler');
@@ -949,7 +963,7 @@ try {
   assert.ok(!(bindConfig.config.mcpServers as Record<string, any>)['sonar-scheduler']);
   const schedServer: any = (bindConfig.config.mcpServers as Record<string, any>)['narada-sonar-scheduler'];
   assert.equal(schedServer.surface_id, 'scheduler');
-  assertRuntimeProxy(schedServer, 'D:/code/mcp-surfaces/packages/scheduler-mcp/dist/src/main.js');
+  assertRuntimeProxy(schedServer, workspacePath('packages', 'scheduler-mcp', 'dist', 'src', 'main.js'));
   assert.equal(schedServer.injection_scope, 'local_site');
   assert.deepEqual(schedServer.authority_locus, { kind: 'local_site', site_root: root });
   assert.equal(schedServer.narada_scope.scope_source, 'registrar_surface_catalog');
@@ -957,7 +971,7 @@ try {
 
   const smartSchedulingBindConfig: any = buildSiteBindConfig(
     { site_id: 'smart-scheduling', root, config_path: join(root, 'site.json'), surfaces: [] },
-    { id: 'scheduler', package: 'scheduler-mcp', entrypoint: 'D:/code/mcp-surfaces/packages/scheduler-mcp/dist/src/main.js', kind: 'mcp_surface', args: ['--allowed-root', '{site_root}'], tools: ['scheduler_task_list'] },
+    { id: 'scheduler', package: 'scheduler-mcp', entrypoint: 'C:/workspace/mcp-surfaces/packages/scheduler-mcp/dist/src/main.js', kind: 'mcp_surface', args: ['--allowed-root', '{site_root}'], tools: ['scheduler_task_list'] },
   );
   assert.equal(smartSchedulingBindConfig.fileName, 'narada-smart-scheduling-scheduler-mcp.json');
   assert.equal(smartSchedulingBindConfig.serverKey, 'narada-smart-scheduling-scheduler');
@@ -969,15 +983,15 @@ try {
     {
       id: 'speech',
       package: 'speech-mcp',
-      entrypoint: 'D:/code/mcp-surfaces/packages/speech-mcp/dist/src/main.js',
+      entrypoint: 'C:/workspace/mcp-surfaces/packages/speech-mcp/dist/src/main.js',
       kind: 'mcp_surface',
-      args: ['--provider-registry-path', 'D:/code/mcp-surfaces/packages/speech-mcp/config/provider-registry.v2.json'],
+      args: ['--provider-registry-path', 'C:/workspace/mcp-surfaces/packages/speech-mcp/config/provider-registry.v2.json'],
       tools: ['speech_speak', 'speech_voices', 'speech_capture_transcribe', 'speech_prompt_capture_response', 'speech_listen_status', 'speech_listen_start', 'speech_listen_stop'],
     },
   );
   const speechServer: any = (speechBindConfig.config.mcpServers as Record<string, any>)['narada-staccato-speech'];
   assert.equal(speechServer.injection_scope, 'host');
-  assertRuntimeProxy(speechServer, 'D:/code/mcp-surfaces/packages/speech-mcp/dist/src/main.js');
+  assertRuntimeProxy(speechServer, workspacePath('packages', 'speech-mcp', 'dist', 'src', 'main.js'));
   assert.equal(speechServer.authority_posture, 'host_injected_mcp_surface');
   assert.deepEqual(speechServer.authority_locus, { kind: 'host' });
   assert.equal(speechServer.bound_into_site, 'narada-staccato');
@@ -991,7 +1005,7 @@ try {
     {
       id: 'worker-delegation',
       package: 'worker-delegation-mcp',
-      entrypoint: 'D:/code/mcp-surfaces/packages/worker-delegation-mcp/dist/src/main.js',
+      entrypoint: 'C:/workspace/mcp-surfaces/packages/worker-delegation-mcp/dist/src/main.js',
       kind: 'mcp_surface',
       args: ['--site-root', '{site_root}', '--allowed-root', '{site_root}', '--run-root', '{site_runtime_root}/worker-delegation'],
       tools: ['worker_run'],
@@ -1000,7 +1014,7 @@ try {
   );
   const workerServer: any = (workerBindConfig.config.mcpServers as Record<string, any>)['narada-sonar-worker-delegation'];
   assert.equal(workerServer.surface_id, 'worker-delegation');
-  assertRuntimeProxy(workerServer, 'D:/code/mcp-surfaces/packages/worker-delegation-mcp/dist/src/main.js');
+  assertRuntimeProxy(workerServer, workspacePath('packages', 'worker-delegation-mcp', 'dist', 'src', 'main.js'));
   assert.ok(workerServer.args.includes('--site-root'));
   assert.equal(workerServer.args[workerServer.args.indexOf('--site-root') + 1], root);
   assert.equal(String(workerServer.args[workerServer.args.indexOf('--run-root') + 1]).replace(/\\/g, '/'), join(root, '.narada', 'runtime', 'worker-delegation').replace(/\\/g, '/'));
@@ -1017,7 +1031,7 @@ try {
     {
       id: 'worker-delegation',
       package: 'worker-delegation-mcp',
-      entrypoint: 'D:/code/mcp-surfaces/packages/worker-delegation-mcp/dist/src/main.js',
+      entrypoint: 'C:/workspace/mcp-surfaces/packages/worker-delegation-mcp/dist/src/main.js',
       kind: 'mcp_surface',
       args: ['--site-root', '{site_root}', '--allowed-root', '{workspace_root}', '--run-root', '{site_runtime_root}/worker-delegation'],
       tools: ['worker_run'],
@@ -1035,11 +1049,11 @@ try {
     {
       id: 'surface-feedback',
       package: 'surface-feedback-mcp',
-      entrypoint: 'D:/code/mcp-surfaces/packages/surface-feedback-mcp/dist/src/main.js',
+      entrypoint: 'C:/workspace/mcp-surfaces/packages/surface-feedback-mcp/dist/src/main.js',
       kind: 'mcp_surface',
       args: [
-        '--feedback-root', 'D:/code/mcp-surfaces',
-        '--canonical-feedback-root', 'D:/code/mcp-surfaces',
+        '--feedback-root', 'C:/workspace/mcp-surfaces',
+        '--canonical-feedback-root', 'C:/workspace/mcp-surfaces',
         '--site-id', 'narada-staccato',
         '--owned-surface-id', 'surface-feedback',
       ],
@@ -1047,9 +1061,9 @@ try {
     },
   );
   const surfaceFeedbackServer: any = (surfaceFeedbackBindConfig.config.mcpServers as Record<string, any>)['narada-staccato-surface-feedback'];
-  assertRuntimeProxy(surfaceFeedbackServer, 'D:/code/mcp-surfaces/packages/surface-feedback-mcp/dist/src/main.js');
-  assert.equal(surfaceFeedbackServer.args[surfaceFeedbackServer.args.indexOf('--feedback-root') + 1], 'D:/code/mcp-surfaces');
-  assert.equal(surfaceFeedbackServer.args[surfaceFeedbackServer.args.indexOf('--canonical-feedback-root') + 1], 'D:/code/mcp-surfaces');
+  assertRuntimeProxy(surfaceFeedbackServer, workspacePath('packages', 'surface-feedback-mcp', 'dist', 'src', 'main.js'));
+  assert.equal(surfaceFeedbackServer.args[surfaceFeedbackServer.args.indexOf('--feedback-root') + 1], 'C:/workspace/mcp-surfaces');
+  assert.equal(surfaceFeedbackServer.args[surfaceFeedbackServer.args.indexOf('--canonical-feedback-root') + 1], 'C:/workspace/mcp-surfaces');
   assert.equal(surfaceFeedbackServer.args[surfaceFeedbackServer.args.indexOf('--site-id') + 1], 'narada-staccato');
   assert.equal(surfaceFeedbackServer.args[surfaceFeedbackServer.args.indexOf('--owned-surface-id') + 1], 'surface-feedback');
 
@@ -1061,7 +1075,7 @@ try {
       'staccato-speech': {
         transport: 'stdio',
         command: 'node',
-        args: ['D:/code/mcp-surfaces/packages/speech-mcp/dist/src/main.js', '--provider-registry-path', 'D:/code/mcp-surfaces/packages/speech-mcp/config/provider-registry.v2.json'],
+        args: ['C:/workspace/mcp-surfaces/packages/speech-mcp/dist/src/main.js', '--provider-registry-path', 'C:/workspace/mcp-surfaces/packages/speech-mcp/config/provider-registry.v2.json'],
         narada_scope: {
           injection_scope: 'host',
           authority_locus: { kind: 'host' },
@@ -1074,7 +1088,7 @@ try {
       'staccato-mcp-registrar': {
         transport: 'stdio',
         command: 'node',
-        args: ['D:/code/mcp-surfaces/packages/mcp-registrar/dist/src/main.js'],
+        args: ['C:/workspace/mcp-surfaces/packages/mcp-registrar/dist/src/main.js'],
         injection_scope: 'user_site',
         authority_locus: { kind: 'user_site', site_root: 'C:/Users/Andrey/Narada' },
         mutation_locus: { kind: 'user_site', site_root: 'C:/Users/Andrey/Narada' },
@@ -1083,12 +1097,12 @@ try {
       'staccato-local-filesystem': {
         transport: 'stdio',
         command: 'node',
-        args: ['D:/code/mcp-surfaces/packages/local-filesystem-mcp/dist/src/main.js', '--mode', 'write', '--allowed-root', scopeReadbackRoot, '--output-root', scopeReadbackRoot],
+        args: ['C:/workspace/mcp-surfaces/packages/local-filesystem-mcp/dist/src/main.js', '--mode', 'write', '--allowed-root', scopeReadbackRoot, '--output-root', scopeReadbackRoot],
       },
       'narada-staccato-artifacts': {
         transport: 'stdio',
         command: 'node',
-        args: ['D:/code/mcp-surfaces/packages/artifacts-mcp/dist/src/main.js'],
+        args: ['C:/workspace/mcp-surfaces/packages/artifacts-mcp/dist/src/main.js'],
         surface_id: 'artifacts',
       },
     },
@@ -1121,7 +1135,7 @@ try {
       'narada-sonar-agent-context': {
         transport: 'stdio',
         command: 'node',
-        args: ['D:/code/mcp-surfaces/packages/agent-context-mcp/dist/src/main.js'],
+        args: ['C:/workspace/mcp-surfaces/packages/agent-context-mcp/dist/src/main.js'],
       },
     },
   }, null, 2), 'utf8');
@@ -1161,9 +1175,9 @@ try {
         surface_id: 'site-inbox',
         command: 'node',
         args: [
-          'D:/code/mcp-surfaces/packages/shared/mcp-runtime-proxy/dist/src/main.js',
+          'C:/workspace/mcp-surfaces/packages/shared/mcp-runtime-proxy/dist/src/main.js',
           '--surface-id', 'site-inbox',
-          '--entrypoint', 'D:/code/mcp-surfaces/packages/site-inbox-mcp/dist/src/main.js',
+          '--entrypoint', 'C:/workspace/mcp-surfaces/packages/site-inbox-mcp/dist/src/main.js',
           '--', '--site-root', staleProjectionRoot,
         ],
       },
@@ -1190,7 +1204,7 @@ try {
       'narada-site-andrey-user-delegated-task': {
         surface_id: 'delegated-task',
         command: 'node',
-        args: ['D:/code/mcp-surfaces/packages/delegated-task-mcp/dist/src/main.js'],
+        args: ['C:/workspace/mcp-surfaces/packages/delegated-task-mcp/dist/src/main.js'],
       },
     },
   }, null, 2), 'utf8');
@@ -1251,7 +1265,7 @@ try {
       'narada-sonar-agent-context': {
         transport: 'stdio',
         command: 'node',
-        args: ['D:/code/mcp-surfaces/packages/agent-context-mcp/dist/src/main.js'],
+        args: ['C:/workspace/mcp-surfaces/packages/agent-context-mcp/dist/src/main.js'],
       },
     },
   }, null, 2), 'utf8');
@@ -1279,7 +1293,7 @@ try {
       'narada-sonar-inbox': {
         transport: 'stdio',
         command: 'node',
-        args: ['D:/code/mcp-surfaces/packages/site-inbox-mcp/dist/src/main.js', '--site-root', aggregateSiteRoot],
+        args: ['C:/workspace/mcp-surfaces/packages/site-inbox-mcp/dist/src/main.js', '--site-root', aggregateSiteRoot],
         tools: ['inbox_doctor', 'inbox_list', 'inbox_show'],
       },
     },
@@ -1300,7 +1314,7 @@ try {
   assert.equal(inboxRegistry.runtime_binding.owner_site_id, 'narada-sonar');
   assert.equal(inboxRegistry.runtime_binding.transport.command, 'node');
   assert.deepEqual(inboxRegistry.runtime_binding.transport.args, [
-    'D:/code/mcp-surfaces/packages/site-inbox-mcp/dist/src/main.js',
+    'C:/workspace/mcp-surfaces/packages/site-inbox-mcp/dist/src/main.js',
     '--site-root',
     aggregateSiteRoot,
   ]);
@@ -1327,7 +1341,7 @@ try {
       'narada-sonar-mailbox': {
         transport: 'stdio',
         command: 'node',
-        args: ['D:/code/mcp-surfaces/packages/mailbox-mcp/dist/src/main.js', '--site-root', aggregateSiteRoot],
+        args: ['C:/workspace/mcp-surfaces/packages/mailbox-mcp/dist/src/main.js', '--site-root', aggregateSiteRoot],
         tools: ['mailbox_message_show'],
       },
     },
@@ -1338,7 +1352,7 @@ try {
       'narada-sonar-graph-mail': {
         transport: 'stdio',
         command: 'node',
-        args: ['D:/code/mcp-surfaces/packages/graph-mail-mcp/dist/src/main.js', '--site-root', aggregateSiteRoot],
+        args: ['C:/workspace/mcp-surfaces/packages/graph-mail-mcp/dist/src/main.js', '--site-root', aggregateSiteRoot],
         tools: ['graph_mail_message_show'],
       },
     },
@@ -1349,7 +1363,7 @@ try {
       'narada-sonar-mcp-loader': {
         transport: 'stdio',
         command: 'node',
-        args: ['D:/code/mcp-surfaces/packages/mcp-loader-mcp/dist/src/main.js'],
+        args: ['C:/workspace/mcp-surfaces/packages/mcp-loader-mcp/dist/src/main.js'],
         tools: [
           'mcp_loader_process_ownership',
           'mcp_loader_surface_handle_inventory',
@@ -1400,9 +1414,9 @@ try {
         transport: 'stdio',
         command: 'node',
         args: [
-          'D:/code/mcp-surfaces/packages/surface-feedback-mcp/dist/src/main.js',
-          '--feedback-root', 'D:/code/mcp-surfaces',
-          '--canonical-feedback-root', 'D:/code/mcp-surfaces',
+          'C:/workspace/mcp-surfaces/packages/surface-feedback-mcp/dist/src/main.js',
+          '--feedback-root', 'C:/workspace/mcp-surfaces',
+          '--canonical-feedback-root', 'C:/workspace/mcp-surfaces',
           '--site-id', 'narada-sonar',
           '--owned-surface-id', 'surface-feedback',
         ],
@@ -1440,7 +1454,7 @@ try {
       'narada-sonar-mailbox': {
         transport: 'stdio',
         command: 'node',
-        args: ['D:/code/mcp-surfaces/packages/mailbox-mcp/dist/src/main.js', '--site-root', join(nestedSiteRoot, '.narada')],
+        args: ['C:/workspace/mcp-surfaces/packages/mailbox-mcp/dist/src/main.js', '--site-root', join(nestedSiteRoot, '.narada')],
         tools: ['mailbox_message_show'],
       },
     },
@@ -1482,7 +1496,7 @@ try {
       'narada-sonar-task-lifecycle': {
         transport: 'stdio',
         command: 'node',
-        args: ['D:/code/mcp-surfaces/packages/task-lifecycle-mcp/dist/src/task-lifecycle/task-mcp-server.js', '--site-root', '{site_root}'],
+        args: ['C:/workspace/mcp-surfaces/packages/task-lifecycle-mcp/dist/src/task-lifecycle/task-mcp-server.js', '--site-root', '{site_root}'],
         tools: ['task_lifecycle_guidance'],
       },
     },

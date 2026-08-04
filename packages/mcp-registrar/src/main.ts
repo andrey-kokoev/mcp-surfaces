@@ -2,7 +2,7 @@
 import { buildGuidanceResult } from './guidance.js';
 import { guidanceToolDefinition } from './guidance.js';
 import { createHash } from 'node:crypto';
-import { DatabaseSync } from 'node:sqlite';
+import { DatabaseSync } from '@narada-core/sqlite';
 import { spawn } from 'node:child_process';
 import { payloadShow } from '@narada-core/mcp-transport';
 import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from 'node:fs';
@@ -43,6 +43,7 @@ export type McpSurfaceProjection = {
   id: string;
   injection_scope: McpInjectionScope;
   execution: SurfaceExecutionDeclaration;
+  command?: string;
   default_injection?: McpDefaultInjection;
   restart_owner?: McpRestartOwner;
   runtime_requirements?: McpRuntimeKind[];
@@ -222,6 +223,7 @@ function nativeProjectionToRegistrarProjection(
     ) ? projection.lifecycle.restart_owner : projection.injection_scope,
     runtime_requirements: projection.runtime_requirements.filter((value): value is McpRuntimeKind => value === 'nars'),
     env_vars: projection.transport.env,
+    command: projection.transport.command,
     entrypoint: nativeEntrypoint(entrypoint),
     args,
   };
@@ -1030,10 +1032,12 @@ function lookupSurface(surfaceId: string): RegistrarSurfaceRecord {
 function lookupSite(siteId: string): SiteDef {
   assertCanonicalSiteId(siteId);
   const catalog = readSiteRegistryCatalog();
-  const direct = catalog.items.find((site) => site.site_id === siteId);
+  const candidates = catalog.status === 'ready' ? catalog.items : KNOWN_SITES;
+  const direct = candidates.find((site) => site.site_id === siteId);
   if (direct) return direct;
-  const known = [...catalog.items.map((site) => site.site_id), ...KNOWN_SITES.map((site) => site.site_id)];
-  throw diagnosticError('registrar_unknown_site', `registrar_unknown_site:${siteId}`, { known: uniqueStrings(known) });
+  throw diagnosticError('registrar_unknown_site', `registrar_unknown_site:${siteId}`, {
+    known: candidates.map((site) => site.site_id),
+  });
 }
 
 function lookupCarrier(carrierId: string): CarrierDef {
@@ -1186,6 +1190,7 @@ function surfaceProjections(surface: RegistrarSurfaceRecord): McpSurfaceProjecti
     env_vars: projection.transport.kind === 'stdio' ? projection.transport.env : [],
     ...(projection.transport.kind === 'stdio'
       ? {
+        command: projection.transport.command,
         entrypoint: nativeEntrypoint(projection.transport.args[0] ?? ''),
         args: projection.transport.args.slice(1),
       }
@@ -1450,6 +1455,7 @@ function materializeSharedSurface(binding: SiteBinding, site: SiteDef, surfaceId
     server: {
       kind: 'shared',
       entrypoint: resolvedEntrypoint,
+      command: projection.command,
       args: resolvedArgs,
       surface,
       projection,
@@ -1655,10 +1661,11 @@ function carrierLaunchCommand(
 ): CarrierLaunchCommand {
   const childEntrypoint = server.entrypoint;
   const childArgs = server.args;
+  const runtimeCommand = server.command ?? server.projection?.command ?? 'node';
   const sidecarPath = configPath ? materializationSidecarPath(configPath) : null;
   if (server.kind === 'local') {
     return {
-      command: server.command ?? 'node',
+      command: runtimeCommand,
       args: [childEntrypoint, ...childArgs],
       uses_runtime_proxy: false,
       child_entrypoint: childEntrypoint,
@@ -1666,7 +1673,7 @@ function carrierLaunchCommand(
     };
   }
   return {
-    command: 'node',
+    command: runtimeCommand,
     args: [
       MCP_RUNTIME_PROXY_ENTRYPOINT,
       '--surface-id',
@@ -3088,8 +3095,10 @@ export function buildSiteBindConfig(site: SiteDef, surface: RegistrarSurfaceReco
   const launch = carrierLaunchCommand({
     kind: 'shared',
     entrypoint: resolvedEntrypoint,
+    command: projection.command,
     args: resolvedArgs,
     surface,
+    projection,
     ...scopeMetadata,
     narada_scope: naradaScope,
   }, surfaceId);
@@ -3418,7 +3427,7 @@ type SiteSurfaceRegistrySurface = {
   display_name: string;
   server_name: string;
   runtime_binding: {
-    runtime_kind: 'node-stdio';
+    runtime_kind: 'node-stdio' | 'bun-stdio';
     entrypoint: string;
     owner_site_id: string;
     transport: {
@@ -3460,7 +3469,7 @@ function runtimeBindingForFabricServer(site: SiteDef, server: SiteMcpFabricServe
     ]
     : [server.entrypoint, ...server.args];
   return {
-    runtime_kind: 'node-stdio',
+    runtime_kind: /(^|[\\/])bun(?:\.exe)?$/i.test(server.command) ? 'bun-stdio' : 'node-stdio',
     entrypoint: server.entrypoint,
     owner_site_id: site.site_id,
     transport: {

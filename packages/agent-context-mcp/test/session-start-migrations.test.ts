@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { DatabaseSync } from 'node:sqlite';
+import { DatabaseSync } from '@narada-core/sqlite';
 import {
   DEFAULT_BUSY_TIMEOUT_MS,
   materializeAgentSessionStart,

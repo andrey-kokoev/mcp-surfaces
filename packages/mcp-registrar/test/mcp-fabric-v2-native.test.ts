@@ -66,6 +66,7 @@ test('native projection transport and registrar projection transport remain equi
       assert.ok(registrarProjection, `${surface.id}:${nativeProjection.id} missing registrar projection`);
       assert.equal(nativeProjection.transport.kind, 'stdio');
       if (nativeProjection.transport.kind === 'stdio') {
+        assert.equal(registrarProjection!.command, nativeProjection.transport.command);
         assert.deepEqual(
           [registrarProjection!.entrypoint, ...(registrarProjection!.args ?? [])],
           nativeProjection.transport.args.map((arg, index) => index === 0 && arg.includes('{mcp_surfaces_root}')

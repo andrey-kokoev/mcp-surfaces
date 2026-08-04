@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { asRecord, createTemporaryE2eRoot, createTestProcessScope, removeTemporaryE2eRoot, spawnJsonlMcpServer, type TestProcessScope } from '@narada-core/mcp-e2e-harness';
@@ -11,8 +12,11 @@ type ServerResult = { server: string; toolCount: number; schemaCount: number; fa
 const temporaryRoot = createTemporaryE2eRoot('kimi-carrier-contract');
 const repositoryRoot = fileURLToPath(new URL('../../../../', import.meta.url));
 const processScope = createTestProcessScope({ label: 'kimi-carrier-contract' });
+const previousUserSiteRoot = process.env.NARADA_USER_SITE_ROOT;
 
 try {
+  writeFileSync(join(temporaryRoot, 'AGENTS.md'), '# Kimi carrier contract fixture Site\n', 'utf8');
+  process.env.NARADA_USER_SITE_ROOT = temporaryRoot;
   const config = await materializeKimiCarrierConfig(join(temporaryRoot, 'mcp.json'));
   const entries = Object.entries(config.mcpServers).sort(([left], [right]) => left.localeCompare(right));
   const results = await mapWithConcurrency(entries, 1, ([server, definition]) => inspectServer(server, definition, processScope));
@@ -25,6 +29,8 @@ try {
   assert.equal(schemaCount, toolCount, 'every exposed tool must have an input schema');
   console.log(`Kimi carrier contract ok: ${results.length} servers, ${toolCount} tools, ${schemaCount} schemas (${MOONSHOT_SCHEMA_DIALECT})`);
 } finally {
+  if (previousUserSiteRoot === undefined) delete process.env.NARADA_USER_SITE_ROOT;
+  else process.env.NARADA_USER_SITE_ROOT = previousUserSiteRoot;
   try {
     await processScope.close();
     processScope.assertClean();

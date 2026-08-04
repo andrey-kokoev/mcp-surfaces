@@ -1,16 +1,4 @@
-// Swallow only the node:sqlite ExperimentalWarning (same posture as narada's
-// legacy sqlite facade): the module is load-time noisy on every MCP surface
-// launch, and the warning carries no actionable information for operators.
-const originalEmitWarning: any = process.emitWarning;
-process.emitWarning = (warning: any, ...args: any[]) => {
-  if (args[0] === 'ExperimentalWarning' && String(warning).includes('SQLite')) return;
-  return originalEmitWarning.call(process, warning, ...args);
-};
-
-const { DatabaseSync } = await import('node:sqlite');
-
-process.emitWarning = originalEmitWarning;
-
+import { DatabaseSync } from '@narada-core/sqlite';
 import { existsSync, mkdirSync, readdirSync, readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';

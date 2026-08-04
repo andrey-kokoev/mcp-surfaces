@@ -30,11 +30,14 @@
   "scripts": {
     "build": "tsc -b",
     "typecheck": "tsc -b --pretty false",
-    "test": "pnpm build && node --disable-warning=ExperimentalWarning dist/test/agent-context-mcp.test.js && node --disable-warning=ExperimentalWarning dist/test/continuation-projection.test.js && node --disable-warning=ExperimentalWarning dist/test/protocol-smoke.test.js && node --disable-warning=ExperimentalWarning dist/test/site-fabric-agent-context-e2e.test.js && node --disable-warning=ExperimentalWarning dist/test/session-start-roster.test.js && node --disable-warning=ExperimentalWarning dist/test/session-start-migrations.test.js"
+    "test": "pnpm run test:bun",
+    "test:bun": "pnpm --filter @narada-core/sqlite build && pnpm build && bun dist/test/agent-context-mcp.test.js && bun test dist/test/continuation-projection.test.js && bun dist/test/protocol-smoke.test.js && bun dist/test/site-fabric-agent-context-e2e.test.js && bun dist/test/session-start-roster.test.js && bun dist/test/session-start-migrations.test.js",
+    "test:node": "pnpm --filter @narada-core/sqlite build && pnpm build && node --disable-warning=ExperimentalWarning dist/test/agent-context-mcp.test.js && node --disable-warning=ExperimentalWarning dist/test/continuation-projection.test.js && node --disable-warning=ExperimentalWarning dist/test/protocol-smoke.test.js && node --disable-warning=ExperimentalWarning dist/test/site-fabric-agent-context-e2e.test.js && node --disable-warning=ExperimentalWarning dist/test/session-start-roster.test.js && node --disable-warning=ExperimentalWarning dist/test/session-start-migrations.test.js"
   },
   "dependencies": {
     "@narada-core/mcp-fabric-contracts": "workspace:*",
-    "@narada-core/mcp-transport": "workspace:*"
+    "@narada-core/mcp-transport": "workspace:*",
+    "@narada-core/sqlite": "workspace:*"
   },
   "files": [
     "dist/",

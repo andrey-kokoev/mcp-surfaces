@@ -20,7 +20,7 @@ export function surfaceDefinition(): DefinedSurface {
     default_effect: 'local_write',
     projections: [{
       id: 'default',
-      transport: { kind: 'stdio', command: 'node', args: ['--site-root', '{site_root}', '--site-id', '{site_id}'], env: ['NARADA_AGENT_ID', 'NARADA_AGENT_START_EVENT_ID', 'NARADA_CARRIER_SESSION_ID', 'NARADA_SITE_ROOT'] },
+      transport: { kind: 'stdio', command: 'bun', args: ['--site-root', '{site_root}', '--site-id', '{site_id}'], env: ['NARADA_AGENT_ID', 'NARADA_AGENT_START_EVENT_ID', 'NARADA_CARRIER_SESSION_ID', 'NARADA_SITE_ROOT'] },
       injection_scope: 'local_site',
       default_injection: 'disabled',
       runtime_requirements: [],
