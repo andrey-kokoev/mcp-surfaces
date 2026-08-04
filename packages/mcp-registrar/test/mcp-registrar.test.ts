@@ -1130,6 +1130,26 @@ try {
   assert.ok(missingDefaultFinding);
   assert.equal(missingDefault.status, 'invalid');
 
+  writeFileSync(join(missingDefaultRoot, '.ai', 'mcp', 'narada-sonar-work-lifecycle-mcp.json'), JSON.stringify({
+    schema: 'narada.mcp.client_config.v0',
+    mcpServers: {
+      'narada-sonar-work-lifecycle': {
+        surface_id: 'work-lifecycle',
+        transport: 'stdio',
+        command: 'node',
+        args: [
+          'D:/code/mcp-surfaces/packages/work-lifecycle-mcp/dist/src/main.js',
+          '--site-root',
+          missingDefaultRoot,
+        ],
+      },
+    },
+  }, null, 2), 'utf8');
+  const replacementDefault: any = validateSiteMcpFabric({ site_id: 'narada-sonar', root: missingDefaultRoot, config_path: join(missingDefaultRoot, 'site.json'), surfaces: [] }, false);
+  const replacementFindings: any = replacementDefault.findings as Array<Record<string, any>>;
+  assert.equal(replacementFindings.some((finding: any) => finding.code === 'registrar_site_fabric_missing_default_surface' && finding.surface_id === 'task-lifecycle'), false);
+  assert.equal(replacementFindings.some((finding: any) => finding.code === 'registrar_site_fabric_missing_default_surface' && finding.surface_id === 'artifacts'), true);
+
   const staleProjectionRoot: any = join(root, 'stale-carrier-projection-site');
   const staleProjectionMcpRoot: any = join(staleProjectionRoot, '.ai', 'mcp');
   mkdirSync(join(staleProjectionMcpRoot, 'carriers'), { recursive: true });

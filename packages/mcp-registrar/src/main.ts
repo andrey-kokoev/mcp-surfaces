@@ -114,6 +114,10 @@ const PROGRESSIVE_BOOTSTRAP_SURFACES = [
   'local-filesystem',
 ] as const;
 
+const DEFAULT_SURFACE_REPLACEMENTS: Readonly<Record<string, readonly string[]>> = {
+  'task-lifecycle': ['work-lifecycle'],
+};
+
 type SiteBinding = {
   site_id: string;
   surfaces: 'all' | string[];
@@ -3744,6 +3748,8 @@ export function validateSiteMcpFabric(site: SiteDef, includeOk = false): JsonRec
     for (const projection of surfaceProjections(surface)) {
       if (projection.injection_scope !== 'local_site' || projection.default_injection !== 'all_site_bound_sessions') continue;
       if (presentSurfaceIds.has(surface.id)) continue;
+      const replacements = DEFAULT_SURFACE_REPLACEMENTS[surface.id] ?? [];
+      if (replacements.some((replacementId) => presentSurfaceIds.has(replacementId))) continue;
       add('error', 'registrar_site_fabric_missing_default_surface', `Default local Site surface '${surface.id}' is missing from runtime-authoritative Site MCP fabric`, {
         site_id: siteId,
         surface_id: surface.id,
