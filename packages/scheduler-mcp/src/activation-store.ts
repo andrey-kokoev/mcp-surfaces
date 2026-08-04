@@ -551,6 +551,23 @@ export class SchedulerActivationStore {
            set status = ?, revision = revision + 1, updated_at = ?
          where binding_id = ?
       `).run(status, now, bindingId);
+      if (status === 'paused') {
+        this.#db.prepare(`
+          update scheduler_activations
+             set status = 'terminal',
+                 terminal_outcome = 'cancelled_binding_paused',
+                 lease_owner = null,
+                 lease_token = null,
+                 lease_expires_at = null,
+                 last_error = 'binding_paused_before_admission',
+                 updated_at = ?
+           where binding_id = ?
+             and (
+               status = 'pending'
+               or (status = 'leased' and lease_expires_at <= ?)
+             )
+        `).run(now, bindingId, now);
+      }
       return this.requireBinding(bindingId);
     });
   }
@@ -591,7 +608,7 @@ export class SchedulerActivationStore {
 
       const bindings = this.#db.prepare(`
         select * from scheduler_bindings
-         where source_topic = ? and status <> 'retired'
+         where source_topic = ? and status = 'active'
          order by binding_id
       `).all(event.topic) as SqlRow[];
       for (const row of bindings) {
@@ -711,6 +728,21 @@ export class SchedulerActivationStore {
     return this.#transaction(() => {
       this.#db.prepare(`
         update scheduler_activations
+           set status = 'terminal',
+               lease_owner = null,
+               lease_token = null,
+               lease_expires_at = null,
+               terminal_outcome = 'cancelled_binding_paused',
+               last_error = 'binding_paused_after_lease_expiry',
+               updated_at = ?
+         where status = 'leased'
+           and lease_expires_at <= ?
+           and binding_id in (
+             select binding_id from scheduler_bindings where status = 'paused'
+           )
+      `).run(now, now);
+      this.#db.prepare(`
+        update scheduler_activations
            set status = 'pending',
                lease_owner = null,
                lease_token = null,
@@ -718,7 +750,11 @@ export class SchedulerActivationStore {
                attempt_count = attempt_count + 1,
                last_error = 'lease_expired',
                updated_at = ?
-         where status = 'leased' and lease_expires_at <= ?
+         where status = 'leased'
+           and lease_expires_at <= ?
+           and binding_id in (
+             select binding_id from scheduler_bindings where status in ('active', 'retired')
+           )
       `).run(now, now);
       const row = this.#db.prepare(`
         select activation.*

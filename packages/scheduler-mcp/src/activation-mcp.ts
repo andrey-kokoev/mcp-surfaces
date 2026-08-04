@@ -144,7 +144,9 @@ export function listSchedulerActivationTools(): McpToolDefinition[] {
     },
     ...(['pause', 'resume', 'retire'] as const).map((operation) => ({
       name: `scheduler_binding_${operation}`,
-      description: `${operation[0]!.toUpperCase() + operation.slice(1)} one binding without rewriting pending activation state.`,
+      description: operation === 'pause'
+        ? 'Pause one binding, stop future event materialization, and terminally cancel pending or expired-leased activations.'
+        : `${operation[0]!.toUpperCase() + operation.slice(1)} one binding without rewriting admitted SOP occurrences.`,
       inputSchema: objectSchema({
         binding_id: stringSchema('Stable binding id.'),
         expected_revision: integerSchema('Current binding revision.'),

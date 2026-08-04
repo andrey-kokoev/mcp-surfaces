@@ -79,23 +79,60 @@ test('completion events are replay-safe, completion-relative, and pause-safe', (
     const event = completionEvent('event-1', f.now().toISOString());
     const admitted = f.store.admitEvent(event);
     assert.equal(admitted.status, 'admitted');
-    assert.equal(admitted.activation_count, 1);
-    assert.equal(admitted.activations[0]?.due_at, '2026-01-01T00:00:01.000Z');
+    assert.equal(admitted.activation_count, 0);
     assert.equal(f.store.claimDue('dispatcher'), undefined);
 
     const replay = f.store.admitEvent(event);
     assert.equal(replay.status, 'replayed');
-    assert.equal(replay.activations[0]?.activation_id, admitted.activations[0]?.activation_id);
+    assert.equal(replay.activation_count, 0);
     assert.throws(
       () => f.store.admitEvent({ ...event, payload: { ...event.payload, outcome: 'no_change' } }),
       /scheduler_event_idempotency_conflict/,
     );
 
     f.store.setBindingStatus(binding.binding_id, 'active', paused.revision);
+    const resumed = f.store.admitEvent(event);
+    assert.equal(resumed.status, 'replayed');
+    assert.equal(resumed.activation_count, 1);
+    assert.equal(resumed.activations[0]?.due_at, '2026-01-01T00:00:01.000Z');
     f.advance(1_000);
     const claim = f.store.claimDue('dispatcher');
     assert.ok(claim);
     assert.equal(claim.occurrence_key, 'mailbox-sync-continuation:event-1');
+  } finally {
+    f.close();
+  }
+});
+
+test('pausing a binding quiesces pending work without cancelling an admitted SOP occurrence', () => {
+  const f = fixture();
+  try {
+    const binding = installSyncBinding(f.store);
+    const admittedEvent = completionEvent('event-admitted-at-pause', f.now().toISOString(), 'retryable_failure');
+    f.store.admitEvent(admittedEvent);
+    f.advance(1_000);
+    const leased = f.store.claimDue('dispatcher');
+    assert.ok(leased?.lease_token);
+    const admitted = f.store.markAdmitted({
+      activationId: leased.activation_id,
+      consumerId: 'dispatcher',
+      leaseToken: leased.lease_token,
+      sopRunId: 'sop-run-in-flight',
+      receiptId: 'sop-admit-in-flight',
+      receipt: {},
+    });
+    const pendingEvent = completionEvent('event-pending-at-pause', f.now().toISOString());
+    const pending = f.store.admitEvent(pendingEvent).activations[0];
+    assert.ok(pending);
+
+    f.store.setBindingStatus(binding.binding_id, 'paused', binding.revision);
+    const quiesced = f.store.getActivation(pending.activation_id);
+    assert.equal(quiesced?.status, 'terminal');
+    assert.equal(quiesced?.terminal_outcome, 'cancelled_binding_paused');
+    assert.equal(f.store.getActivation(admitted.activation_id)?.status, 'admitted');
+    assert.equal(f.store.admitEvent(
+      completionEvent('event-after-pause', f.now().toISOString()),
+    ).activation_count, 0);
   } finally {
     f.close();
   }
