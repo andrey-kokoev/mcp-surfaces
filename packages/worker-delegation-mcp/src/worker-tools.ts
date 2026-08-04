@@ -610,7 +610,7 @@ async function workerRunInner(args: Record<string, unknown>, state: WorkerMcpSta
   } else {
     runRecord = createRunRecord(state.policy);
   }
-  writeWorkerOutputSchema(runRecord.schemaPath);
+  writeWorkerOutputSchema(runRecord.schemaPath, outputContract);
   const skipGitRepoCheck = optionalBoolean(overrides.skip_git_repo_check, 'skip_git_repo_check');
 
   let resolvedWorkerConfig: ResolvedWorkerConfig;

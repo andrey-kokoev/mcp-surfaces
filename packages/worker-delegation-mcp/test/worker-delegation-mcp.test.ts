@@ -2412,12 +2412,9 @@ function assertStrictStructuredOutputSchema(schema: any, path: string): void {
   if (!schema || typeof schema !== 'object') return;
   if (schema.properties && typeof schema.properties === 'object' && !Array.isArray(schema.properties)) {
     const propertyNames = Object.keys(schema.properties);
-    // The generic worker envelope owns the fixed fields, while
-    // structured_outputs is an optional extension map whose named entries are
-    // validated by the task-specific contract.
-    const optionalProperties = path === 'worker_output_schema' ? new Set(['structured_outputs']) : new Set<string>();
     const required = Array.isArray(schema.required) ? schema.required : [];
-    assert.deepEqual([...required].sort(), propertyNames.filter((propertyName) => !optionalProperties.has(propertyName)).sort(), `${path}.required must include every fixed property for Codex structured output`);
+    assert.deepEqual([...required].sort(), propertyNames.sort(), `${path}.required must include every fixed property for Codex structured output`);
+    assert.equal(schema.additionalProperties, false, `${path}.additionalProperties must be false for Codex structured output`);
     for (const propertyName of propertyNames) {
       assertStrictStructuredOutputSchema(schema.properties[propertyName], `${path}.properties.${propertyName}`);
     }

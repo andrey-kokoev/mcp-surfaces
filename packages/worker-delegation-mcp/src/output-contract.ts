@@ -88,11 +88,11 @@ export function resultStatus(codexResult: { exit_code: number | null; cancelled:
   return { status: 'completed', error: null, warnings };
 }
 
-export function workerOutputSchema(): Record<string, unknown> {
+export function workerOutputSchema(outputContract: Record<string, unknown> = {}): Record<string, unknown> {
   return {
     type: 'object',
     additionalProperties: false,
-    required: ['summary', 'deliverables', 'open_questions', 'next_actions', 'edits_performed', 'target_state_changed', 'changes', 'verification', 'verification_budget_respected', 'broad_unrelated_failures', 'exit_interview', 'review_verdict', 'acceptance_verdict', 'verdict'],
+    required: ['summary', 'deliverables', 'open_questions', 'next_actions', 'edits_performed', 'target_state_changed', 'changes', 'verification', 'verification_budget_respected', 'broad_unrelated_failures', 'exit_interview', 'review_verdict', 'acceptance_verdict', 'verdict', 'structured_outputs'],
     properties: {
       summary: { type: 'string' },
       deliverables: { type: 'array', items: { type: 'object', required: ['path', 'description'], properties: { path: { type: 'string' }, description: { type: 'string' } }, additionalProperties: false } },
@@ -119,16 +119,44 @@ export function workerOutputSchema(): Record<string, unknown> {
       review_verdict: { type: ['string', 'null'] },
       acceptance_verdict: { type: ['string', 'null'] },
       verdict: { type: ['string', 'null'] },
-      // Structured outputs are an extension map.  Task-specific contracts
-      // validate their named entries separately; the generic worker schema
-      // must not make those entries impossible to emit.
-      structured_outputs: { type: 'object', additionalProperties: true },
+      structured_outputs: structuredOutputsSchema(outputContract),
     },
   };
 }
 
-export function writeWorkerOutputSchema(path: string): void {
-  writeFileSync(path, `${JSON.stringify(workerOutputSchema(), null, 2)}\n`, 'utf8');
+export function writeWorkerOutputSchema(path: string, outputContract: Record<string, unknown> = {}): void {
+  writeFileSync(path, `${JSON.stringify(workerOutputSchema(outputContract), null, 2)}\n`, 'utf8');
+}
+
+function structuredOutputsSchema(outputContract: Record<string, unknown>): Record<string, unknown> {
+  const key = typeof outputContract.structured_output_key === 'string'
+    ? outputContract.structured_output_key.trim()
+    : '';
+  const declared = outputContract.structured_output_schema ?? outputContract.output_schema;
+  if (!key || !declared || typeof declared !== 'object' || Array.isArray(declared)) {
+    return { type: 'object', properties: {}, required: [], additionalProperties: false };
+  }
+  return {
+    type: 'object',
+    properties: { [key]: closeStructuredOutputSchema(declared) },
+    required: [key],
+    additionalProperties: false,
+  };
+}
+
+function closeStructuredOutputSchema(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(closeStructuredOutputSchema);
+  if (!value || typeof value !== 'object') return value;
+  const source = value as Record<string, unknown>;
+  const closed: Record<string, unknown> = {};
+  for (const [key, nested] of Object.entries(source)) {
+    if (key === 'additionalProperties') continue;
+    closed[key] = closeStructuredOutputSchema(nested);
+  }
+  if (source.type === 'object' || (source.properties && typeof source.properties === 'object')) {
+    closed.additionalProperties = false;
+  }
+  return closed;
 }
 
 export function outputContractForRequest(request: WorkerRunToolInput, mode: WorkerDelegationMode): Record<string, unknown> {

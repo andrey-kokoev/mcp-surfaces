@@ -132,5 +132,23 @@ assert.equal(Array.isArray(requestContract.target_paths), true);
 const schema = workerOutputSchema() as any;
 assert.equal(schema.additionalProperties, false);
 assert.equal(schema.properties.structured_outputs.type, 'object');
-assert.equal(schema.required.includes('structured_outputs'), false);
-assert.equal(schema.properties.structured_outputs.additionalProperties, true);
+assert.equal(schema.required.includes('structured_outputs'), true);
+assert.equal(schema.properties.structured_outputs.additionalProperties, false);
+assert.deepEqual(schema.properties.structured_outputs.properties, {});
+
+const customSchema = workerOutputSchema({
+  structured_output_key: 'staccato_email',
+  structured_output_schema: {
+    type: 'object',
+    properties: {
+      outcome: { type: 'string', enum: ['completed', 'blocked'] },
+      evidence: { type: 'object', properties: { ref: { type: 'string' } }, required: ['ref'], additionalProperties: true },
+    },
+    required: ['outcome', 'evidence'],
+    additionalProperties: true,
+  },
+}) as any;
+assert.deepEqual(customSchema.properties.structured_outputs.required, ['staccato_email']);
+assert.equal(customSchema.properties.structured_outputs.additionalProperties, false);
+assert.equal(customSchema.properties.structured_outputs.properties.staccato_email.additionalProperties, false);
+assert.equal(customSchema.properties.structured_outputs.properties.staccato_email.properties.evidence.additionalProperties, false);
