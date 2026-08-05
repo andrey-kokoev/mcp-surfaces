@@ -19,5 +19,12 @@
   "dependencies": {
     "@narada-core/mcp-fabric-contracts": "workspace:*"
   },
-  "files": ["dist/", "README.md"]
+  "files": [
+    "dist/",
+    "README.md"
+  ],
+  "devDependencies": {
+    "@types/node": "^22.15.3",
+    "typescript": "^5.8.3"
+  }
 }

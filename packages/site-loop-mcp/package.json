@@ -16,19 +16,45 @@
       "types": "./dist/src/surface-definition.d.ts",
       "default": "./dist/src/surface-definition.js"
     },
-    ".": { "default": "./dist/src/site-loop-mcp-server.js" },
-    "./site-loop-mcp-server": { "default": "./dist/src/site-loop-mcp-server.js" },
-    "./site-loop/site-loop-boundary": { "default": "./dist/src/site-loop/site-loop-boundary.js" },
-    "./site-loop/site-loop": { "default": "./dist/src/site-loop/site-loop.js" },
-    "./site-loop/site-loop-config": { "default": "./dist/src/site-loop/site-loop-config.js" },
-    "./site-loop/site-loop-engine": { "default": "./dist/src/site-loop/site-loop-engine.js" },
-    "./site-loop/site-loop-supervisor-runner": { "default": "./dist/src/site-loop/site-loop-supervisor-runner.js" },
-    "./site-loop/site-loop-store": { "default": "./dist/src/site-loop/site-loop-store.js" },
-    "./task-lifecycle/site-loop-storage-cutover": { "default": "./dist/src/task-lifecycle/site-loop-storage-cutover.js" },
-    "./task-lifecycle/site-loop-storage-maintenance": { "default": "./dist/src/task-lifecycle/site-loop-storage-maintenance.js" },
-    "./schemas/site-loop-config.schema.json": { "default": "./schemas/site-loop-config.schema.json" },
-    "./site-operating-loop/site-loop-store": { "default": "./dist/src/site-operating-loop/site-loop-store.js" },
-    "./site-operating-loop/policy": { "default": "./dist/src/site-operating-loop/policy.js" }
+    ".": {
+      "default": "./dist/src/site-loop-mcp-server.js"
+    },
+    "./site-loop-mcp-server": {
+      "default": "./dist/src/site-loop-mcp-server.js"
+    },
+    "./site-loop/site-loop-boundary": {
+      "default": "./dist/src/site-loop/site-loop-boundary.js"
+    },
+    "./site-loop/site-loop": {
+      "default": "./dist/src/site-loop/site-loop.js"
+    },
+    "./site-loop/site-loop-config": {
+      "default": "./dist/src/site-loop/site-loop-config.js"
+    },
+    "./site-loop/site-loop-engine": {
+      "default": "./dist/src/site-loop/site-loop-engine.js"
+    },
+    "./site-loop/site-loop-supervisor-runner": {
+      "default": "./dist/src/site-loop/site-loop-supervisor-runner.js"
+    },
+    "./site-loop/site-loop-store": {
+      "default": "./dist/src/site-loop/site-loop-store.js"
+    },
+    "./task-lifecycle/site-loop-storage-cutover": {
+      "default": "./dist/src/task-lifecycle/site-loop-storage-cutover.js"
+    },
+    "./task-lifecycle/site-loop-storage-maintenance": {
+      "default": "./dist/src/task-lifecycle/site-loop-storage-maintenance.js"
+    },
+    "./schemas/site-loop-config.schema.json": {
+      "default": "./schemas/site-loop-config.schema.json"
+    },
+    "./site-operating-loop/site-loop-store": {
+      "default": "./dist/src/site-operating-loop/site-loop-store.js"
+    },
+    "./site-operating-loop/policy": {
+      "default": "./dist/src/site-operating-loop/policy.js"
+    }
   },
   "scripts": {
     "build": "tsc -b",
@@ -49,9 +75,15 @@
     "@narada-core/task-lifecycle-mcp": "workspace:*",
     "@narada-core/site-operating-loop": "workspace:*"
   },
-  "files": ["dist/", "schemas/", "README.md"],
+  "files": [
+    "dist/",
+    "schemas/",
+    "README.md"
+  ],
   "devDependencies": {
     "@narada-core/mcp-e2e-harness": "workspace:*",
-    "@narada-core/sqlite": "workspace:*"
+    "@narada-core/sqlite": "workspace:*",
+    "@types/node": "^22.15.3",
+    "typescript": "^5.8.3"
   }
 }

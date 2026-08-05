@@ -37,6 +37,8 @@
     "README.md"
   ],
   "devDependencies": {
-    "@narada-core/mcp-e2e-harness": "workspace:*"
+    "@narada-core/mcp-e2e-harness": "workspace:*",
+    "@types/node": "^22.15.3",
+    "typescript": "^5.8.3"
   }
 }

@@ -23,20 +23,48 @@
       "types": "./dist/src/kernel/stdio-json-rpc.d.ts",
       "default": "./dist/src/kernel/stdio-json-rpc.js"
     },
-    "./task-lifecycle-runtime/agent-role-resolution": { "default": "./dist/src/task-lifecycle/agent-role-resolution.js" },
-    "./task-lifecycle-runtime/closure-authority": { "default": "./dist/src/task-lifecycle/closure-authority.js" },
-    "./task-lifecycle-runtime/emit-checkpoint": { "default": "./dist/src/task-lifecycle/emit-checkpoint.js" },
-    "./task-lifecycle-runtime/follow-up-ledger-validation": { "default": "./dist/src/task-lifecycle/follow-up-ledger-validation.js" },
-    "./task-lifecycle-runtime/follow-up-policy-service": { "default": "./dist/src/task-lifecycle/follow-up-policy-service.js" },
-    "./task-lifecycle-runtime/inbox-bridge": { "default": "./dist/src/task-lifecycle/inbox-bridge.js" },
-    "./task-lifecycle-runtime/inbox-workboard": { "default": "./dist/src/task-lifecycle/inbox-workboard.js" },
-    "./task-lifecycle-runtime/operator-identity": { "default": "./dist/src/task-lifecycle/operator-identity.js" },
-    "./task-lifecycle-runtime/recovery-truthfulness-guard": { "default": "./dist/src/task-lifecycle/recovery-truthfulness-guard.js" },
-    "./task-lifecycle-runtime/self-certification-guard": { "default": "./dist/src/task-lifecycle/self-certification-guard.js" },
-    "./task-lifecycle-runtime/task-lifecycle-mutation-services": { "default": "./dist/src/task-lifecycle/task-lifecycle-mutation-services.js" },
-    "./task-lifecycle-runtime/task-relatedness": { "default": "./dist/src/task-lifecycle/task-relatedness.js" },
-    "./task-lifecycle-runtime/unified-workboard": { "default": "./dist/src/task-lifecycle/unified-workboard.js" },
-    "./task-lifecycle-runtime/workboard": { "default": "./dist/src/task-lifecycle/workboard.js" }
+    "./task-lifecycle-runtime/agent-role-resolution": {
+      "default": "./dist/src/task-lifecycle/agent-role-resolution.js"
+    },
+    "./task-lifecycle-runtime/closure-authority": {
+      "default": "./dist/src/task-lifecycle/closure-authority.js"
+    },
+    "./task-lifecycle-runtime/emit-checkpoint": {
+      "default": "./dist/src/task-lifecycle/emit-checkpoint.js"
+    },
+    "./task-lifecycle-runtime/follow-up-ledger-validation": {
+      "default": "./dist/src/task-lifecycle/follow-up-ledger-validation.js"
+    },
+    "./task-lifecycle-runtime/follow-up-policy-service": {
+      "default": "./dist/src/task-lifecycle/follow-up-policy-service.js"
+    },
+    "./task-lifecycle-runtime/inbox-bridge": {
+      "default": "./dist/src/task-lifecycle/inbox-bridge.js"
+    },
+    "./task-lifecycle-runtime/inbox-workboard": {
+      "default": "./dist/src/task-lifecycle/inbox-workboard.js"
+    },
+    "./task-lifecycle-runtime/operator-identity": {
+      "default": "./dist/src/task-lifecycle/operator-identity.js"
+    },
+    "./task-lifecycle-runtime/recovery-truthfulness-guard": {
+      "default": "./dist/src/task-lifecycle/recovery-truthfulness-guard.js"
+    },
+    "./task-lifecycle-runtime/self-certification-guard": {
+      "default": "./dist/src/task-lifecycle/self-certification-guard.js"
+    },
+    "./task-lifecycle-runtime/task-lifecycle-mutation-services": {
+      "default": "./dist/src/task-lifecycle/task-lifecycle-mutation-services.js"
+    },
+    "./task-lifecycle-runtime/task-relatedness": {
+      "default": "./dist/src/task-lifecycle/task-relatedness.js"
+    },
+    "./task-lifecycle-runtime/unified-workboard": {
+      "default": "./dist/src/task-lifecycle/unified-workboard.js"
+    },
+    "./task-lifecycle-runtime/workboard": {
+      "default": "./dist/src/task-lifecycle/workboard.js"
+    }
   },
   "scripts": {
     "build": "tsc -b",
@@ -50,8 +78,13 @@
     "@narada-core/sqlite": "workspace:*",
     "@narada-core/task-governance-core": "workspace:*"
   },
-  "files": ["dist/", "README.md"],
+  "files": [
+    "dist/",
+    "README.md"
+  ],
   "devDependencies": {
-    "@narada-core/mcp-e2e-harness": "workspace:*"
+    "@narada-core/mcp-e2e-harness": "workspace:*",
+    "@types/node": "^22.15.3",
+    "typescript": "^5.8.3"
   }
 }
