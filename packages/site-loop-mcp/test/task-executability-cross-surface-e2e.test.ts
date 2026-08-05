@@ -242,25 +242,6 @@ function writeSiteDocuments(): void {
     schema: 'narada.agent_roster.v1',
     agents: [{ agent_id: agentId, role: 'resident', status: 'active', capabilities: [] }],
   }, null, 2), 'utf8');
-  writeFileSync(contextPath, JSON.stringify({
-    schema: 'narada.intelligence.launch_context.v1',
-    registry_db_path: '.ai\\intelligence-registry.db',
-    target_site_id: siteId,
-    user_site_id: siteId + '-user',
-    host_site_id: siteId + '-host',
-    principal_id: 'principal:andrey',
-    invocation_plan_ref: 'plan:live-site-loop-e2e',
-    principal_binding: {
-      schema: 'narada.intelligence.principal_binding.v1',
-      actor: { principal_id: 'principal:andrey', auth_type: 'user-site-session' },
-      memberships: [{
-        registry: 'site-roster',
-        site_id: siteId,
-        role: 'resident',
-        evidence_ref: 'test:site-loop-task-executability-live-e2e',
-      }],
-    },
-  }, null, 2), 'utf8');
   writeFileSync(lifecycleFabricPath, JSON.stringify({
     mcpServers: {
       'narada-task-lifecycle': {
@@ -274,9 +255,32 @@ function writeSiteDocuments(): void {
   }, null, 2), 'utf8');
 }
 
-async function seedCanonicalIntelligenceRegistry(endpointBaseUrl: string): Promise<void> {
+function writeIntelligenceLaunchContext(invocationPlanRef: string): void {
+  writeFileSync(contextPath, JSON.stringify({
+    schema: 'narada.intelligence.launch_context.v1',
+    registry_db_path: '.ai\\intelligence-registry.db',
+    target_site_id: siteId,
+    user_site_id: siteId + '-user',
+    host_site_id: siteId + '-host',
+    principal_id: 'principal:andrey',
+    invocation_plan_ref: invocationPlanRef,
+    principal_binding: {
+      schema: 'narada.intelligence.principal_binding.v1',
+      actor: { principal_id: 'principal:andrey', auth_type: 'user-site-session' },
+      memberships: [{
+        registry: 'site-roster',
+        site_id: siteId,
+        role: 'resident',
+        evidence_ref: 'test:site-loop-task-executability-live-e2e',
+      }],
+    },
+  }, null, 2), 'utf8');
+}
+
+async function seedCanonicalIntelligenceRegistry(endpointBaseUrl: string): Promise<string> {
   const contract = await import(pathToFileURL(join(naradaRoot, 'packages', 'invokable-intelligence-contract', 'dist', 'index.js')).href);
   const registry = await import(pathToFileURL(join(naradaRoot, 'packages', 'invokable-intelligence-registry', 'dist', 'index.js')).href);
+  const resolver = await import(pathToFileURL(join(naradaRoot, 'packages', 'invokable-intelligence-resolver', 'dist', 'index.js')).href);
   const now = new Date().toISOString();
   const validUntil = new Date(Date.now() + 60 * 60 * 1000).toISOString();
   const seed = contract.buildCanonicalLocalTestSeed({
@@ -286,6 +290,7 @@ async function seedCanonicalIntelligenceRegistry(endpointBaseUrl: string): Promi
     credentialStore: 'env',
     credentialReference: 'KIMI_CODE_API_KEY',
     invocationModelKey: providerModel,
+    purposes: ['operator-chat', 'carrier-turn', 'local-agent-runtime'],
     now,
     validUntil,
   });
@@ -351,6 +356,40 @@ async function seedCanonicalIntelligenceRegistry(endpointBaseUrl: string): Promi
   const store = await registry.SqliteRegistryStore.open(join(siteRoot, '.ai', 'intelligence-registry.db'));
   try {
     await store.loadCatalogSeed(rewritten);
+    const intent = {
+      schema: 'narada.invokable-intelligence.invocation-intent.v1',
+      id: 'intent:live-site-loop-e2e-worker',
+      created_at: now,
+      principal: 'principal:andrey',
+      purpose: 'local-agent-runtime',
+      input_digest: `sha256:${'a'.repeat(64)}`,
+      requested_options: { thinking: 'low' },
+    };
+    const plan = await resolver.resolveInvocation(intent, {
+      targetSite: { kind: 'site', id: siteId },
+      userSite: { kind: 'site', id: siteId + '-user' },
+      hostSite: { kind: 'site', id: siteId + '-host' },
+      runtime: 'node',
+      clock: contract.canonicalTestClock(now),
+      access: {
+        action: 'invoke',
+        requested_region: 'global',
+        data_classification: 'internal',
+        requested_retention_days: 0,
+        provider_training: 'prohibited',
+        expected_usage: { amount: 1, unit: 'requests' },
+        expected_cost: { amount: 1, currency: 'USD' },
+      },
+      topology_observations: contract.feasibleTopologyObservations(),
+    }, {
+      store,
+      materializedInputs: { admitted: [], excluded: [], acquisition_refs: [] },
+    });
+    assert.equal(plan.schema, 'narada.invokable-intelligence.invocation-plan.v2', JSON.stringify(plan));
+    await store.putIntent(intent);
+    await store.recordPlan(plan);
+    await store.recordPlanSnapshot(plan.snapshot);
+    return String(plan.id);
   } finally {
     await store.close();
   }
@@ -773,7 +812,8 @@ async function main(): Promise<void> {
   );
   writeHookModule();
   provider = await startProviderFixture(childPayloadRef);
-  await seedCanonicalIntelligenceRegistry(provider.baseUrl);
+  const workerPlanRef = await seedCanonicalIntelligenceRegistry(provider.baseUrl);
+  writeIntelligenceLaunchContext(workerPlanRef);
 
   const nars = spawnRuntime();
   activeRuntime = nars;
