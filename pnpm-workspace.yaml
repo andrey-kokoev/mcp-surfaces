@@ -5,4 +5,3 @@ packages:
   - "../narada/packages/site-operating-loop"
   - "../narada/packages/process-launch-posture"
   - "../narada/packages/site-paths"
-  - "../narada/packages/sqlite"
