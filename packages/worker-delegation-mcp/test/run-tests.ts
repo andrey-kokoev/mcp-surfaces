@@ -23,12 +23,20 @@ const testFiles = [
   'worker-delegation-mcp.test.js',
   'protocol-smoke.test.js',
 ];
+const bunTestRunnerFiles = new Set([
+  'canonical-invocation-plan.test.js',
+  'provider-runtime-binding.test.js',
+]);
+const nodeRuntimeFiles = new Set(['protocol-smoke.test.js']);
 
 const processScope = createTestProcessScope({ label: 'worker-delegation-test-runner' });
 let failureCode = 0;
 try {
   for (const testFile of testFiles) {
-    const status = await processScope.run(process.execPath, [join(testRoot, testFile)], {
+    const testPath = join(testRoot, testFile);
+    const command = process.versions.bun && nodeRuntimeFiles.has(testFile) ? 'node' : process.execPath;
+    const args = process.versions.bun && bunTestRunnerFiles.has(testFile) ? ['test', testPath] : [testPath];
+    const status = await processScope.run(command, args, {
       cwd: process.cwd(),
       env: process.env,
       windowsHide: true,
