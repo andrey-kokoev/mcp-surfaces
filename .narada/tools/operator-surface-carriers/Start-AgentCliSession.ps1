@@ -2,7 +2,7 @@
 # narada_template_id: narada.agent_cli.windows_wrapper
 # narada_template_version: 2
 # narada_template_source: @narada-core/agent-runtime-server ./agent-cli-windows-wrapper-template
-# narada_template_hash: 4f0c1f06f96cd84491f3a70a4fb68b956c5942d5b99fffad8249333fe0e995e7
+# narada_template_hash: 495bbfc8c022ca8fa2ced5790fd150f77026ecdc5ac6fce793135e11eb339504
 
 param(
     [Parameter(Mandatory)]
@@ -12,9 +12,6 @@ param(
     [string]$WorkDir,
 
     [string]$SessionName = ($IdentityName -replace '\.', '-'),
-
-    [ValidateSet('openai-api', 'kimi-api', 'kimi-code-api', 'anthropic-api', 'codex-subscription')]
-    [string]$IntelligenceProvider = 'kimi-api',
 
     [switch]$SessionInventory,
 
@@ -81,27 +78,20 @@ param(
 )
 $ErrorActionPreference = 'Stop'
 
-$SiteRoot = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
-$NaradaProperRoot = if ($env:NARADA_PROPER_ROOT) { $env:NARADA_PROPER_ROOT } else { $null }
+$SiteControlRoot = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
+$SiteRoot = Split-Path -Parent $SiteControlRoot
+$UserHome = [Environment]::GetFolderPath('UserProfile')
+$SourceRoot = if ($env:NARADA_SRC_ROOT) { $env:NARADA_SRC_ROOT } else { Join-Path $UserHome 'src' }
+$NaradaProperRoot = if ($env:NARADA_PROPER_ROOT) {
+    $env:NARADA_PROPER_ROOT
+} elseif ($env:NARADA_ROOT) {
+    $env:NARADA_ROOT
+} else {
+    Join-Path $SourceRoot 'narada'
+}
 
 if (-not ([string]$env:NODE_OPTIONS -match '(^|\s)--no-warnings(=|\s|$)')) {
     $env:NODE_OPTIONS = (($env:NODE_OPTIONS, '--no-warnings=ExperimentalWarning') | Where-Object { $_ }) -join ' '
-}
-
-function Get-FirstProviderEnvironmentValue {
-    param([string[]]$Names)
-    foreach ($name in $Names) {
-        $value = [Environment]::GetEnvironmentVariable($name, 'Process')
-        if ($value) { return $value }
-    }
-    return $null
-}
-
-function Set-PrimaryProviderEnvironmentValue {
-    param([string]$Name, [string]$Value)
-    if ($Name -and $Value) {
-        [Environment]::SetEnvironmentVariable($Name, $Value, 'Process')
-    }
 }
 
 function Resolve-NaradaPackageRoot {
@@ -122,7 +112,7 @@ function Resolve-NaradaPackageRoot {
     }
 
     if ($PackageName -eq '@narada-core/agent-cli') {
-        $agentCliRoot = if ($env:NARADA_AGENT_CLI_ROOT) { $env:NARADA_AGENT_CLI_ROOT } else { 'D:\code\agent-cli' }
+        $agentCliRoot = if ($env:NARADA_AGENT_CLI_ROOT) { $env:NARADA_AGENT_CLI_ROOT } else { Join-Path $SourceRoot 'agent-cli' }
         $agentCliPackageJson = Join-Path $agentCliRoot 'package.json'
         if (Test-Path -LiteralPath $agentCliPackageJson -PathType Leaf) {
             return $agentCliRoot
@@ -162,86 +152,8 @@ function Resolve-NaradaPackageBin {
     return Join-Path $package.Root $target
 }
 
-function Resolve-NaradaPackageExport {
-    param(
-        [Parameter(Mandatory)][string]$PackageName,
-        [string]$ExportName = '.'
-    )
-
-    $package = Get-NaradaPackageJson -PackageName $PackageName
-    $exports = $package.Json.exports
-    $target = if ($exports -is [string] -and $ExportName -eq '.') {
-        $exports
-    } else {
-        $exports.PSObject.Properties[$ExportName].Value
-    }
-    if (-not $target) {
-        throw "narada_package_export_missing: $PackageName $ExportName"
-    }
-    return Join-Path $package.Root $target
-}
-
 $AgentCliPath = Resolve-NaradaPackageBin -PackageName '@narada-core/agent-cli' -BinName 'narada-agent-cli'
 $AgentRuntimeServerPath = Resolve-NaradaPackageBin -PackageName '@narada-core/agent-runtime-server' -BinName 'narada-agent-runtime-server'
-$ProviderMetadataPath = Resolve-NaradaPackageExport -PackageName '@narada-core/carrier-provider-contract' -ExportName './provider-registry'
-$ProviderMetadata = (Get-Content $ProviderMetadataPath -Raw | ConvertFrom-Json).providers
-$providerDefault = $ProviderMetadata.PSObject.Properties[$IntelligenceProvider].Value
-if (-not $providerDefault) {
-    Write-Error "No provider metadata found for $IntelligenceProvider in $ProviderMetadataPath"
-    exit 1
-}
-$CredentialEnvNames = @($providerDefault.credential_env_names | ForEach-Object { [string]$_ } | Where-Object { $_ })
-$PrimaryCredentialEnvName = if ($CredentialEnvNames.Count -gt 0) { $CredentialEnvNames[0] } else { $null }
-$BaseUrlEnvNames = @($providerDefault.base_url_env_names | ForEach-Object { [string]$_ } | Where-Object { $_ })
-$PrimaryBaseUrlEnvName = if ($BaseUrlEnvNames.Count -gt 0) { $BaseUrlEnvNames[0] } else { $null }
-$ModelEnvNames = @($providerDefault.model_env_names | ForEach-Object { [string]$_ } | Where-Object { $_ })
-$PrimaryModelEnvName = if ($ModelEnvNames.Count -gt 0) { $ModelEnvNames[0] } else { $null }
-$CredentialSecretRef = if ($providerDefault.credential_secret_ref) { [string]$providerDefault.credential_secret_ref } elseif ($CredentialEnvNames.Count -gt 0) { "narada/provider/$IntelligenceProvider/api-key" } else { $null }
-$ProviderConfigCredentialValue = $null
-$env:NARADA_INTELLIGENCE_PROVIDER = $IntelligenceProvider
-
-function Test-ProviderSecretStoreEnabled {
-    $mode = [Environment]::GetEnvironmentVariable('NARADA_PROVIDER_SECRET_STORE', 'Process')
-    if (-not $mode) { return $true }
-    return @('0', 'false', 'off', 'disabled', 'none') -notcontains $mode.Trim().ToLowerInvariant()
-}
-
-function Get-ProviderCredentialFromSecretStore {
-    if (-not $CredentialSecretRef) { return $null }
-    if (-not (Test-ProviderSecretStoreEnabled)) { return $null }
-    if (-not (Get-Module -ListAvailable -Name Microsoft.PowerShell.SecretManagement)) { return $null }
-    try {
-        Import-Module Microsoft.PowerShell.SecretManagement -ErrorAction Stop
-        $secret = Get-Secret -Name $CredentialSecretRef -AsPlainText -ErrorAction SilentlyContinue
-        if ($secret) { return [string]$secret }
-    } catch {
-        return $null
-    }
-    return $null
-}
-
-function Get-ProviderCredentialFromEnvironment {
-    foreach ($name in $CredentialEnvNames) {
-        $value = [Environment]::GetEnvironmentVariable($name, 'Process')
-        if ($value) { return $value }
-    }
-    return $null
-}
-
-function Get-ProviderCredentialValue {
-    $secretValue = Get-ProviderCredentialFromSecretStore
-    if ($secretValue) { return $secretValue }
-    $envValue = Get-ProviderCredentialFromEnvironment
-    if ($envValue) { return $envValue }
-    return $ProviderConfigCredentialValue
-}
-
-function Set-PrimaryProviderCredential {
-    param([string]$Value)
-    if ($PrimaryCredentialEnvName -and $Value) {
-        [Environment]::SetEnvironmentVariable($PrimaryCredentialEnvName, $Value, 'Process')
-    }
-}
 
 function Import-DotEnvFile {
     param([Parameter(Mandatory)][string]$Path)
@@ -266,36 +178,8 @@ function Import-DotEnvFile {
 
 Import-DotEnvFile -Path (Join-Path $SiteRoot '.env')
 
-# Load API provider config if present
-$ConfigPath = Join-Path (Resolve-NaradaPackageRoot -PackageName '@narada-core/agent-cli') 'agent-cli-config.json'
-$EffectiveConfigPath = if (Test-Path $ConfigPath) { $ConfigPath } else { $null }
-if ($EffectiveConfigPath) {
-    $config = Get-Content $EffectiveConfigPath -Raw | ConvertFrom-Json
-    $configProvider = if ($config.provider) { [string]$config.provider } else { 'openai-api' }
-    if ($configProvider -eq $IntelligenceProvider) {
-        if ($config.api_key) {
-            $ProviderConfigCredentialValue = [string]$config.api_key
-        }
-        if ($config.base_url -and $PrimaryBaseUrlEnvName -and -not (Get-FirstProviderEnvironmentValue -Names $BaseUrlEnvNames)) {
-            Set-PrimaryProviderEnvironmentValue -Name $PrimaryBaseUrlEnvName -Value ([string]$config.base_url)
-        }
-        if ($config.model -and $PrimaryModelEnvName -and -not (Get-FirstProviderEnvironmentValue -Names $ModelEnvNames)) {
-            Set-PrimaryProviderEnvironmentValue -Name $PrimaryModelEnvName -Value ([string]$config.model)
-        }
-    }
-}
-$ProviderCredentialValue = Get-ProviderCredentialValue
-Set-PrimaryProviderCredential -Value $ProviderCredentialValue
-
 # Set window title for OSL binding and general identification
 $Host.UI.RawUI.WindowTitle = $IdentityName
-
-if ($PrimaryBaseUrlEnvName -and -not (Get-FirstProviderEnvironmentValue -Names $BaseUrlEnvNames)) {
-    Set-PrimaryProviderEnvironmentValue -Name $PrimaryBaseUrlEnvName -Value ([string]$providerDefault.base_url)
-}
-if ($PrimaryModelEnvName -and -not (Get-FirstProviderEnvironmentValue -Names $ModelEnvNames)) {
-    Set-PrimaryProviderEnvironmentValue -Name $PrimaryModelEnvName -Value ([string]$providerDefault.default_model)
-}
 # Validate node is available
 $node = Get-Command node -ErrorAction SilentlyContinue
 if (-not $node) {
@@ -309,18 +193,6 @@ if (-not (Test-Path $AgentCliPath)) {
 }
 if (-not (Test-Path $AgentRuntimeServerPath)) {
     Write-Error "Agent runtime server not found at $AgentRuntimeServerPath"
-    exit 1
-}
-
-# Validate API key is configured
-if ($IntelligenceProvider -ne 'codex-subscription' -and -not $ProviderCredentialValue) {
-    $credentialHint = if ($CredentialEnvNames.Count -gt 0) { ($CredentialEnvNames -join ' or ') } else { 'the provider-specific API key environment variable' }
-    Write-Error @"
-No AI API key configured for provider '$IntelligenceProvider'.
-  - SecretStore: Set-Secret -Name "$CredentialSecretRef" -Secret "<api-key>"
-  - Environment fallback: $credentialHint
-  - Config file fallback: $ConfigPath  (add `"api_key`": `"<api-key>`" )
-"@
     exit 1
 }
 
@@ -531,10 +403,7 @@ if ($AutoApprove) {
 Write-Host "Starting agent-runtime-server for $IdentityName..." -ForegroundColor Cyan
 Write-Host "  Session: $SessionName" -ForegroundColor DarkGray
 Write-Host "  WorkDir: $WorkDir" -ForegroundColor DarkGray
-$displayModel = if ($PrimaryModelEnvName) { [Environment]::GetEnvironmentVariable($PrimaryModelEnvName, 'Process') } else { $null }
-if (-not $displayModel) { $displayModel = $providerDefault.default_model }
-Write-Host "  Provider: $IntelligenceProvider" -ForegroundColor DarkGray
-Write-Host "  Model:   $displayModel" -ForegroundColor DarkGray
+Write-Host "  Intelligence: resolved at invocation time from the Site registry" -ForegroundColor DarkGray
 Write-Host ""
 Set-Location $WorkDir
 & node @argList
