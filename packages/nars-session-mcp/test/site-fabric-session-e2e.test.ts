@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import { createServer } from 'node:http';
+import { createServer as createNetServer, type Socket } from 'node:net';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -63,30 +64,38 @@ function decodeClientFrames(input: Buffer): { frames: Array<{ text: string }>; r
 }
 
 function installInputStatusEventEndpoint() {
-  const sockets: Array<{ destroy(): void }> = [];
-  healthServer.on('upgrade', (request, socket) => {
-    if (request.url?.split('?')[0] !== '/events') {
-      socket.end('HTTP/1.1 404 Not Found\r\n\r\n');
-      return;
-    }
-    const key = String(request.headers['sec-websocket-key'] ?? '');
-    if (!key) {
-      socket.end('HTTP/1.1 400 Bad Request\r\n\r\n');
-      return;
-    }
-    const accept = createHash('sha1').update(`${key}258EAFA5-E914-47DA-95CA-C5AB0DC85B11`).digest('base64');
-    socket.write([
-      'HTTP/1.1 101 Switching Protocols',
-      'Upgrade: websocket',
-      'Connection: Upgrade',
-      `Sec-WebSocket-Accept: ${accept}`,
-      '',
-      '',
-    ].join('\r\n'));
+  const sockets: Socket[] = [];
+  const server = createNetServer((socket) => {
     sockets.push(socket);
     let pending: Buffer<ArrayBufferLike> = Buffer.alloc(0);
+    let handshaken = false;
     socket.on('data', (chunk) => {
       pending = Buffer.concat([pending, chunk]);
+      if (!handshaken) {
+        const headerEnd = pending.indexOf(Buffer.from('\r\n\r\n'));
+        if (headerEnd < 0) return;
+        const header = pending.subarray(0, headerEnd).toString('utf8');
+        if (!/^GET \/events HTTP\/1\.1/im.test(header)) {
+          socket.end('HTTP/1.1 404 Not Found\r\n\r\n');
+          return;
+        }
+        const key = /^Sec-WebSocket-Key:\s*(.+)$/im.exec(header)?.[1]?.trim();
+        if (!key) {
+          socket.end('HTTP/1.1 400 Bad Request\r\n\r\n');
+          return;
+        }
+        const accept = createHash('sha1').update(`${key}258EAFA5-E914-47DA-95CA-C5AB0DC85B11`).digest('base64');
+        socket.write([
+          'HTTP/1.1 101 Switching Protocols',
+          'Upgrade: websocket',
+          'Connection: Upgrade',
+          `Sec-WebSocket-Accept: ${accept}`,
+          '',
+          '',
+        ].join('\r\n'));
+        pending = pending.subarray(headerEnd + 4);
+        handshaken = true;
+      }
       const decoded = decodeClientFrames(pending);
       pending = decoded.rest;
       for (const frame of decoded.frames) {
@@ -147,13 +156,19 @@ function installInputStatusEventEndpoint() {
       if (index >= 0) sockets.splice(index, 1);
     });
   });
-  return sockets;
+  return { server, sockets };
 }
 
-await new Promise<void>((resolve) => healthServer.listen(0, '127.0.0.1', resolve));
+const eventEndpoint = installInputStatusEventEndpoint();
+await Promise.all([
+  new Promise<void>((resolve) => healthServer.listen(0, '127.0.0.1', resolve)),
+  new Promise<void>((resolve) => eventEndpoint.server.listen(0, '127.0.0.1', resolve)),
+]);
 const address = healthServer.address();
+const eventAddress = eventEndpoint.server.address();
 assert.ok(address && typeof address === 'object');
-const eventSockets = installInputStatusEventEndpoint();
+assert.ok(eventAddress && typeof eventAddress === 'object');
+const eventSockets = eventEndpoint.sockets;
 
 const sessionsRoot = `${siteRoot}/.narada/crew/nars-sessions`;
 mkdirSync(`${sessionsRoot}/carrier_fixture`, { recursive: true });
@@ -257,7 +272,7 @@ try {
     authority_runtime_id: 'authority_fixture',
     source_write_admission: 'active',
     health_endpoint: `http://127.0.0.1:${address.port}/health`,
-    event_endpoint: `ws://127.0.0.1:${address.port}/events`,
+    event_endpoint: `ws://127.0.0.1:${eventAddress.port}/events`,
   }), 'utf8');
   const inputStatus = structured(await server.client.request(4, 'tools/call', {
     name: 'nars_session_input_status',
@@ -298,7 +313,10 @@ try {
 } finally {
   await server.close();
   for (const socket of eventSockets) socket.destroy();
-  await new Promise<void>((resolve) => healthServer.close(() => resolve()));
+  await Promise.all([
+    new Promise<void>((resolve) => healthServer.close(() => resolve())),
+    new Promise<void>((resolve) => eventEndpoint.server.close(() => resolve())),
+  ]);
   const cleanupOk = removeTemporaryE2eRoot(siteRoot);
   evidence.finalize({ status: cleanupOk ? 'passed' : 'failed', cleanup: { status: cleanupOk ? 'completed_after_finally' : 'failed' } });
   assert.equal(cleanupOk, true);
