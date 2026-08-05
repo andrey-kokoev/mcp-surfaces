@@ -79,7 +79,14 @@ export function nativeTestProcessScopePath(): string {
   if (process.platform !== 'win32') {
     throw new Error('the Rust test process scope is currently implemented for Windows only');
   }
-  const packageRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..');
+  const moduleDirectory = dirname(fileURLToPath(import.meta.url));
+  const packageRoot = [
+    resolve(moduleDirectory, '..'),
+    resolve(moduleDirectory, '..', '..'),
+  ].find((candidate) => existsSync(join(candidate, 'native', 'Cargo.toml')));
+  if (!packageRoot) {
+    throw new Error('mcp-e2e-harness package root not found from: ' + moduleDirectory);
+  }
   const executable = join(packageRoot, 'native', 'target', 'release', 'narada-test-process-scope.exe');
   if (!existsSync(executable)) {
     throw new Error('Rust test process scope is not built: ' + executable + '; run the mcp-e2e-harness build first');
