@@ -21,8 +21,12 @@
   "scripts": {
     "build": "tsc -b",
     "typecheck": "tsc -b --pretty false",
-    "test": "pnpm --filter @narada-core/mcp-e2e-harness build && pnpm build && node dist/test/protocol-smoke.test.js && node dist/test/cloudflare-carrier-mcp.test.js && node dist/test/site-fabric-cloudflare-e2e.test.js",
-    "test:e2e:site-fabric": "pnpm --filter @narada-core/mcp-e2e-harness build && pnpm build && node dist/test/site-fabric-cloudflare-e2e.test.js",
+    "test": "pnpm run test:bun",
+    "test:bun": "pnpm --filter @narada-core/mcp-e2e-harness build && pnpm build && bun dist/test/protocol-smoke.test.js && bun dist/test/cloudflare-carrier-mcp.test.js && bun dist/test/site-fabric-cloudflare-e2e.test.js",
+    "test:node": "pnpm --filter @narada-core/mcp-e2e-harness build && pnpm build && node dist/test/protocol-smoke.test.js && node dist/test/cloudflare-carrier-mcp.test.js && node dist/test/site-fabric-cloudflare-e2e.test.js",
+    "test:e2e:site-fabric": "pnpm run test:e2e:site-fabric:bun",
+    "test:e2e:site-fabric:bun": "pnpm --filter @narada-core/mcp-e2e-harness build && pnpm build && bun dist/test/site-fabric-cloudflare-e2e.test.js",
+    "test:e2e:site-fabric:node": "pnpm --filter @narada-core/mcp-e2e-harness build && pnpm build && node dist/test/site-fabric-cloudflare-e2e.test.js",
     "test:e2e:cloudflare-live": "pnpm --filter @narada-core/mcp-e2e-harness build && pnpm build && node dist/test/cloudflare-carrier-live-e2e.test.js"
   },
   "dependencies": {
