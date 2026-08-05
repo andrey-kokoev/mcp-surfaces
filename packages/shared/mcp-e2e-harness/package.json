@@ -7,7 +7,9 @@
   "scripts": {
     "build": "cargo build --release --manifest-path native/Cargo.toml && tsc -b",
     "typecheck": "tsc -b --pretty false",
-    "test": "pnpm build && node dist/test/mcp-e2e-harness.test.js"
+    "test": "pnpm run test:bun",
+    "test:bun": "pnpm build && bun dist/test/mcp-e2e-harness.test.js",
+    "test:node": "pnpm build && node dist/test/mcp-e2e-harness.test.js"
   },
   "types": "./dist/src/main.d.ts",
   "exports": {
