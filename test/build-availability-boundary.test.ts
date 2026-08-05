@@ -12,10 +12,13 @@ test('routine workspace build never invokes destructive dist cleanup', () => {
   const packageJson = JSON.parse(readFileSync(join(repositoryRoot, 'package.json'), 'utf8')) as {
     scripts?: Record<string, string>;
   };
-  const build = packageJson.scripts?.build ?? '';
-  assert.match(build, /prepare-workspace-build\.ts/u);
-  assert.match(build, /tsc -b --force/u);
-  assert.doesNotMatch(build, /clean-workspace-dist|tsc -b --clean|rimraf|(?:^|\s)rm\s/u);
+  const scripts = packageJson.scripts ?? {};
+  assert.equal(scripts.build, 'pnpm run build:bun');
+  for (const build of [scripts['build:bun'] ?? '', scripts['build:node'] ?? '']) {
+    assert.match(build, /prepare-workspace-build\.ts/u);
+    assert.match(build, /tsc -b --force/u);
+    assert.doesNotMatch(build, /clean-workspace-dist|tsc -b --clean|rimraf|(?:^|\s)rm\s/u);
+  }
   assert.equal(existsSync(join(repositoryRoot, 'scripts', 'clean-workspace-dist.ts')), false);
 });
 
