@@ -866,7 +866,7 @@ function siteFabricDiagnostics(args: JsonRecord, state: LoaderState): JsonRecord
     const rec = asRecord(server);
     const command = String(rec.command ?? '');
     const rawArgs = stringArray(rec.args) ?? [];
-    const declaredEntrypoint = extractNodeEntrypoint(command, rawArgs);
+    const declaredEntrypoint = extractRuntimeEntrypoint(command, rawArgs);
     const shared = SHARED_SURFACE_REGISTRY[surfaceId];
     const expectedEntrypoint = shared ? normalizePath(shared.entrypoint.replace(/{site_root}/g, siteRoot)) : null;
     const normalizedDeclared = declaredEntrypoint ? normalizePath(declaredEntrypoint.replace(/{site_root}/g, siteRoot)) : null;
@@ -1453,7 +1453,7 @@ async function resolveSurfaceEntrypoint(siteRoot: string, surfaceId: string, exp
     const rec = asRecord(server);
     const command = String(rec.command ?? '');
     const rawArgs = stringArray(rec.args) ?? [];
-    const declaredEntrypoint = extractNodeEntrypoint(command, rawArgs);
+    const declaredEntrypoint = extractRuntimeEntrypoint(command, rawArgs);
     if (!declaredEntrypoint) {
       throw diagnosticError('surface_command_unsupported', `surface_command_unsupported:${surfaceId}:${command}`);
     }
@@ -1470,10 +1470,10 @@ async function resolveSurfaceEntrypoint(siteRoot: string, surfaceId: string, exp
   throw diagnosticError('surface_not_found', `surface_not_found:${surfaceId}`);
 }
 
-function extractNodeEntrypoint(command: string, args: string[]): string | null {
+function extractRuntimeEntrypoint(command: string, args: string[]): string | null {
   const normalizedCommand = normalizePath(command.trim());
   const commandBaseName = normalizedCommand.slice(normalizedCommand.lastIndexOf('/') + 1).toLowerCase();
-  if (commandBaseName === 'node' || commandBaseName === 'node.exe' || commandBaseName === 'node.cmd') {
+  if (['node', 'node.exe', 'node.cmd', 'bun', 'bun.exe'].includes(commandBaseName)) {
     return args.find((arg) => /\.m?js$/i.test(arg) || /\.cjs$/i.test(arg)) ?? null;
   }
   const commandEntrypoint = command.replace(/^node\s+--import\s+tsx\s+/i, '').replace(/^node\s+/i, '').trim();
@@ -1502,7 +1502,7 @@ function classifyFabricEntrypoint({ siteRoot, declaredEntrypoint, expectedEntryp
   if (!declaredEntrypoint) {
     return {
       status: 'entrypoint_unresolved',
-      remediation: ['Inspect the site fabric command and args; mcp-loader could not determine the Node entrypoint.'],
+      remediation: ['Inspect the site fabric command and args; mcp-loader could not determine the JavaScript entrypoint.'],
     };
   }
   if (!entrypointExists) {
