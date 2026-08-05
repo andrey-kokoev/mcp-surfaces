@@ -7,7 +7,9 @@
   "scripts": {
     "build": "tsc -b",
     "typecheck": "tsc -b --pretty false",
-    "test": "pnpm build && node dist/test/mcp-runtime-client.test.js"
+    "test": "pnpm run test:bun",
+    "test:bun": "pnpm build && bun dist/test/mcp-runtime-client.test.js",
+    "test:node": "pnpm build && node dist/test/mcp-runtime-client.test.js"
   },
   "types": "./dist/src/index.d.ts",
   "exports": {
