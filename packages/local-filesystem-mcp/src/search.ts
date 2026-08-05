@@ -39,7 +39,7 @@ export function runRipgrepPage(args: any, { operation, noMatchStatus, offset, li
     env,
   });
   if (result.error) {
-    const timedOut = result.error.name === 'Error' && result.error.message.includes('ETIMEDOUT');
+    const timedOut = (result.error as NodeJS.ErrnoException).code === 'ETIMEDOUT' || result.error.message.includes('ETIMEDOUT');
     throw diagnosticError(timedOut ? `${operation}_timed_out` : `${operation}_failed`, `${timedOut ? `${operation}_timed_out` : `${operation}_failed`}: ${result.error.message}`, {
       operation,
       status: result.status ?? null,
