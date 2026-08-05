@@ -6,7 +6,9 @@
   "scripts": {
     "build": "tsc -b",
     "typecheck": "tsc -b --pretty false",
-    "test": "pnpm build && node --disable-warning=ExperimentalWarning dist/test/execution-contract.test.js"
+    "test": "pnpm run test:bun",
+    "test:bun": "pnpm build && bun dist/test/execution-contract.test.js",
+    "test:node": "pnpm build && node --disable-warning=ExperimentalWarning dist/test/execution-contract.test.js"
   },
   "types": "./dist/src/main.d.ts",
   "exports": {
