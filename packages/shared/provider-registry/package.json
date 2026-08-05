@@ -7,7 +7,9 @@
   "scripts": {
     "build": "tsc -b",
     "typecheck": "tsc -b --pretty false",
-    "test": "pnpm build && node dist/test/provider-registry.test.js"
+    "test": "pnpm run test:bun",
+    "test:bun": "pnpm build && bun dist/test/provider-registry.test.js",
+    "test:node": "pnpm build && node dist/test/provider-registry.test.js"
   },
   "types": "./dist/src/main.d.ts",
   "exports": {
