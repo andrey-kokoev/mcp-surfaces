@@ -27,6 +27,28 @@ function Invoke-PnpmStep {
   Write-Log "Completed ${Label}."
 }
 
+function Show-SuccessNotification {
+  try {
+    Add-Type -AssemblyName System.Drawing
+    Add-Type -AssemblyName System.Windows.Forms
+
+    $notifyIcon = New-Object System.Windows.Forms.NotifyIcon
+    try {
+      $notifyIcon.Icon = [System.Drawing.SystemIcons]::Information
+      $notifyIcon.BalloonTipTitle = 'Narada MCP'
+      $notifyIcon.BalloonTipText = 'All carriers materialized. Restart Codex to load the refreshed MCP configuration.'
+      $notifyIcon.BalloonTipIcon = [System.Windows.Forms.ToolTipIcon]::Info
+      $notifyIcon.Visible = $true
+      $notifyIcon.ShowBalloonTip(10000)
+      Start-Sleep -Seconds 10
+    } finally {
+      $notifyIcon.Dispose()
+    }
+  } catch {
+    Write-Log "WARNING: success notification unavailable: $($_ | Out-String)"
+  }
+}
+
 try {
   Set-Content -LiteralPath $logPath -Value "[$(Get-Date -Format o)] Starting workspace build and all-carrier materialization." -Encoding utf8
   $pnpmCommand = (Get-Command pnpm.cmd -ErrorAction Stop).Source
@@ -36,6 +58,7 @@ try {
   Invoke-PnpmStep -Label 'workspace build' -Arguments @('build')
   Invoke-PnpmStep -Label 'all-carrier materialization' -Arguments @('materialize:carrier', '--materialize-all')
   Write-Log 'Materialization completed successfully.'
+  Show-SuccessNotification
   exit 0
 } catch {
   $details = ($_ | Out-String).Trim()
