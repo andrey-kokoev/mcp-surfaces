@@ -24,9 +24,13 @@
   ],
   "scripts": {
     "build": "tsc -b",
-    "build:postcompile": "node dist/src/emit-json-schema.js",
+    "build:postcompile": "pnpm run build:postcompile:bun",
+    "build:postcompile:bun": "bun dist/src/emit-json-schema.js",
+    "build:postcompile:node": "node dist/src/emit-json-schema.js",
     "typecheck": "tsc -b --pretty false",
-    "test": "pnpm build && pnpm run build:postcompile && node dist/test/mcp-fabric-contracts.test.js"
+    "test": "pnpm run test:bun",
+    "test:bun": "pnpm build && pnpm run build:postcompile && bun test dist/test/mcp-fabric-contracts.test.js",
+    "test:node": "pnpm build && pnpm run build:postcompile:node && node dist/test/mcp-fabric-contracts.test.js"
   },
   "dependencies": {
     "zod": "^4.4.3"
