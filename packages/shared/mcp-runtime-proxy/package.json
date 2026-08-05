@@ -6,7 +6,9 @@
   "scripts": {
     "build": "tsc -b",
     "typecheck": "tsc -b --pretty false",
-    "test": "pnpm --filter @narada-core/mcp-e2e-harness build && pnpm build && node dist/test/mcp-runtime-proxy.test.js && node dist/test/generation-manager.test.js && node --test dist/test/runtime-observation.test.js && node --test dist/test/workspace-artifact-manifest.test.js && node --test dist/test/materialization-contract.test.js"
+    "test": "pnpm run test:bun",
+    "test:bun": "pnpm --filter @narada-core/mcp-e2e-harness build && pnpm build && bun dist/test/mcp-runtime-proxy.test.js && bun test dist/test/generation-manager.test.js && bun test dist/test/runtime-observation.test.js && bun test dist/test/workspace-artifact-manifest.test.js && bun test dist/test/materialization-contract.test.js",
+    "test:node": "pnpm --filter @narada-core/mcp-e2e-harness build && pnpm build && node dist/test/mcp-runtime-proxy.test.js && node dist/test/generation-manager.test.js && node --test dist/test/runtime-observation.test.js && node --test dist/test/workspace-artifact-manifest.test.js && node --test dist/test/materialization-contract.test.js"
   },
   "types": "./dist/src/main.d.ts",
   "exports": {
