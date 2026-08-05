@@ -4,13 +4,21 @@
   "license": "Apache-2.0",
   "type": "module",
   "scripts": {
-    "build": "tsc -b",
+    "build": "tsc -b && pnpm run build:native",
+    "build:native": "bun scripts/build-native.ts",
+    "build:postcompile": "pnpm run build:native",
+    "benchmark:runtime": "bun scripts/benchmark-native.ts",
+    "benchmark:strong": "bun scripts/benchmark-strong.ts",
+    "benchmark:native": "pnpm run benchmark:runtime",
     "typecheck": "tsc -b --pretty false",
     "test": "pnpm run test:bun",
-    "test:bun": "pnpm --filter @narada-core/mcp-e2e-harness build && pnpm build && bun dist/test/mcp-runtime-proxy.test.js && bun test dist/test/generation-manager.test.js && bun test dist/test/runtime-observation.test.js && bun test dist/test/workspace-artifact-manifest.test.js && bun test dist/test/materialization-contract.test.js",
-    "test:node": "pnpm --filter @narada-core/mcp-e2e-harness build && pnpm build && node dist/test/mcp-runtime-proxy.test.js && node dist/test/generation-manager.test.js && node --test dist/test/runtime-observation.test.js && node --test dist/test/workspace-artifact-manifest.test.js && node --test dist/test/materialization-contract.test.js"
+    "test:bun": "pnpm --filter @narada-core/mcp-e2e-harness build && pnpm build && bun dist/test/mcp-runtime-proxy.test.js && bun dist/test/native-proxy.test.js && bun test dist/test/generation-manager.test.js && bun test dist/test/runtime-observation.test.js && bun test dist/test/workspace-artifact-manifest.test.js && bun test dist/test/materialization-contract.test.js",
+    "test:node": "pnpm --filter @narada-core/mcp-e2e-harness build && pnpm build && node dist/test/mcp-runtime-proxy.test.js && node dist/test/native-proxy.test.js && node dist/test/generation-manager.test.js && node --test dist/test/runtime-observation.test.js && node --test dist/test/workspace-artifact-manifest.test.js && node --test dist/test/materialization-contract.test.js"
   },
   "types": "./dist/src/main.d.ts",
+  "naradaRuntimeArtifacts": {
+    "win32": ["./dist/native/narada-mcp-runtime.exe"]
+  },
   "exports": {
     ".": {
       "types": "./dist/src/main.d.ts",
@@ -40,6 +48,9 @@
   },
   "files": [
     "dist/",
+    "native/Cargo.lock",
+    "native/Cargo.toml",
+    "BENCHMARK-TARGET.md",
     "README.md"
   ],
   "devDependencies": {

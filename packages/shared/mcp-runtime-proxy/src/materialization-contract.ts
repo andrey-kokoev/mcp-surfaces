@@ -3,7 +3,7 @@ import { existsSync, mkdirSync, readFileSync, renameSync, unlinkSync, writeFileS
 import { dirname, resolve } from 'node:path';
 import { describeUnknownError } from './error-description.js';
 
-export const MCP_RUNTIME_CONTRACT_VERSION = 2 as const;
+export const MCP_RUNTIME_CONTRACT_VERSION = 3 as const;
 export const MATERIALIZATION_GENERATION_SCHEMA = 'narada.mcp_materialization_generation.v1' as const;
 
 type JsonRecord = Record<string, unknown>;
@@ -19,6 +19,9 @@ export type MaterializationGeneration = {
   artifact_manifest_fingerprint: string | null;
   registrar_entrypoint: string;
   registrar_fingerprint: string | null;
+  proxy_implementation: 'bun' | 'native';
+  proxy_entrypoint: string;
+  proxy_fingerprint: string | null;
   server_count: number;
   proxy_count: number;
   generation_fingerprint: string;
@@ -173,10 +176,18 @@ export function validateMaterializedConfiguration(input: {
       errors.push({ code: 'materialized_config_runtime_proxy_missing', server_key: serverKey, detail: { path: proxyPath } });
     }
     const childEntrypoint = argValue(launch.args, '--entrypoint');
+    const childCommand = argValue(launch.args, '--child-command');
+    if (!childCommand) {
+      errors.push({ code: 'materialized_config_child_command_missing', server_key: serverKey });
+    }
     if (!childEntrypoint) {
       errors.push({ code: 'materialized_config_child_entrypoint_missing', server_key: serverKey });
     } else if (!existsSync(childEntrypoint)) {
       errors.push({ code: 'materialized_config_child_entrypoint_missing', server_key: serverKey, detail: { path: childEntrypoint } });
+    }
+    const registrarEntrypoint = argValue(launch.args, '--registrar-entrypoint');
+    if (registrarEntrypoint && !argValue(launch.args, '--registrar-command')) {
+      errors.push({ code: 'materialized_config_registrar_command_missing', server_key: serverKey });
     }
     const sidecarPath = argValue(launch.args, '--materialization-sidecar');
     if (input.requireSidecar && !sidecarPath) {
@@ -203,6 +214,8 @@ export function buildMaterializationGeneration(input: {
   artifactManifestPath: string;
   artifactManifestFingerprint: string | null;
   registrarEntrypoint: string;
+  proxyImplementation: 'bun' | 'native';
+  proxyEntrypoint: string;
   serverCount: number;
   proxyCount: number;
 }): MaterializationGeneration {
@@ -217,6 +230,9 @@ export function buildMaterializationGeneration(input: {
     artifact_manifest_fingerprint: input.artifactManifestFingerprint,
     registrar_entrypoint: resolve(input.registrarEntrypoint),
     registrar_fingerprint: sha256File(input.registrarEntrypoint),
+    proxy_implementation: input.proxyImplementation,
+    proxy_entrypoint: resolve(input.proxyEntrypoint),
+    proxy_fingerprint: sha256File(input.proxyEntrypoint),
     server_count: input.serverCount,
     proxy_count: input.proxyCount,
     generated_at: new Date().toISOString(),
@@ -267,6 +283,9 @@ export function preflightMaterializationGeneration(input: {
     (generation.artifact_manifest_fingerprint !== null && typeof generation.artifact_manifest_fingerprint !== 'string') ||
     typeof generation.registrar_entrypoint !== 'string' ||
     (generation.registrar_fingerprint !== null && typeof generation.registrar_fingerprint !== 'string') ||
+    (generation.proxy_implementation !== 'bun' && generation.proxy_implementation !== 'native') ||
+    typeof generation.proxy_entrypoint !== 'string' ||
+    (generation.proxy_fingerprint !== null && typeof generation.proxy_fingerprint !== 'string') ||
     typeof generation.server_count !== 'number' ||
     typeof generation.proxy_count !== 'number' ||
     typeof generation.generated_at !== 'string'
@@ -279,6 +298,9 @@ export function preflightMaterializationGeneration(input: {
     config_path: resolve(generation.config_path),
     registrar_entrypoint: resolve(generation.registrar_entrypoint),
     registrar_fingerprint: generation.registrar_fingerprint,
+    proxy_implementation: generation.proxy_implementation,
+    proxy_entrypoint: resolve(generation.proxy_entrypoint),
+    proxy_fingerprint: generation.proxy_fingerprint,
     materialization_generated_at: generation.generated_at,
   };
   const stale = (reason: string, details: JsonRecord = {}): MaterializationPreflight => ({
@@ -299,6 +321,9 @@ export function preflightMaterializationGeneration(input: {
     artifact_manifest_fingerprint: generation.artifact_manifest_fingerprint,
     registrar_entrypoint: generation.registrar_entrypoint,
     registrar_fingerprint: generation.registrar_fingerprint,
+    proxy_implementation: generation.proxy_implementation,
+    proxy_entrypoint: generation.proxy_entrypoint,
+    proxy_fingerprint: generation.proxy_fingerprint,
     server_count: generation.server_count,
     proxy_count: generation.proxy_count,
     generated_at: generation.generated_at,
@@ -324,6 +349,10 @@ export function preflightMaterializationGeneration(input: {
   const currentRegistrarFingerprint = sha256File(generation.registrar_entrypoint);
   if (!currentRegistrarFingerprint || currentRegistrarFingerprint !== generation.registrar_fingerprint) {
     return stale('The registrar build changed after configuration generation.', { registrar_entrypoint: generation.registrar_entrypoint });
+  }
+  const currentProxyFingerprint = sha256File(generation.proxy_entrypoint);
+  if (!currentProxyFingerprint || currentProxyFingerprint !== generation.proxy_fingerprint) {
+    return stale('The selected runtime proxy changed after configuration generation.', { proxy_implementation: generation.proxy_implementation, proxy_entrypoint: generation.proxy_entrypoint });
   }
   if (generation.contract_version !== MCP_RUNTIME_CONTRACT_VERSION) {
     return stale('The materialization contract version is obsolete.', { actual: generation.contract_version, expected: MCP_RUNTIME_CONTRACT_VERSION });

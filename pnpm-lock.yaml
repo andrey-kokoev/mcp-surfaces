@@ -53,6 +53,10 @@ importers:
         version: 5.9.3
 
   ../narada-core/packages/task-governance-core:
+    dependencies:
+      '@narada-core/sqlite':
+        specifier: workspace:*
+        version: link:../sqlite
     devDependencies:
       '@types/node':
         specifier: ^22.15.0
@@ -941,6 +945,9 @@ importers:
       '@narada-core/mcp-e2e-harness':
         specifier: workspace:*
         version: link:../shared/mcp-e2e-harness
+      '@narada-core/mcp-runtime-proxy':
+        specifier: workspace:*
+        version: link:../shared/mcp-runtime-proxy
       '@types/node':
         specifier: ^22.15.3
         version: 22.19.19

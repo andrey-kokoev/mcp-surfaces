@@ -5,7 +5,10 @@ import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { test } from 'node:test';
-import { preflightMaterializationGeneration } from '@narada-core/mcp-runtime-proxy/materialization-contract';
+import {
+  MCP_RUNTIME_CONTRACT_VERSION,
+  preflightMaterializationGeneration,
+} from '@narada-core/mcp-runtime-proxy/materialization-contract';
 
 type JsonRecord = Record<string, any>;
 
@@ -169,6 +172,50 @@ test('fresh registrar materializes, validates, and launches a carrier generation
     assert.equal(existsSync(join(root, 'mcp.json')), true);
     assert.equal(existsSync(join(root, 'opencode.jsonc')), true);
 
+    const nativeRoot = join(root, 'native');
+    const nativeMaterialize = await runCli([
+      registrarEntrypoint,
+      '--materialize-all',
+      '--output-dir',
+      nativeRoot,
+      '--runtime-proxy-implementation',
+      'native',
+    ]);
+    assert.equal(nativeMaterialize.exitCode, 0, nativeMaterialize.stderr);
+    const nativeResult = JSON.parse(nativeMaterialize.stdout) as JsonRecord;
+    const nativeCodex = (nativeResult.carriers as JsonRecord[]).find((carrier) => carrier.carrier_id === 'codex-andrey')!;
+    assert.equal(nativeCodex.materialization_generation.proxy_implementation, 'native');
+    assert.match(nativeCodex.materialization_generation.proxy_entrypoint, /narada-mcp-runtime\.exe$/i);
+    const nativeConfig = readFileSync(join(nativeRoot, 'config.toml'), 'utf8');
+    const nativeLaunch = codexLaunch(nativeConfig, 'narada-site-andrey-user-mcp-registrar');
+    assert.match(nativeLaunch.command, /narada-mcp-runtime\.exe$/i);
+    assert.equal(nativeLaunch.args[0], 'proxy');
+    const nativeChildCommand = nativeLaunch.args[nativeLaunch.args.indexOf('--child-command') + 1];
+    const nativeRegistrarCommand = nativeLaunch.args[nativeLaunch.args.indexOf('--registrar-command') + 1];
+    assert.equal(typeof nativeChildCommand, 'string');
+    assert.equal(nativeChildCommand!.length > 0, true);
+    assert.equal(nativeRegistrarCommand, nativeChildCommand);
+    const nativeProxyRun = await runRpc(nativeLaunch.command, nativeLaunch.args, {
+      jsonrpc: '2.0',
+      id: 'native-initialize',
+      method: 'initialize',
+      params: { protocolVersion: '2024-11-05', capabilities: {}, clientInfo: { name: 'native-materialization-e2e', version: '1.0.0' } },
+    });
+    assert.equal(nativeProxyRun.exitCode, 0, nativeProxyRun.stderr);
+    assert.equal(nativeProxyRun.responses[0]?.error, undefined, JSON.stringify(nativeProxyRun.responses[0]));
+    assert.equal(nativeProxyRun.responses[0]?.result?.serverInfo?.name, 'mcp-registrar');
+    writeFileSync(join(nativeRoot, 'config.toml'), nativeConfig + '# native stale generation test\n', 'utf8');
+    const nativeStaleRun = await runRpc(nativeLaunch.command, nativeLaunch.args, {
+      jsonrpc: '2.0',
+      id: 'native-stale',
+      method: 'initialize',
+      params: { protocolVersion: '2024-11-05' },
+    });
+    assert.notEqual(nativeStaleRun.exitCode, 0);
+    assert.equal(nativeStaleRun.responses[0]?.error?.data?.code, 'materialization_generation_stale');
+    assert.equal(nativeStaleRun.responses[0]?.error?.data?.details?.recovery?.schema, 'narada.mcp_runtime_proxy.materialization_recovery.v1');
+    assert.deepEqual(nativeStaleRun.responses[0]?.error?.data?.details?.recovery?.regeneration?.command?.args.slice(1), ['--materialize-all']);
+
     const materialize = await runRpc(process.execPath, [registrarEntrypoint], {
       jsonrpc: '2.0',
       id: 1,
@@ -180,7 +227,7 @@ test('fresh registrar materializes, validates, and launches a carrier generation
     assert.equal(result.status, 'materialized_all');
     assert.equal(result.carrier_count, 3);
     const codexResult = (result.carriers as JsonRecord[]).find((carrier) => carrier.carrier_id === 'codex-andrey')!;
-    assert.equal(result.runtime_contract_version, 2);
+    assert.equal(result.runtime_contract_version, MCP_RUNTIME_CONTRACT_VERSION);
     assert.equal(codexResult.materialization_validation.ok, true, JSON.stringify(codexResult.materialization_validation));
     assert.equal(codexResult.materialization_generation.config_path, resolve(configPath));
     assert.equal(existsSync(configPath), true);

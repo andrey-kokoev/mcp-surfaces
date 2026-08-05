@@ -25,6 +25,9 @@ function fixture() {
   const args = [
     proxyPath,
     '--surface-id', 'fixture',
+    '--child-command', process.execPath,
+    '--registrar-command', process.execPath,
+    '--registrar-entrypoint', registrarPath,
     '--artifact-manifest', manifestPath,
     '--runtime-contract-version', String(MCP_RUNTIME_CONTRACT_VERSION),
     '--materialization-sidecar', sidecarPath,
@@ -59,6 +62,8 @@ test('materialized configuration validates the runtime contract and generation p
       artifactManifestPath: f.manifestPath,
       artifactManifestFingerprint: 'fixture-manifest-fingerprint',
       registrarEntrypoint: f.registrarPath,
+      proxyImplementation: 'bun',
+      proxyEntrypoint: f.proxyPath,
       serverCount: validation.server_count,
       proxyCount: validation.proxy_count,
     });
@@ -170,6 +175,8 @@ test('Codex project trust updates do not invalidate the managed MCP projection',
       artifactManifestPath: f.manifestPath,
       artifactManifestFingerprint: 'fixture-manifest-fingerprint',
       registrarEntrypoint: f.registrarPath,
+      proxyImplementation: 'bun',
+      proxyEntrypoint: f.proxyPath,
       serverCount: validation.server_count,
       proxyCount: validation.proxy_count,
     });

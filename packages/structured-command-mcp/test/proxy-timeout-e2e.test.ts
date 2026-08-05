@@ -7,6 +7,7 @@ import {
   spawnJsonlMcpServer,
   type JsonRecord,
 } from '@narada-core/mcp-e2e-harness';
+import { MCP_RUNTIME_CONTRACT_VERSION } from '@narada-core/mcp-runtime-proxy/materialization-contract';
 
 // Fresh-process e2e for sfb_36762540-087: structured-command behind
 // mcp-runtime-proxy over a real MCP stdio transport. The tool's declared
@@ -29,7 +30,8 @@ const proxy = spawnJsonlMcpServer(process.execPath, [
   proxyPath,
   '--surface-id', 'structured-command',
   '--artifact-manifest', artifactManifestPath,
-  '--runtime-contract-version', '2',
+  '--runtime-contract-version', String(MCP_RUNTIME_CONTRACT_VERSION),
+  '--child-command', process.execPath,
   '--entrypoint', serverPath,
   '--request-timeout-ms', '1000',
   '--tool-timeout-grace-ms', '3000',

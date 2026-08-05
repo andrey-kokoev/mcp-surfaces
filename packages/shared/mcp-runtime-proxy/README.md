@@ -21,7 +21,8 @@ carrier/session restart owner; the manager never assumes that authority.
 
 `AtomicRuntimeObservationStore` persists normalized generation observations as exclusive temp-file plus rename records under the configured runtime root. `observe()` is process-inspection readback and marks expired leases stale/unreachable; `createRuntimeObservationSink()` is optional and does not grant Narada Site authority. A carrier or loader adapter may emit observations, but the proxy remains transport diagnostics only and never applies reconciliation plans.
 
-The proxy launches a Node MCP entrypoint, forwards stdin/stdout, captures stderr,
+The proxy launches an MCP entrypoint with the explicitly materialized
+`--child-command`, forwards stdin/stdout, captures stderr,
 and turns child startup exits into JSON-RPC errors for pending requests. This is
 for carrier diagnostics only; it does not authorize tools, mutate policy, or
 interpret MCP domain behavior.
@@ -38,7 +39,7 @@ longer matches an export target. Re-run the workspace build before retrying;
 the proxy never starts a server against an unverified workspace.
 
 Carrier materialization adds a second contract gate. Every generated proxy
-launch declares `--runtime-contract-version 2`, the current
+launch declares `--runtime-contract-version 3`, the current
 `--artifact-manifest`, and, for a materialized carrier file, a
 `--materialization-sidecar` path. The registrar validates every generated
 proxy, child entrypoint, and manifest reference before writing the carrier
@@ -76,15 +77,79 @@ follow the `restart` instruction. Regeneration never restarts the carrier
 implicitly; Codex, Kimi, and OpenCode must reload their carrier configuration
 in a new or restarted session.
 
-On Windows, the proxy starts the native Rust process supervisor after preflight.
-The supervisor owns the MCP server in a Job Object configured to terminate the
-managed server when the supervisor exits, and monitors the proxy PID. The
-diagnostic instance record identifies `proxy_pid`, `supervisor_pid`, and
-`managed_child_pid`/`server_pid` separately; `child_pid` is the supervisor PID
-on Windows and the server PID on platforms without the Windows supervisor.
-The supervisor preserves the server's inherited stdio and terminates the
-managed server when its proxy parent disappears. The supervisor executable is
-also required before a Windows launch is admitted.
+## Native Windows proxy
+
+The package builds `dist/native/narada-mcp-runtime.exe`, a Rust multicall
+executable whose first applet is `proxy`. In native mode this process performs
+preflight, stdio framing, timeout/cancellation, diagnostics, and process-tree
+ownership itself. It creates the MCP server suspended, assigns it to a
+kill-on-close Windows Job Object, and only then resumes its main thread. This
+removes the assignment race and the separate supervisor process while keeping
+the domain surface in its declared Bun or Node runtime.
+
+Carrier materialization selects the implementation explicitly:
+
+```powershell
+bun packages/mcp-registrar/dist/src/main.js --materialize-all --runtime-proxy-implementation native
+```
+
+`bun` remains the registrar default and is the rollback path. Native mode is
+Windows-only and materialization refuses it when the built executable is
+absent. Both modes use runtime contract v3 and therefore carry explicit
+`--child-command` and `--registrar-command` values; the proxy executable never
+guesses which JavaScript runtime should launch a domain surface or recovery
+registrar.
+
+The selected implementation, executable path, and executable fingerprint are
+recorded in the carrier sidecar and checked before child launch. Rust sources,
+Cargo inputs, and the native executable are also covered by the workspace
+artifact manifest. A build failure preserves the last successful native
+artifact rather than publishing a partial executable.
+
+The benchmark target and fixed topology matrix are documented in
+[`BENCHMARK-TARGET.md`](./BENCHMARK-TARGET.md). Run the user benchmark with:
+
+```powershell
+pnpm --filter @narada-core/mcp-runtime-proxy benchmark:runtime
+```
+
+It emits a canonical JSON report and an offline interactive HTML report. It
+reports p95 initialization, full-topology private/working-set bytes, and
+warm-call latency with per-process attribution across Bun/Bun, Node/Node,
+Deno/Deno, native/Bun, native/Node, and native/Deno when available. Deno is an
+experimental compatibility lane; a skipped Deno topology means that Deno was
+not available or executable on the host, not that the other lanes failed.
+Performance-gate failure is shown in the report and leaves native opt-in;
+harness, protocol, or lifecycle failure returns nonzero. Use
+`--enforce-gates` for CI experiments that need a nonzero performance verdict.
+The benchmark discovers `deno` on `PATH`; for a shell whose environment has
+not refreshed after installation, set `NARADA_MCP_BENCHMARK_DENO` to the Deno
+executable path.
+
+The minimal `benchmark:runtime` profile answers what overhead the proxy adds to a small fixture. The `benchmark:strong` profile answers whether a realistic surface and workload make that overhead noticeable. Their gates remain workload-specific.
+
+The stronger user-runnable profile is available with:
+
+```powershell
+pnpm --filter @narada-core/mcp-runtime-proxy benchmark:strong
+```
+
+It exercises four workloads over the shared transport harness and writes a canonical JSON report plus an offline interactive HTML report under `.ai/runtime/mcp-runtime-benchmarks/<report-id>/`:
+
+- `representative`: 32 domain tools plus one proxy-owned status tool, imported schemas, 24 deterministic data files loaded at initialization, and 20 warm domain calls;
+- `payload-load`: 32-byte, 4-KB, and 64-KB payloads, sequential calls, and two eight-request concurrent batches;
+- `restart-soak`: 200 cold restart cycles and 2,000 warm calls with per-process memory, process-tree, and leak evidence;
+- `real-structured-command`: the actual structured-command entrypoint, policy inspection, and a safe allowlisted command.
+
+Use `--samples`, `--load-repetitions`, `--soak-cycles`, `--soak-warm-calls`, `--workloads`, and `--topologies` to make a reproducible smaller or focused run. Deno remains an experimental lane: unavailable Deno is reported as `not_run`, while a measured protocol or tool-call failure remains a real failure. The payload latency gate is explicit about fixed transport cost: native Node must be within 1.05x of the Node baseline or within 1 ms of it, whichever threshold is greater.
+
+In Bun mode on Windows, the JavaScript proxy starts the existing native Rust
+process supervisor after preflight. The supervisor owns the MCP server in a Job
+Object and monitors the proxy PID. Its diagnostic instance record identifies
+`proxy_pid`, `supervisor_pid`, and `managed_child_pid`/`server_pid` separately.
+In native mode `supervisor_pid` is null and the Rust proxy directly owns the
+server PID. Both modes terminate their complete managed process tree when the
+carrier disappears.
 
 Every proxied surface advertises one proxy-owned read-only tool,
 `mcp_runtime_proxy_status`, in its normal `tools/list` response. Call it when
@@ -128,6 +193,7 @@ Operators can list all recorded instances without starting a child:
 
 ```powershell
 node dist/src/main.js --list-runtime-instances --diagnostics-dir <dir>
+dist/native/narada-mcp-runtime.exe proxy --list-runtime-instances --diagnostics-dir <dir>
 ```
 
 The listing classifies each record from PID liveness and lease expiry, so stale

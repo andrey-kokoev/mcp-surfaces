@@ -4,6 +4,7 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { MCP_RUNTIME_CONTRACT_VERSION } from '@narada-core/mcp-runtime-proxy/materialization-contract';
 
 const root = mkdtempSync(join(tmpdir(), 'mcp-registrar-protocol-'));
 const serverPath = fileURLToPath(new URL('../src/main.js', import.meta.url));
@@ -23,7 +24,8 @@ async function exchangeThroughProxy(): Promise<Record<string, any>[]> {
     proxyPath,
     '--surface-id', 'mcp-registrar',
     '--artifact-manifest', artifactManifestPath,
-    '--runtime-contract-version', '2',
+    '--runtime-contract-version', String(MCP_RUNTIME_CONTRACT_VERSION),
+    '--child-command', process.execPath,
     '--entrypoint', serverPath,
     '--',
   ], { stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true });

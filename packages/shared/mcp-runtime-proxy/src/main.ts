@@ -4,6 +4,7 @@ import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { basename, dirname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+import { performance } from 'node:perf_hooks';
 import { processSupervisorEntrypoint } from '@narada-core/process-launch-posture';
 import { createRuntimeObservationSink, type RuntimeObservationSink } from '@narada-core/mcp-runtime-observation';
 import {
@@ -57,11 +58,14 @@ type PendingRequest = {
   lifecycle: RequestLifecycleEvent[];
 };
 type ProxyOptions = {
+  childCommand: string;
   entrypoint: string;
+  childPrefixArgs: string[];
   childArgs: string[];
   carrierId: string | null;
   carrierKind: string | null;
   registrarEntrypoint: string | null;
+  registrarCommand: string | null;
   artifactManifestPath: string | null;
   artifactManifestFingerprint: string | null;
   runtimeContractVersion: number | null;
@@ -96,10 +100,13 @@ const FORENSIC_ARTIFACT_SCHEMA = 'narada.mcp_runtime_proxy.forensic_artifact.v1'
 const STARTUP_TRACE_SCHEMA = 'narada.mcp_runtime_proxy.startup_trace.v1';
 
 function parseArgs(argv: string[]): ProxyOptions {
+  let childCommand = '';
   let entrypoint = '';
+  let childPrefixArgs: string[] = [];
   let carrierId: string | null = null;
   let carrierKind: string | null = null;
   let registrarEntrypoint: string | null = null;
+  let registrarCommand: string | null = null;
   let artifactManifestPath: string | null = null;
   let runtimeContractVersion: number | null = null;
   let materializationSidecarPath: string | null = null;
@@ -114,10 +121,19 @@ function parseArgs(argv: string[]): ProxyOptions {
   const prelude = argv.slice(0, passthroughIndex);
   for (let index = 0; index < prelude.length; index += 1) {
     const arg = prelude[index];
-    if (arg === '--entrypoint' && prelude[index + 1]) entrypoint = prelude[++index];
+    if (arg === '--child-command' && prelude[index + 1]) childCommand = prelude[++index];
+    else if (arg === '--entrypoint' && prelude[index + 1]) entrypoint = prelude[++index];
+    else if (arg === '--child-prefix-args' && prelude[index + 1]) {
+      const raw = prelude[++index];
+      let parsed: unknown;
+      try { parsed = JSON.parse(raw); } catch { throw new Error('mcp_runtime_proxy_invalid_child_prefix_args'); }
+      if (!Array.isArray(parsed) || parsed.some((value) => typeof value !== 'string')) throw new Error('mcp_runtime_proxy_invalid_child_prefix_args');
+      childPrefixArgs = parsed;
+    }
     else if (arg === '--carrier-id' && prelude[index + 1]) carrierId = prelude[++index];
     else if (arg === '--carrier-kind' && prelude[index + 1]) carrierKind = prelude[++index];
     else if (arg === '--registrar-entrypoint' && prelude[index + 1]) registrarEntrypoint = prelude[++index];
+    else if (arg === '--registrar-command' && prelude[index + 1]) registrarCommand = prelude[++index];
     else if (arg === '--artifact-manifest' && prelude[index + 1]) artifactManifestPath = prelude[++index];
     else if (arg === '--runtime-contract-version' && prelude[index + 1]) runtimeContractVersion = parsePositiveInteger(prelude[++index], 'runtime_contract_version');
     else if (arg === '--materialization-sidecar' && prelude[index + 1]) materializationSidecarPath = prelude[++index];
@@ -129,12 +145,21 @@ function parseArgs(argv: string[]): ProxyOptions {
     else if (arg === '--orphan-grace-ms' && prelude[index + 1]) orphanGraceMs = parsePositiveInteger(prelude[++index], 'orphan_grace_ms', MAX_ORPHAN_GRACE_MS);
   }
   if (!entrypoint) throw new Error('mcp_runtime_proxy_missing_entrypoint');
+  if (runtimeContractVersion !== null && runtimeContractVersion >= 3 && !childCommand) {
+    throw new Error('mcp_runtime_proxy_missing_child_command');
+  }
+  if (runtimeContractVersion !== null && runtimeContractVersion >= 3 && registrarEntrypoint && !registrarCommand) {
+    throw new Error('mcp_runtime_proxy_missing_registrar_command');
+  }
   return {
+    childCommand: childCommand || process.execPath,
     entrypoint: resolve(entrypoint),
+    childPrefixArgs,
     childArgs: argv.slice(Math.min(passthroughIndex + 1, argv.length)),
     carrierId,
     carrierKind,
     registrarEntrypoint: registrarEntrypoint ? resolve(registrarEntrypoint) : null,
+    registrarCommand: registrarCommand || (registrarEntrypoint ? process.execPath : null),
     artifactManifestPath: artifactManifestPath ? resolve(artifactManifestPath) : null,
     artifactManifestFingerprint: null,
     runtimeContractVersion,
@@ -246,11 +271,11 @@ function buildMaterializationRecovery(options: ProxyOptions, preflight: Material
   const commandArgs = registrarEntrypoint
     ? [registrarEntrypoint, '--materialize-all']
     : null;
-  const command = commandArgs
+  const command = commandArgs && options.registrarCommand
     ? {
-      executable: process.execPath,
+      executable: options.registrarCommand,
       args: commandArgs,
-      display: [process.execPath, ...commandArgs].map(commandLineArg).join(' '),
+      display: [options.registrarCommand, ...commandArgs].map(commandLineArg).join(' '),
     }
     : null;
   return {
@@ -306,11 +331,11 @@ function buildWorkspaceArtifactRecovery(options: ProxyOptions, preflight: Worksp
   const materializeArgs = registrarEntrypoint
     ? [registrarEntrypoint, '--materialize-all']
     : null;
-  const materializeCommand = materializeArgs
+  const materializeCommand = materializeArgs && options.registrarCommand
     ? {
-      executable: process.execPath,
+      executable: options.registrarCommand,
       args: materializeArgs,
-      display: [process.execPath, ...materializeArgs].map(commandLineArg).join(' '),
+      display: [options.registrarCommand, ...materializeArgs].map(commandLineArg).join(' '),
     }
     : null;
   const buildCommand = {
@@ -407,6 +432,7 @@ function recordStartupTrace(
       schema: STARTUP_TRACE_SCHEMA,
       surface_id: options.surfaceId,
       entrypoint: options.entrypoint,
+      child_prefix_args: options.childPrefixArgs,
       child_args: options.childArgs,
       started_at: trace.startedAt,
       updated_at: new Date().toISOString(),
@@ -424,6 +450,21 @@ function recordStartupTrace(
   }
 }
 
+function writeStartupPhaseTrace(options: ProxyOptions, details: JsonRecord): void {
+  if (!options.diagnosticsDir) return;
+  try {
+    mkdirSync(options.diagnosticsDir, { recursive: true });
+    writeFileSync(join(options.diagnosticsDir, `startup-phases-${safeSegment(options.surfaceId ?? basename(options.entrypoint))}.json`), JSON.stringify({
+      schema: 'narada.mcp_runtime_proxy.startup_phases.v1',
+      surface_id: options.surfaceId,
+      observed_at: new Date().toISOString(),
+      ...details,
+    }, null, 2) + '\n', 'utf8');
+  } catch {
+    // Startup diagnostics must never prevent the proxy from serving MCP traffic.
+  }
+}
+
 function startsWithJsonRpcFrame(buffer: string): boolean {
   return /^\s*Content-Length:\s*\d+\r?\n/i.test(buffer);
 }
@@ -438,6 +479,7 @@ export async function runProxy(argv = process.argv.slice(2)): Promise<void> {
     return;
   }
   const options = parseArgs(argv);
+  const preflightStartedAt = performance.now();
   const artifactPreflight = preflightWorkspaceArtifacts({
     surfaceId: options.surfaceId,
     entrypoint: options.entrypoint,
@@ -546,6 +588,10 @@ export async function runProxy(argv = process.argv.slice(2)): Promise<void> {
   if (!existsSync(options.entrypoint)) {
     process.stderr.write(`mcp_runtime_proxy_entrypoint_not_found:${options.entrypoint}\n`);
   }
+  writeStartupPhaseTrace(options, {
+    preflight_ms: performance.now() - preflightStartedAt,
+    completed_at: new Date().toISOString(),
+  });
 
   const pending = new Map<string | number, PendingRequest>();
   const timedOutRequests = new Map<string | number, NodeJS.Timeout>();
@@ -562,7 +608,7 @@ export async function runProxy(argv = process.argv.slice(2)): Promise<void> {
   const child = childLaunch.child;
   const observation = createProxyObservationSink(options);
   emitProxyOwners(observation, options, child.pid ?? null);
-  const childIdentity = buildChildIdentity(options.entrypoint, options.childArgs, childLaunch);
+  const childIdentity = buildChildIdentity(options, childLaunch);
   const startupTrace = createStartupTrace(options, child, childIdentity);
   startupTrace.runtimeContractVersion = options.runtimeContractVersion;
   startupTrace.artifactManifestFingerprint = artifactPreflight.manifest_fingerprint;
@@ -697,7 +743,11 @@ export async function runProxy(argv = process.argv.slice(2)): Promise<void> {
             proxyPid: process.pid,
             childPid: child.pid ?? null,
           });
-          const liveness = classifyRuntimeInstance(runtimeInstance);
+          const liveness = classifyRuntimeInstance({
+            ...runtimeInstance,
+            managed_child_pid: serverPid,
+            server_pid: serverPid,
+          });
           const payload = {
             schema: 'narada.mcp_runtime_proxy.status.v1',
             status: 'ok',
@@ -1119,6 +1169,7 @@ function writeForensicArtifact(input: {
       surface: {
         surface_id: input.options.surfaceId,
         entrypoint: input.options.entrypoint,
+        child_prefix_args: input.options.childPrefixArgs,
         child_args: input.options.childArgs,
       },
       child_process: {
@@ -1182,7 +1233,8 @@ function spawnProxyChild(options: ProxyOptions, supervisorPath: string | null): 
         '--parent-pid',
         String(process.pid),
         '--',
-        process.execPath,
+        options.childCommand,
+        ...options.childPrefixArgs,
         options.entrypoint,
         ...options.childArgs,
       ], spawnOptions) as ChildProcessWithoutNullStreams,
@@ -1191,7 +1243,7 @@ function spawnProxyChild(options: ProxyOptions, supervisorPath: string | null): 
     };
   }
   return {
-    child: spawn(process.execPath, [options.entrypoint, ...options.childArgs], spawnOptions) as ChildProcessWithoutNullStreams,
+    child: spawn(options.childCommand, [...options.childPrefixArgs, options.entrypoint, ...options.childArgs], spawnOptions) as ChildProcessWithoutNullStreams,
     supervisorPath: null,
     supervisorIdentityPath: null,
   };
@@ -1206,14 +1258,16 @@ function readSupervisorIdentity(path: string): JsonRecord | null {
   }
 }
 
-function buildChildIdentity(entrypoint: string, childArgs: string[], launch: ChildLaunch): JsonRecord {
+function buildChildIdentity(options: ProxyOptions, launch: ChildLaunch): JsonRecord {
+  const { entrypoint, childArgs } = options;
   const entrypointStat = safeStat(entrypoint);
   const sourcePath = sourcePathForEntrypoint(entrypoint);
   const sourceStat = sourcePath ? safeStat(sourcePath) : null;
   return {
     parent_pid: process.pid,
-    command: process.execPath,
+    command: options.childCommand,
     entrypoint,
+    child_prefix_args: options.childPrefixArgs,
     child_args: childArgs,
     entrypoint_basename: basename(entrypoint),
     entrypoint_sha256: sha256File(entrypoint),

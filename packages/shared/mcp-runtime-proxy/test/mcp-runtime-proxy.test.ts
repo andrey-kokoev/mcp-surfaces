@@ -18,6 +18,7 @@ import {
   type RuntimeInstanceRecord,
 } from '../src/runtime-lifecycle.js';
 import { fingerprintWorkspaceArtifactManifest } from '../src/workspace-artifact-manifest.js';
+import { MCP_RUNTIME_CONTRACT_VERSION } from '../src/materialization-contract.js';
 
 const root = mkdtempSync(join(tmpdir(), 'mcp-runtime-proxy-'));
 const processScope = createTestProcessScope({ label: 'mcp-runtime-proxy-test' });
@@ -161,7 +162,8 @@ function spawnProxy(args: string[], options: Parameters<typeof processScope.spaw
     proxyEntrypoint,
     '--artifact-manifest',
     artifactManifestPath,
-    '--runtime-contract-version', '2',
+    '--runtime-contract-version', String(MCP_RUNTIME_CONTRACT_VERSION),
+    '--child-command', process.execPath,
     ...args,
   ], options);
 }
@@ -337,6 +339,8 @@ try {
   assert.equal(statusResponse.result.structuredContent.runtime_freshness.schema, 'narada.mcp_runtime_proxy.runtime_freshness.v2');
   assert.equal(statusResponse.result.structuredContent.runtime_freshness.reload_action.kind, 'restart_carrier_bound_surface');
   assert.equal(statusResponse.result.structuredContent.liveness.observed_state, 'live');
+  assert.equal(statusResponse.result.structuredContent.liveness.supervisor_pid > 0, true);
+  assert.equal(statusResponse.result.structuredContent.liveness.server_pid > 0, true);
   statusProxy.stdin.end();
   await new Promise<number | null>((resolve) => statusProxy.on('close', resolve));
   const reclaimedListing = listRuntimeInstances(statusDiagnosticsDir, { isPidAlive: () => false });

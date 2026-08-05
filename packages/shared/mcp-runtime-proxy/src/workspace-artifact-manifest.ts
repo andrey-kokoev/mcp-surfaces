@@ -279,6 +279,10 @@ function declaredRuntimeTargets(packageJson: JsonRecord): string[] {
   else if (isRecord(bin)) {
     for (const value of Object.values(bin)) if (typeof value === 'string') targets.add(value);
   }
+  const nativeArtifacts = asRecord(packageJson.naradaRuntimeArtifacts)[process.platform];
+  if (Array.isArray(nativeArtifacts)) {
+    for (const value of nativeArtifacts) if (typeof value === 'string') targets.add(value);
+  }
   return [...targets].filter((target) => target.startsWith('./') || target.startsWith('../'));
 }
 
@@ -299,15 +303,19 @@ function collectExportTargets(value: unknown, targets: Set<string>, key = ''): v
 
 function sourceFilesFor(root: string): ArtifactFingerprint[] {
   const result: ArtifactFingerprint[] = [];
-  for (const directory of ['src', 'bin']) {
+  for (const directory of ['src', 'bin', 'scripts', join('native', 'src')]) {
     const sourceRoot = join(root, directory);
     if (!existsSync(sourceRoot)) continue;
     for (const path of walkFiles(sourceRoot)) {
-      if (['.ts', '.tsx', '.mts', '.cts', '.json'].includes(extname(path))) {
+      if (['.ts', '.tsx', '.mts', '.cts', '.json', '.rs'].includes(extname(path))) {
         const fingerprint = fingerprintFile(path);
         if (fingerprint) result.push(fingerprint);
       }
     }
+  }
+  for (const name of ['Cargo.toml', 'Cargo.lock']) {
+    const fingerprint = fingerprintFile(join(root, 'native', name));
+    if (fingerprint) result.push(fingerprint);
   }
   return result.sort((left, right) => left.path.localeCompare(right.path));
 }

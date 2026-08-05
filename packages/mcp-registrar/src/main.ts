@@ -187,6 +187,7 @@ const MCP_WORKSPACE_ROOT = resolve(process.env.NARADA_MCP_WORKSPACE_ROOT ?? join
 const MCP_WORKSPACE_PARENT = resolve(MCP_WORKSPACE_ROOT, '..');
 const MCP_SURFACES_ROOT = portablePathLiteral(process.env.NARADA_MCP_SURFACES_ROOT ?? join(MCP_WORKSPACE_ROOT, 'packages'));
 const MCP_RUNTIME_PROXY_ENTRYPOINT = `${MCP_SURFACES_ROOT}/shared/mcp-runtime-proxy/dist/src/main.js`;
+const MCP_NATIVE_RUNTIME_PROXY_ENTRYPOINT = `${MCP_SURFACES_ROOT}/shared/mcp-runtime-proxy/dist/native/narada-mcp-runtime${process.platform === 'win32' ? '.exe' : ''}`;
 const MCP_REGISTRAR_RUNTIME_ENTRYPOINT = `${MCP_SURFACES_ROOT}/mcp-registrar/dist/src/main.js`;
 const PROCESS_REGISTRAR_ENTRYPOINT_FINGERPRINT = existsSync(MCP_REGISTRAR_RUNTIME_ENTRYPOINT)
   ? createHash('sha256').update(readFileSync(MCP_REGISTRAR_RUNTIME_ENTRYPOINT)).digest('hex')
@@ -194,6 +195,15 @@ const PROCESS_REGISTRAR_ENTRYPOINT_FINGERPRINT = existsSync(MCP_REGISTRAR_RUNTIM
 const MCP_WORKSPACE_ARTIFACT_MANIFEST = portablePathLiteral(join(MCP_WORKSPACE_ROOT, '.ai', 'runtime', 'workspace-artifact-manifest.json'));
 const MCP_REGISTRAR_ENTRYPOINT = '{mcp_surfaces_root}/mcp-registrar/dist/src/main.js';
 const SPEECH_PROVIDER_REGISTRY_PATH = `${MCP_SURFACES_ROOT}/speech-mcp/config/provider-registry.v2.json`;
+
+type RuntimeProxyImplementation = 'bun' | 'native';
+let runtimeProxyImplementation: RuntimeProxyImplementation = 'bun';
+
+function selectedRuntimeProxyEntrypoint(): string {
+  return runtimeProxyImplementation === 'native'
+    ? MCP_NATIVE_RUNTIME_PROXY_ENTRYPOINT
+    : MCP_RUNTIME_PROXY_ENTRYPOINT;
+}
 
 function nativeEntrypoint(value: string): string {
   return value.replace('{mcp_surfaces_root}', MCP_SURFACES_ROOT);
@@ -1646,6 +1656,7 @@ type CarrierLaunchCommand = {
   args: string[];
   uses_runtime_proxy: boolean;
   runtime_proxy_entrypoint?: string;
+  runtime_proxy_implementation?: RuntimeProxyImplementation;
   artifact_manifest_path?: string;
   runtime_contract_version?: number;
   materialization_sidecar_path?: string;
@@ -1672,10 +1683,11 @@ function carrierLaunchCommand(
       child_args: childArgs,
     };
   }
+  const proxyEntrypoint = selectedRuntimeProxyEntrypoint();
   return {
-    command: runtimeCommand,
+    command: runtimeProxyImplementation === 'native' ? proxyEntrypoint : runtimeCommand,
     args: [
-      MCP_RUNTIME_PROXY_ENTRYPOINT,
+      ...(runtimeProxyImplementation === 'native' ? ['proxy'] : [proxyEntrypoint]),
       '--surface-id',
       surfaceId,
       ...(configPath && carrier ? [
@@ -1683,9 +1695,13 @@ function carrierLaunchCommand(
         carrier.carrier_id,
         '--carrier-kind',
         carrier.kind,
+        '--registrar-command',
+        runtimeCommand,
         '--registrar-entrypoint',
         MCP_REGISTRAR_RUNTIME_ENTRYPOINT,
       ] : []),
+      '--child-command',
+      runtimeCommand,
       '--artifact-manifest',
       MCP_WORKSPACE_ARTIFACT_MANIFEST,
       '--runtime-contract-version',
@@ -1697,7 +1713,8 @@ function carrierLaunchCommand(
       ...childArgs,
     ],
     uses_runtime_proxy: true,
-    runtime_proxy_entrypoint: MCP_RUNTIME_PROXY_ENTRYPOINT,
+    runtime_proxy_entrypoint: proxyEntrypoint,
+    runtime_proxy_implementation: runtimeProxyImplementation,
     artifact_manifest_path: MCP_WORKSPACE_ARTIFACT_MANIFEST,
     runtime_contract_version: MCP_RUNTIME_CONTRACT_VERSION,
     ...(sidecarPath ? { materialization_sidecar_path: sidecarPath } : {}),
@@ -1807,14 +1824,16 @@ function addRuntimePreflightFindings(
         artifact_manifest_path: MCP_WORKSPACE_ARTIFACT_MANIFEST,
       });
     }
-    if (!existsSync(MCP_RUNTIME_PROXY_ENTRYPOINT)) {
-      add('error', 'registrar_runtime_proxy_missing', `Runtime proxy does not exist: ${MCP_RUNTIME_PROXY_ENTRYPOINT}`, {
+    const runtimeProxyEntrypoint = selectedRuntimeProxyEntrypoint();
+    if (!existsSync(runtimeProxyEntrypoint)) {
+      add('error', 'registrar_runtime_proxy_missing', `Runtime proxy does not exist: ${runtimeProxyEntrypoint}`, {
         ...detail,
-        runtime_proxy_entrypoint: MCP_RUNTIME_PROXY_ENTRYPOINT,
+        runtime_proxy_entrypoint: runtimeProxyEntrypoint,
+        runtime_proxy_implementation: runtimeProxyImplementation,
         remediation: 'Run pnpm --filter @narada-core/mcp-runtime-proxy build before launching carrier MCPs.',
       });
     } else if (includeOk) {
-      add('info', 'registrar_runtime_proxy_exists', `Runtime proxy exists: ${MCP_RUNTIME_PROXY_ENTRYPOINT}`, { ...detail, runtime_proxy_entrypoint: MCP_RUNTIME_PROXY_ENTRYPOINT });
+      add('info', 'registrar_runtime_proxy_exists', `Runtime proxy exists: ${runtimeProxyEntrypoint}`, { ...detail, runtime_proxy_entrypoint: runtimeProxyEntrypoint, runtime_proxy_implementation: runtimeProxyImplementation });
     }
   }
   if (!surface) return;
@@ -1976,7 +1995,7 @@ function validateCarrierMaterialization(
   const validation = validateMaterializedConfiguration({
     structured: result.structured,
     artifactManifestPath: MCP_WORKSPACE_ARTIFACT_MANIFEST,
-    runtimeProxyEntrypoint: MCP_RUNTIME_PROXY_ENTRYPOINT,
+    runtimeProxyEntrypoint: selectedRuntimeProxyEntrypoint(),
     expectedSidecarPath: configPath ? materializationSidecarPath(configPath) : undefined,
     requireSidecar: Boolean(configPath),
   });
@@ -2001,6 +2020,8 @@ function validateCarrierMaterialization(
       artifactManifestPath: MCP_WORKSPACE_ARTIFACT_MANIFEST,
       artifactManifestFingerprint: readWorkspaceManifestFingerprint(),
       registrarEntrypoint: MCP_REGISTRAR_RUNTIME_ENTRYPOINT,
+      proxyImplementation: runtimeProxyImplementation,
+      proxyEntrypoint: selectedRuntimeProxyEntrypoint(),
       serverCount: validation.server_count,
       proxyCount: validation.proxy_count,
     })
@@ -3428,6 +3449,7 @@ type SiteSurfaceRegistrySurface = {
   server_name: string;
   runtime_binding: {
     runtime_kind: 'node-stdio' | 'bun-stdio';
+    proxy_implementation: RuntimeProxyImplementation | null;
     entrypoint: string;
     owner_site_id: string;
     transport: {
@@ -3455,9 +3477,11 @@ function runtimeBindingForFabricServer(site: SiteDef, server: SiteMcpFabricServe
   const surfaceId = server.surface_id ?? fabricSurfaceId(server.server_key, site);
   const transportArgs = server.uses_runtime_proxy
     ? [
-      server.launch_entrypoint,
+      ...(runtimeProxyImplementation === 'native' ? ['proxy'] : [server.launch_entrypoint]),
       '--surface-id',
       surfaceId,
+      '--child-command',
+      server.command,
       '--artifact-manifest',
       MCP_WORKSPACE_ARTIFACT_MANIFEST,
       '--runtime-contract-version',
@@ -3470,11 +3494,14 @@ function runtimeBindingForFabricServer(site: SiteDef, server: SiteMcpFabricServe
     : [server.entrypoint, ...server.args];
   return {
     runtime_kind: /(^|[\\/])bun(?:\.exe)?$/i.test(server.command) ? 'bun-stdio' : 'node-stdio',
+    proxy_implementation: server.uses_runtime_proxy ? runtimeProxyImplementation : null,
     entrypoint: server.entrypoint,
     owner_site_id: site.site_id,
     transport: {
       type: 'stdio',
-      command: server.command,
+      command: server.uses_runtime_proxy && runtimeProxyImplementation === 'native'
+        ? MCP_NATIVE_RUNTIME_PROXY_ENTRYPOINT
+        : server.command,
       args: transportArgs,
     },
   };
@@ -4112,8 +4139,8 @@ function writeJsonRpcResponse(response: JsonRecord, { framed }: { framed: boolea
 export type RegistrarCliOptions =
   | { mode: 'stdio' }
   | { mode: 'help' }
-  | { mode: 'materialize-all'; outputDir: string | null }
-  | { mode: 'materialize-carrier'; carrierId: string; outputPath: string | null; allowSingleCarrier: true };
+  | { mode: 'materialize-all'; outputDir: string | null; runtimeProxyImplementation: RuntimeProxyImplementation }
+  | { mode: 'materialize-carrier'; carrierId: string; outputPath: string | null; allowSingleCarrier: true; runtimeProxyImplementation: RuntimeProxyImplementation };
 
 export function parseArgs(argv: string[]): RegistrarCliOptions {
   let carrierId: string | null = null;
@@ -4121,6 +4148,7 @@ export function parseArgs(argv: string[]): RegistrarCliOptions {
   let outputDir: string | null = null;
   let materializeAll = false;
   let allowSingleCarrier = false;
+  let selectedProxyImplementation: RuntimeProxyImplementation = 'bun';
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index];
     if (arg === '--help' || arg === '-h') return { mode: 'help' };
@@ -4150,6 +4178,12 @@ export function parseArgs(argv: string[]): RegistrarCliOptions {
       allowSingleCarrier = true;
       continue;
     }
+    if (arg === '--runtime-proxy-implementation') {
+      const value = argv[++index];
+      if (value !== 'bun' && value !== 'native') throw new Error('registrar_invalid_runtime_proxy_implementation');
+      selectedProxyImplementation = value;
+      continue;
+    }
     // Keep the historical launch hint accepted by Site Fabric clients. The
     // registrar's authoritative roots are resolved from its environment and
     // generated fabric, so this compatibility argument does not alter
@@ -4168,13 +4202,21 @@ export function parseArgs(argv: string[]): RegistrarCliOptions {
   if (carrierId && !allowSingleCarrier) throw new Error('registrar_single_carrier_materialization_requires_explicit_escape_hatch');
   if (!carrierId && allowSingleCarrier) throw new Error('registrar_allow_single_carrier_requires_materialize_carrier');
   if (!materializeAll && !carrierId && (outputPath || outputDir)) throw new Error('registrar_output_requires_materialization_mode');
-  if (materializeAll) return { mode: 'materialize-all', outputDir };
-  if (carrierId) return { mode: 'materialize-carrier', carrierId, outputPath, allowSingleCarrier: true };
+  if (!materializeAll && !carrierId && selectedProxyImplementation !== 'bun') throw new Error('registrar_runtime_proxy_implementation_requires_materialization_mode');
+  if (materializeAll) return { mode: 'materialize-all', outputDir, runtimeProxyImplementation: selectedProxyImplementation };
+  if (carrierId) return { mode: 'materialize-carrier', carrierId, outputPath, allowSingleCarrier: true, runtimeProxyImplementation: selectedProxyImplementation };
   return { mode: 'stdio' };
 }
 
 async function runDirectMaterialization(options: Extract<RegistrarCliOptions, { mode: 'materialize-all' | 'materialize-carrier' }>): Promise<void> {
   process.env[FRESH_REGISTRAR_ENV] = '1';
+  runtimeProxyImplementation = options.runtimeProxyImplementation;
+  if (runtimeProxyImplementation === 'native' && process.platform !== 'win32') {
+    throw new Error(`registrar_native_runtime_proxy_unsupported_platform:${process.platform}`);
+  }
+  if (runtimeProxyImplementation === 'native' && !existsSync(MCP_NATIVE_RUNTIME_PROXY_ENTRYPOINT)) {
+    throw new Error(`registrar_native_runtime_proxy_missing:${MCP_NATIVE_RUNTIME_PROXY_ENTRYPOINT}`);
+  }
   const result = options.mode === 'materialize-all'
     ? await registrarMaterializeAll({ ...(options.outputDir ? { output_dir: resolve(options.outputDir) } : {}) })
     : await registrarSingleCarrierMaterialize({ carrier_id: options.carrierId, ...(options.outputPath ? { output_path: resolve(options.outputPath) } : {}) });
@@ -4186,10 +4228,10 @@ function printCliHelp(): void {
     'mcp-registrar MCP server',
     '',
     'Out-of-band carrier recovery (works when the MCP registrar surface cannot start):',
-    '  mcp-registrar --materialize-all [--output-dir <directory>]',
+    '  mcp-registrar --materialize-all [--output-dir <directory>] [--runtime-proxy-implementation bun|native]',
     '',
     'Targeted recovery is intentionally difficult and is not an MCP operation:',
-    '  mcp-registrar --materialize-carrier <carrier-id> --allow-single-carrier [--output-path <carrier-config>]',
+    '  mcp-registrar --materialize-carrier <carrier-id> --allow-single-carrier [--output-path <carrier-config>] [--runtime-proxy-implementation bun|native]',
     '',
     'Without arguments, mcp-registrar serves its MCP stdio protocol.',
     'Normal materialization writes every registered carrier config and its .narada-generation.json sidecar atomically.',

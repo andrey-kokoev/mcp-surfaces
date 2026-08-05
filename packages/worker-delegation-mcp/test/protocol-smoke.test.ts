@@ -4,6 +4,7 @@ import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { validateAffordanceDocument } from '@narada-core/mcp-affordances';
+import { MCP_RUNTIME_CONTRACT_VERSION } from '@narada-core/mcp-runtime-proxy/materialization-contract';
 
 const root = mkdtempSync(join(testTempRoot(), 'worker-delegation-protocol-'));
 const SMOKE_WAIT_MS = 15_000;
@@ -106,7 +107,8 @@ const proxyChild = spawn(process.execPath, [
   proxyPath,
   '--surface-id', 'worker-delegation',
   '--artifact-manifest', artifactManifestPath,
-  '--runtime-contract-version', '2',
+  '--runtime-contract-version', String(MCP_RUNTIME_CONTRACT_VERSION),
+  '--child-command', process.execPath,
   '--entrypoint', serverPath,
   '--',
   '--site-root', legacyRoot,
