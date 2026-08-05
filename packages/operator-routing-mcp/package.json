@@ -21,7 +21,9 @@
   "scripts": {
     "build": "tsc -b",
     "typecheck": "tsc -b --pretty false",
-    "test": "pnpm build && node dist/test/protocol-smoke.test.js && node dist/test/operator-routing-mcp.test.js && node --disable-warning=ExperimentalWarning dist/test/site-fabric-routing-e2e.test.js"
+    "test": "pnpm run test:bun",
+    "test:bun": "pnpm build && bun dist/test/protocol-smoke.test.js && bun dist/test/operator-routing-mcp.test.js && bun dist/test/site-fabric-routing-e2e.test.js",
+    "test:node": "pnpm build && node dist/test/protocol-smoke.test.js && node dist/test/operator-routing-mcp.test.js && node --disable-warning=ExperimentalWarning dist/test/site-fabric-routing-e2e.test.js"
   },
   "files": [
     "dist/",
