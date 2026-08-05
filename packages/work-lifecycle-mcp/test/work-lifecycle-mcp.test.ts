@@ -95,6 +95,7 @@ test('surface composes first-class ticket tools and revision-gated task tools', 
     });
     assert.equal(asRecord(shown.ticket).revision, 1);
     assert.equal((shown.sources as unknown[]).length, 1);
+    assert.deepEqual(shown.draft_refs, []);
     const doctor = await call(runtime, 4, 'work_lifecycle_doctor', {});
     assert.equal(asRecord(doctor.concurrency).posture, 'sqlite_wal_transactional_multi_process');
   } finally {

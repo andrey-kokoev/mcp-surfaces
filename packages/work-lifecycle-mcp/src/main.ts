@@ -614,7 +614,10 @@ function callTicketTool(
       `).all(ticket.ticket_id);
       const draftRefs = store.db.prepare(`
         select ticket_id, draft_id, effect_claim_id, receipt_id, disposition,
-               disposition_evidence_kind, disposition_evidence_id, created_at, disposed_at
+               disposition_evidence_kind, disposition_evidence_id,
+               json_extract(draft_ref_json, '$.draft_operation_key') as draft_operation_key,
+               json_extract(draft_ref_json, '$.mailbox_id') as mailbox_id,
+               created_at, disposed_at
           from ticket_draft_refs where ticket_id = ?
          order by created_at, draft_id
       `).all(ticket.ticket_id);

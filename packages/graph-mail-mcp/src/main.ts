@@ -1700,6 +1700,8 @@ async function graphMailTicketDraftDispositionScan(
           operation_key: operation.operation_key,
           error: error instanceof Error ? error.message : String(error),
         });
+      } finally {
+        store.markDispositionScanned(operation.operation_key, new Date().toISOString());
       }
     }
     return {

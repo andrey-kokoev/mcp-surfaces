@@ -4,7 +4,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createServerState, handleRequest } from '../src/main.js';
-import { sha256Canonical } from '../src/ticket-draft-store.js';
+import { sha256Canonical, TicketDraftOperationStore } from '../src/ticket-draft-store.js';
 
 type DynamicTestValue = any & {
   [key: string]: DynamicTestValue;
@@ -40,6 +40,43 @@ function mockFetch(calls: CapturedRequest[], responses: MockResponse[] = []) {
 const root = mkdtempSync(join(tmpdir(), 'graph-mail-mcp-'));
 
 try {
+  {
+    const fairStore = new TicketDraftOperationStore(join(root, 'disposition-fairness'));
+    try {
+      for (const suffix of ['oldest', 'newest']) {
+        const now = suffix === 'oldest' ? '2026-08-01T00:00:00.000Z' : '2026-08-02T00:00:00.000Z';
+        const operationKey = `draft_operation_fairness_${suffix}`;
+        fairStore.beginImmediate();
+        fairStore.insertPending({
+          operation_key: operationKey,
+          action_idempotency_key: `action-${suffix}`,
+          request_digest: `request-${suffix}`,
+          draft_request_digest: `draft-request-${suffix}`,
+          ticket_id: `ticket-${suffix}`,
+          effect_claim_id: `claim-${suffix}`,
+          mailbox_id: 'support@example.test',
+          source_message_id: `source-${suffix}`,
+          reply_mode: 'reply',
+          now,
+        });
+        fairStore.complete(operationKey, {
+          draft_id: `draft-${suffix}`,
+          receipt_id: `receipt-${suffix}`,
+          draft_ref: { draft_id: `draft-${suffix}` },
+          now,
+        });
+        fairStore.commit();
+      }
+      const firstCandidate = fairStore.listDispositionScanCandidates(1)[0];
+      assert.equal(firstCandidate.operation_key, 'draft_operation_fairness_oldest');
+      fairStore.markDispositionScanned(firstCandidate.operation_key, '2026-08-03T00:00:00.000Z');
+      const secondCandidate = fairStore.listDispositionScanCandidates(1)[0];
+      assert.equal(secondCandidate.operation_key, 'draft_operation_fairness_newest');
+    } finally {
+      fairStore.close();
+    }
+  }
+
   mkdirSync(join(root, '.ai'), { recursive: true });
   writeFileSync(join(root, '.ai', 'graph-mail-mcp.json'), JSON.stringify({
     graph_base_url: 'https://graph.example.test/v1.0',

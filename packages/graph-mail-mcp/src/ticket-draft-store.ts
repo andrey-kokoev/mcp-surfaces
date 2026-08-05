@@ -120,6 +120,13 @@ export class TicketDraftOperationStore {
         )
       ) strict;
 
+      create table if not exists graph_ticket_draft_disposition_scan_state(
+        operation_key text primary key
+          references graph_ticket_draft_operations(operation_key),
+        last_scanned_at text not null,
+        scan_count integer not null check(scan_count > 0)
+      ) strict;
+
       create table if not exists graph_ticket_draft_disposition_observations(
         observation_id text primary key,
         operation_key text not null unique references graph_ticket_draft_operations(operation_key),
@@ -416,15 +423,35 @@ export class TicketDraftOperationStore {
     return (this.db.prepare(`
       select operation.*
         from graph_ticket_draft_operations operation
+        left join graph_ticket_draft_disposition_scan_state scan
+          on scan.operation_key = operation.operation_key
        where operation.status = 'completed'
          and not exists (
            select 1
              from graph_ticket_draft_disposition_observations observation
             where observation.operation_key = operation.operation_key
          )
-       order by operation.completed_at asc, operation.operation_key asc
+       order by (scan.last_scanned_at is not null) asc,
+                scan.last_scanned_at asc,
+                operation.completed_at asc,
+                operation.operation_key asc
        limit ?
     `).all(boundedLimit) as JsonRecord[]).map(hydrate);
+  }
+
+  markDispositionScanned(operationKey: string, scannedAt: string): void {
+    const operation = this.require(operationKey);
+    if (operation.status !== 'completed') {
+      throw new Error(`graph_ticket_draft_scan_operation_not_completed:${operationKey}`);
+    }
+    this.db.prepare(`
+      insert into graph_ticket_draft_disposition_scan_state(
+        operation_key, last_scanned_at, scan_count
+      ) values (?, ?, 1)
+      on conflict(operation_key) do update set
+        last_scanned_at = excluded.last_scanned_at,
+        scan_count = graph_ticket_draft_disposition_scan_state.scan_count + 1
+    `).run(operationKey, scannedAt);
   }
 
   recordDispositionObservation(input: TicketDraftDispositionObservationRow): {
