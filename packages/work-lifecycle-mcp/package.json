@@ -21,7 +21,9 @@
   "scripts": {
     "build": "tsc -b",
     "typecheck": "tsc -b --pretty false",
-    "test": "pnpm build && node --disable-warning=ExperimentalWarning --test dist/test/work-lifecycle-mcp.test.js"
+    "test": "pnpm run test:bun",
+    "test:bun": "pnpm build && bun test dist/test/work-lifecycle-mcp.test.js",
+    "test:node": "pnpm build && node --disable-warning=ExperimentalWarning --test dist/test/work-lifecycle-mcp.test.js"
   },
   "dependencies": {
     "@narada-core/mcp-fabric-contracts": "workspace:*",
