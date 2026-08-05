@@ -89,7 +89,7 @@ try {
     accessToken: 'test-token',
     fetchImpl: mockFetch(attachmentCalls, [
       { body: { value: [{ id: 'att-list-1' }] } },
-      { body: { id: 'att-get-1', name: 'report.pdf', contentBytes: 'YWJj', content: 'legacy-content' } },
+      { body: { id: 'att-get-1', name: 'report.pdf', contentBytes: 'YWJj', content_base64: 'YWJj', content: 'legacy-content', data: 'legacy-data', bytes: 'legacy-bytes', raw: 'legacy-raw' } },
       { body: { id: 'att-added-1', name: 'report.pdf' } },
       { body: { id: 'upload-session-1', uploadUrl: 'https://outlook.office.com/upload/abc', expirationDateTime: '2026-06-08T20:00:00Z' } },
       { body: { id: 'upload-session-2', uploadUrl: 'https://outlook.office365.com/upload/file-abc', expirationDateTime: '2026-06-08T20:00:00Z' } },
@@ -138,6 +138,7 @@ try {
     'graph_mail_message_mark_read',
     'graph_mail_attachment_list',
     'graph_mail_attachment_get',
+    'graph_mail_attachment_download_file',
     'graph_mail_attachment_add',
     'graph_mail_attachment_upload_session_create',
     'graph_mail_attachment_upload_chunk',
@@ -181,7 +182,9 @@ try {
   assert.equal(toolRows.find((tool: DynamicTestValue) => tool.name === 'graph_mail_message_move')?.inputSchema.properties.confirm_write.default, false);
   assert.equal(toolRows.find((tool: DynamicTestValue) => tool.name === 'graph_mail_message_mark_read')?.inputSchema.properties.confirm_write.default, false);
   assert.equal(toolRows.find((tool: DynamicTestValue) => tool.name === 'graph_mail_auth_clear')?.inputSchema.properties.confirm_clear.default, false);
-  assert.equal(toolRows.find((tool: DynamicTestValue) => tool.name === 'graph_mail_attachment_get')?.inputSchema.properties.include_content.default, true);
+  assert.equal(toolRows.find((tool: DynamicTestValue) => tool.name === 'graph_mail_attachment_get')?.inputSchema.properties.include_content.default, false);
+  assert.equal(toolRows.find((tool: DynamicTestValue) => tool.name === 'graph_mail_attachment_download_file')?.annotations.readOnlyHint, false);
+  assert.equal(toolRows.find((tool: DynamicTestValue) => tool.name === 'graph_mail_attachment_download_file')?.annotations.idempotentHint, true);
   assert.equal(toolRows.find((tool: DynamicTestValue) => tool.name === 'graph_mail_attachment_list')?.inputSchema.properties.limit.default, 20);
   assert.equal(toolRows.find((tool: DynamicTestValue) => tool.name === 'graph_mail_folder_create')?.inputSchema.required.join(','), 'display_name');
   assert.equal(toolRows.find((tool: DynamicTestValue) => tool.name === 'graph_mail_message_move')?.inputSchema.required.join(','), 'message_id,destination_folder_id');
@@ -608,7 +611,43 @@ try {
   assert.equal(attachmentCalls[1].url, 'https://graph.example.test/v1.0/users/support%40example.test/messages/message-1/attachments/att-get-1');
   assert.equal(attachmentGet.result.structuredContent.attachment.id, 'att-get-1');
   assert.equal(attachmentGet.result.structuredContent.attachment.contentBytes, undefined);
+  assert.equal(attachmentGet.result.structuredContent.attachment.content_base64, undefined);
   assert.equal(attachmentGet.result.structuredContent.attachment.content, undefined);
+  assert.equal(attachmentGet.result.structuredContent.attachment.data, undefined);
+  assert.equal(attachmentGet.result.structuredContent.attachment.bytes, undefined);
+  assert.equal(attachmentGet.result.structuredContent.attachment.raw, undefined);
+
+  const downloadCalls: CapturedRequest[] = [];
+  const downloadState = createServerState({
+    siteRoot: root,
+    accessToken: 'test-token',
+    fetchImpl: mockFetch(downloadCalls, [{
+      body: {
+        id: 'att-download-1',
+        name: 'download.pdf',
+        contentType: 'application/pdf',
+        contentBytes: Buffer.from('download-body').toString('base64'),
+        size: Buffer.byteLength('download-body'),
+      },
+    }]),
+  });
+  const downloaded = await rpc({
+    jsonrpc: '2.0',
+    id: 41,
+    method: 'tools/call',
+    params: {
+      name: 'graph_mail_attachment_download_file',
+      arguments: {
+        message_id: 'message-1',
+        attachment_id: 'att-download-1',
+        file_path: 'incoming-attachments/download.pdf',
+      },
+    },
+  }, downloadState);
+  assert.equal(downloaded.error, undefined);
+  assert.equal(downloaded.result.structuredContent.status, 'materialized');
+  assert.equal(readFileSync(join(root, 'incoming-attachments', 'download.pdf'), 'utf8'), 'download-body');
+  assert.equal(downloadCalls[0].init.headers.Authorization, 'Bearer test-token');
 
   const attachmentAdd = await rpc({
     jsonrpc: '2.0',

@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import { buildGuidanceResult } from './guidance.js';
 import { guidanceToolDefinition } from './guidance.js';
-import { closeSync, existsSync, mkdirSync, openSync, readFileSync, readSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
+import { closeSync, existsSync, mkdirSync, openSync, readFileSync, readSync, realpathSync, renameSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
 import { createHash, randomUUID } from 'node:crypto';
 import { basename, dirname, join, resolve } from 'node:path';
 import { assertAttachmentUploadUrlAllowed, buildGraphUrl, graphMailboxPath, graphRequest, graphTop, messagePatchFromArgs, recipients, requiredString } from './graph-client.js';
@@ -21,6 +21,18 @@ const SERVER_VERSION = '0.1.0';
 const PROTOCOL_VERSION = '2024-11-05';
 const ATTACHMENT_UPLOAD_CHUNK_GRANULARITY = 320 * 1024;
 const DEFAULT_ATTACHMENT_UPLOAD_CHUNK_SIZE = 10 * ATTACHMENT_UPLOAD_CHUNK_GRANULARITY;
+const MAX_INLINE_ATTACHMENT_BYTES = 750 * 1024;
+const MAX_DOWNLOADED_ATTACHMENT_BYTES = 25 * 1024 * 1024;
+const ALLOWED_DOWNLOADED_ATTACHMENT_TYPES = new Set([
+  'application/pdf',
+  'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+  'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+  'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+  'text/csv',
+  'text/plain',
+  'image/png',
+  'image/jpeg',
+]);
 const SURFACE_ID = 'graph-mail';
 const TICKET_DRAFT_OPERATION_PROPERTY_ID = 'String {d700a6f2-79ad-4f44-9df7-3e9b622f09f8} Name NaradaTicketDraftOperation';
 const GRAPH_MAIL_TELEMETRY_TOOL_NAMES = new Set([
@@ -37,6 +49,7 @@ const GRAPH_MAIL_TELEMETRY_TOOL_NAMES = new Set([
   'graph_mail_message_mark_read',
   'graph_mail_attachment_list',
   'graph_mail_attachment_get',
+  'graph_mail_attachment_download_file',
   'graph_mail_attachment_add',
   'graph_mail_attachment_upload_session_create',
   'graph_mail_attachment_upload_chunk',
@@ -542,8 +555,14 @@ export function listTools(): unknown[] {
       message_id: { type: 'string', description: 'Message id or draft id.' },
       draft_id: { type: 'string', description: 'Draft id alias for message_id.' },
       attachment_id: { type: 'string', description: 'Attachment id.' },
-      include_content: { type: 'boolean', default: true, description: 'When false, strip contentBytes/content from the returned attachment.' },
+      include_content: { type: 'boolean', default: false, description: 'When true, include content only for bounded small attachments. Defaults to metadata only.' },
     }, ['attachment_id']),
+    tool('graph_mail_attachment_download_file', 'Download one permitted inbound attachment to a guarded local site path without returning base64 content through MCP.', {
+      mailbox_id: { type: 'string', default: 'me', description: 'Mailbox id or user principal. Defaults to the only allowed mailbox when policy has one, otherwise me.' },
+      message_id: { type: 'string', description: 'Message id.' },
+      attachment_id: { type: 'string', description: 'Attachment id.' },
+      file_path: { type: 'string', description: 'Destination path under an allowed attachment root.' },
+    }, ['attachment_id', 'file_path']),
     tool('graph_mail_attachment_add', 'Add a file attachment to a live message or draft.', {
       mailbox_id: { type: 'string', default: 'me', description: 'Mailbox id or user principal. Defaults to the only allowed mailbox when policy has one, otherwise me.' },
       message_id: { type: 'string', description: 'Message id or draft id.' },
@@ -729,9 +748,41 @@ function attachmentObject(value: unknown): GraphMailRecord {
 
 function stripAttachmentContent(attachment: GraphMailRecord): GraphMailRecord {
   const copy = { ...attachment };
-  delete copy.contentBytes;
-  delete copy.content;
+  for (const key of Object.keys(copy)) {
+    if (/^(?:contentbytes|content_base64|content|data|bytes|raw)$/i.test(key)) delete copy[key];
+  }
   return copy;
+}
+
+function stripGraphAttachmentContents(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map((entry) => stripGraphAttachmentContents(entry));
+  if (!value || typeof value !== 'object') return value;
+  const record = value as GraphMailRecord;
+  if (typeof record.id === 'string' || typeof record.name === 'string' || typeof record.attachmentType === 'string') {
+    return stripAttachmentContent(record);
+  }
+  return Object.fromEntries(Object.entries(record).map(([key, nested]) => [key, stripGraphAttachmentContents(nested)]));
+}
+
+function boundedInlineAttachment(attachment: GraphMailRecord): GraphMailRecord {
+  for (const [key, value] of Object.entries(attachment)) {
+    if (!/^(?:contentbytes|content_base64)$/i.test(key)) continue;
+    if (typeof value !== 'string' || !isBase64(value)) throw new Error('attachment_inline_content_invalid');
+    const size = Buffer.from(value, 'base64').byteLength;
+    if (size > MAX_INLINE_ATTACHMENT_BYTES) throw new Error(`attachment_inline_content_too_large:${size}:use_download_file`);
+  }
+  for (const [key, value] of Object.entries(attachment)) {
+    if (!/^(?:content|data|bytes|raw)$/i.test(key)) continue;
+    const size = typeof value === 'string'
+      ? Buffer.byteLength(value, 'utf8')
+      : Buffer.byteLength(JSON.stringify(value ?? null), 'utf8');
+    if (size > MAX_INLINE_ATTACHMENT_BYTES) throw new Error(`attachment_inline_content_too_large:${size}:use_download_file`);
+  }
+  return attachment;
+}
+
+function isBase64(value: string): boolean {
+  return value.length % 4 === 0 && /^[A-Za-z0-9+/]*={0,2}$/.test(value);
 }
 
 function fileAttachmentBody(args: GraphMailRecord): GraphMailRecord {
@@ -805,6 +856,40 @@ function resolveAttachmentFilePath(args: GraphMailRecord, policySiteRoot: string
   if (!stat.isFile()) throw new Error('attachment_file_path_not_file');
   if (stat.size <= 0) throw new Error('attachment_file_empty');
   return candidate;
+}
+
+function resolveAttachmentOutputPath(args: GraphMailRecord, policySiteRoot: string, allowedRoots: string[]): string {
+  const input = requiredString(args, 'file_path');
+  const candidate = resolve(policySiteRoot, input);
+  const roots = allowedRoots.length > 0 ? allowedRoots : [policySiteRoot];
+  if (!roots.some((root) => pathInside(candidate, root))) throw new Error('attachment_file_path_not_allowed');
+  if (candidate === resolve(policySiteRoot)) throw new Error('attachment_file_path_not_file');
+  const realRoots = roots.map((root) => {
+    if (!existsSync(root)) throw new Error('attachment_file_root_missing');
+    return realpathSync(root);
+  });
+  const existingPath = nearestExistingPath(candidate);
+  const realExistingPath = realpathSync(existingPath);
+  if (!realRoots.some((root) => pathInside(realExistingPath, root))) {
+    throw new Error('attachment_file_path_symlink_escape');
+  }
+  if (existsSync(candidate)) {
+    const realCandidate = realpathSync(candidate);
+    if (!realRoots.some((root) => pathInside(realCandidate, root))) {
+      throw new Error('attachment_file_path_symlink_escape');
+    }
+  }
+  return candidate;
+}
+
+function nearestExistingPath(candidate: string): string {
+  let current = candidate;
+  while (!existsSync(current)) {
+    const parent = dirname(current);
+    if (parent === current) throw new Error('attachment_file_path_parent_missing');
+    current = parent;
+  }
+  return current;
 }
 
 function requiredNumber(args: GraphMailRecord, key: string): number {
@@ -915,6 +1000,9 @@ async function callTool(params: GraphMailRecord, state: GraphMailServerState) {
         break;
       case 'graph_mail_attachment_get':
         result = await graphMailAttachmentGet(args, state);
+        break;
+      case 'graph_mail_attachment_download_file':
+        result = await graphMailAttachmentDownloadFile(args, state);
         break;
       case 'graph_mail_attachment_add':
         result = await graphMailAttachmentAdd(args, state);
@@ -1288,7 +1376,7 @@ async function graphMailAttachmentList(args: GraphMailRecord, state: GraphMailSe
   const path = graphMailboxPath(args.mailbox_id, `messages/${encodeURIComponent(messageId)}/attachments`, policy);
   const query = { '$top': attachmentTop(args) };
   const graph = await graphRequest({ policy, accessToken, fetchImpl }, { path, query });
-  return { schema: 'narada.graph_mail_mcp.attachments.v1', status: 'ok', attachments: graph };
+  return { schema: 'narada.graph_mail_mcp.attachments.v1', status: 'ok', attachments: stripGraphAttachmentContents(graph) };
 }
 
 async function graphMailAttachmentGet(args: GraphMailRecord, state: GraphMailServerState): Promise<GraphMailRecord> {
@@ -1297,8 +1385,77 @@ async function graphMailAttachmentGet(args: GraphMailRecord, state: GraphMailSer
   const attachmentId = requiredString(args, 'attachment_id');
   const path = graphMailboxPath(args.mailbox_id, `messages/${encodeURIComponent(messageId)}/attachments/${encodeURIComponent(attachmentId)}`, policy);
   const graph = attachmentObject(await graphRequest({ policy, accessToken, fetchImpl }, { path }));
-  const attachment = args.include_content === false ? stripAttachmentContent(graph) : graph;
+  const attachment = args.include_content === true ? boundedInlineAttachment(graph) : stripAttachmentContent(graph);
   return { schema: 'narada.graph_mail_mcp.attachment.v1', status: 'ok', attachment };
+}
+
+async function graphMailAttachmentDownloadFile(args: GraphMailRecord, state: GraphMailServerState): Promise<GraphMailRecord> {
+  const { policy, accessToken, fetchImpl } = await clientParts(state);
+  const messageId = attachmentMessageId(args);
+  const attachmentId = requiredString(args, 'attachment_id');
+  const destination = resolveAttachmentOutputPath(args, policy.site_root, policy.allowed_attachment_roots);
+  const path = graphMailboxPath(args.mailbox_id, `messages/${encodeURIComponent(messageId)}/attachments/${encodeURIComponent(attachmentId)}`, policy);
+  const graph = attachmentObject(await graphRequest({ policy, accessToken, fetchImpl }, { path }));
+  const name = stringOption(graph.name) ?? attachmentId;
+  const contentType = stringOption(graph.contentType) ?? inferContentType(name);
+  if (!ALLOWED_DOWNLOADED_ATTACHMENT_TYPES.has(contentType.toLowerCase())) {
+    throw new Error(`attachment_download_content_type_not_allowed:${contentType}`);
+  }
+  const contentBytes = stringOption(graph.contentBytes) ?? stringOption(graph.content_base64);
+  if (!contentBytes || !isBase64(contentBytes)) throw new Error('attachment_download_content_missing');
+  const bytes = Buffer.from(contentBytes, 'base64');
+  if (bytes.byteLength <= 0) throw new Error('attachment_download_content_empty');
+  if (bytes.byteLength > MAX_DOWNLOADED_ATTACHMENT_BYTES) throw new Error(`attachment_download_too_large:${bytes.byteLength}`);
+  if (typeof graph.size === 'number' && Number.isFinite(graph.size) && graph.size !== bytes.byteLength) {
+    throw new Error(`attachment_download_size_mismatch:${graph.size}:${bytes.byteLength}`);
+  }
+  const digest = createHash('sha256').update(bytes).digest('hex');
+  if (existsSync(destination)) {
+    const existing = readFileSync(destination);
+    const existingDigest = createHash('sha256').update(existing).digest('hex');
+    if (existingDigest !== digest) throw new Error('attachment_download_destination_conflict');
+    return {
+      schema: 'narada.graph_mail_mcp.attachment_download_file.v1',
+      status: 'already_materialized',
+      message_id: messageId,
+      attachment_id: attachmentId,
+      file_path: destination,
+      name,
+      content_type: contentType,
+      size: bytes.byteLength,
+      sha256: digest,
+    };
+  }
+  mkdirSync(dirname(destination), { recursive: true });
+  const temporary = `${destination}.${process.pid}.tmp`;
+  writeFileSync(temporary, bytes, { flag: 'wx' });
+  try {
+    renameSync(temporary, destination);
+  } catch (error) {
+    try { unlinkSync(temporary); } catch { /* best effort cleanup */ }
+    throw error;
+  }
+  recordGraphMailAudit(state.siteRoot, {
+    event_kind: 'attachment_download_file_completed',
+    mailbox_id: args.mailbox_id ?? 'me',
+    message_id: messageId,
+    attachment_id: attachmentId,
+    name,
+    content_type: contentType,
+    size: bytes.byteLength,
+    sha256: digest,
+  });
+  return {
+    schema: 'narada.graph_mail_mcp.attachment_download_file.v1',
+    status: 'materialized',
+    message_id: messageId,
+    attachment_id: attachmentId,
+    file_path: destination,
+    name,
+    content_type: contentType,
+    size: bytes.byteLength,
+    sha256: digest,
+  };
 }
 
 async function graphMailAttachmentAdd(args: GraphMailRecord, state: GraphMailServerState): Promise<GraphMailRecord> {
@@ -2188,6 +2345,7 @@ const GRAPH_MAIL_MUTATING_TOOLS = new Set([
   'graph_mail_auth_clear',
   'graph_mail_folder_create',
   'graph_mail_message_move',
+  'graph_mail_attachment_download_file',
   'graph_mail_attachment_add',
   'graph_mail_attachment_upload_session_create',
   'graph_mail_attachment_upload_chunk',
@@ -2226,6 +2384,7 @@ const GRAPH_MAIL_IDEMPOTENT_TOOLS = new Set([
   'graph_mail_folder_list',
   'graph_mail_attachment_list',
   'graph_mail_attachment_get',
+  'graph_mail_attachment_download_file',
   'graph_mail_ticket_draft_upsert',
   'graph_mail_ticket_draft_discard',
   'graph_mail_ticket_draft_disposition_scan',

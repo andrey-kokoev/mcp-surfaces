@@ -30,6 +30,7 @@ const DEFAULT_CONFIG_PATH = 'config/config.json';
 const DOMAIN_RELATIVE_ROOT = join('.narada', 'runtime', 'mailbox-domain');
 const MAX_IDEMPOTENCY_KEY = 512;
 const MAX_SCOPE_ID = 256;
+const MAX_EXPLICIT_FACT_PAYLOAD_BYTES = 750 * 1024;
 
 export interface MailboxDomainServiceOptions {
   sourceFactory?: (scope: ScopeConfig) => Source;
@@ -503,16 +504,22 @@ export class MailboxDomainService {
       if (metadata.mailbox_id !== loaded.scope.scope_id) {
         throw new Error(`mailbox_fact_scope_mismatch:${metadata.mailbox_id}:${loaded.scope.scope_id}`);
       }
+      const includeContent = args.include_content === true;
+      if (includeContent && Buffer.byteLength(fact.payload_json, 'utf8') > MAX_EXPLICIT_FACT_PAYLOAD_BYTES) {
+        throw new Error(`mailbox_fact_content_too_large:${Buffer.byteLength(fact.payload_json, 'utf8')}`);
+      }
       return {
         schema: 'narada.mailbox.immutable_fact.v1',
         status: 'ok',
         scope_id: loaded.scope.scope_id,
+        projection: includeContent ? 'full' : 'safe',
         fact: {
           fact_id: fact.fact_id,
           fact_type: fact.fact_type,
           provenance: fact.provenance,
           payload_sha256: createHash('sha256').update(fact.payload_json).digest('hex'),
-          payload,
+          payload: includeContent ? payload : safeFactPayload(payload),
+          payload_content_included: includeContent,
           created_at: fact.created_at,
         },
       };
@@ -919,6 +926,32 @@ function mailMetadata(fact: Fact): {
     internet_message_id: optionalBoundedString(payload.internet_message_id, 1024),
     subject: optionalBoundedString(payload.subject, 500),
   };
+}
+
+function safeFactPayload(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map((entry) => safeFactPayload(entry));
+  if (!value || typeof value !== 'object') return value;
+  const record = value as JsonRecord;
+  const result: JsonRecord = {};
+  for (const [key, nested] of Object.entries(record)) {
+    if (key.toLowerCase() === 'attachments') {
+      result[key] = safeAttachmentMetadata(nested);
+    } else {
+      result[key] = safeFactPayload(nested);
+    }
+  }
+  return result;
+}
+
+function safeAttachmentMetadata(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map((entry) => safeAttachmentMetadata(entry));
+  if (!value || typeof value !== 'object') return value;
+  const result: JsonRecord = {};
+  for (const [key, nested] of Object.entries(value as JsonRecord)) {
+    if (/^(?:contentbytes|content_bytes|content_base64|contentref|content_ref|content|data|bytes|raw)$/i.test(key)) continue;
+    result[key] = safeAttachmentMetadata(nested);
+  }
+  return result;
 }
 
 function trustedCorrelationKeys(metadata: ReturnType<typeof mailMetadata>): JsonRecord[] {

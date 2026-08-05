@@ -78,6 +78,7 @@ The normalized output uses stable fields such as `message_id`, `mailbox_id`, `fo
 - `mailbox_message_admit`: freezes one decision for the fact cited by a first-observed event.
 - `mailbox_admission_show`: reads that canonical decision without reevaluating policy.
 - `mailbox_outbox_*`: registers immutable scoped subscriptions, lists matching events, and records bounded effect receipts.
+- `mailbox_fact_show`: reads one immutable discovered-message fact with a safe body/metadata projection by default; explicit full payload reads are bounded. Attachment bytes are never part of the normal fact projection.
 
 ## Agent Guidance
 

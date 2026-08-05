@@ -157,6 +157,7 @@ export function listTools(): unknown[] {
       fact_id: { type: 'string', description: 'Immutable fact id cited by a Work Lifecycle ticket source.' },
       scope_id: { type: 'string', description: 'Configured mailbox scope id. Optional only when the config contains one scope.' },
       config_path: { type: 'string', description: 'Site-relative sync config path. Defaults to config/config.json.' },
+      include_content: { type: 'boolean', default: false, description: 'Explicitly include the original payload content only when the bounded fact payload is small enough. Defaults to a metadata/body-safe projection.' },
     }, ['fact_id']),
     tool('mailbox_message_fact_find', 'Resolve one synchronized immutable message id to its canonical first-observation fact and event references.', {
       scope_id: { type: 'string', description: 'Configured mailbox scope id.' },

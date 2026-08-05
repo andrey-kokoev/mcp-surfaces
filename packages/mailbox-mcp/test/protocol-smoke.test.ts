@@ -48,6 +48,9 @@ try {
   assert.ok(list);
   assert.equal(list.inputSchema.properties.limit.default, 20);
   assert.equal(list.inputSchema.properties.include_body.default, false);
+  const fact = toolRows.find((tool) => tool.name === 'mailbox_fact_show');
+  assert.ok(fact);
+  assert.equal(fact.inputSchema.properties.include_content.default, false);
   const thread = toolRows.find((tool) => tool.name === 'mailbox_thread_show');
   assert.ok(thread);
   assert.equal(thread.inputSchema.properties.limit.default, 50);

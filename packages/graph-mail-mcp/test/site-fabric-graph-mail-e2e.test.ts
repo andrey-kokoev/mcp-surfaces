@@ -72,6 +72,7 @@ try {
       'graph_mail_attachment_upload_file',
       'graph_mail_attachment_list',
       'graph_mail_attachment_get',
+      'graph_mail_attachment_download_file',
       'graph_mail_attachment_delete',
       'graph_mail_draft_discard',
       'graph_mail_ticket_draft_discard',

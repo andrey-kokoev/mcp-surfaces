@@ -29,6 +29,7 @@ try {
     'graph_mail_message_mark_read',
     'graph_mail_attachment_list',
     'graph_mail_attachment_get',
+    'graph_mail_attachment_download_file',
     'graph_mail_attachment_add',
     'graph_mail_attachment_upload_session_create',
     'graph_mail_attachment_upload_chunk',
@@ -76,7 +77,9 @@ try {
   assert.equal((toolRows.find((tool) => tool.name === 'graph_mail_folder_create') as any)?.inputSchema?.required?.join(','), 'display_name');
   assert.equal((toolRows.find((tool) => tool.name === 'graph_mail_message_move') as any)?.inputSchema?.required?.join(','), 'message_id,destination_folder_id');
   assert.equal((toolRows.find((tool) => tool.name === 'graph_mail_message_mark_read') as any)?.inputSchema?.required?.join(','), 'message_id,idempotency_key');
-  assert.equal(toolRows.find((tool) => tool.name === 'graph_mail_attachment_get')?.inputSchema.properties.include_content.default, true);
+  assert.equal(toolRows.find((tool) => tool.name === 'graph_mail_attachment_get')?.inputSchema.properties.include_content.default, false);
+  assert.equal(toolRows.find((tool) => tool.name === 'graph_mail_attachment_download_file')?.annotations.readOnlyHint, false);
+  assert.equal((toolRows.find((tool) => tool.name === 'graph_mail_attachment_download_file') as any)?.annotations.idempotentHint, true);
   assert.equal(toolRows.find((tool) => tool.name === 'graph_mail_attachment_list')?.inputSchema.properties.limit.default, 20);
   assert.equal(toolRows.find((tool) => tool.name === 'graph_mail_attachment_upload_session_create')?.inputSchema.properties.size.minimum, 1);
   assert.equal((toolRows.find((tool) => tool.name === 'graph_mail_attachment_upload_chunk') as any)?.inputSchema?.required?.join(','), 'upload_url,content_base64,range_start,range_end,total_size');

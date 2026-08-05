@@ -28,7 +28,7 @@ GRAPH_CLIENT_ID
 GRAPH_CLIENT_SECRET
 ```
 
-The server reads these from process environment or from `.env` at the workspace root beside the site `.narada` directory. It mints and caches short-lived client-credentials tokens as needed.
+For a generic deployment, the server may receive these values from its process environment. The Staccato site path does not use `.env` files: its unattended runtime uses the delegated SecretStore/token-store integration configured by the site. The server mints and caches short-lived client-credentials tokens as needed when application credentials are supplied.
 
 For diagnostics or explicit override, callers may still provide a ready access token with:
 
@@ -79,7 +79,7 @@ Policy fields:
 
 - `graph_base_url`: optional Graph API base URL. Defaults to `https://graph.microsoft.com/v1.0`.
 - `allowed_mailboxes`: optional mailbox allowlist. When exactly one mailbox is allowed, omitted `mailbox_id` arguments resolve to that mailbox. Otherwise omitted `mailbox_id` resolves to `me`, which must be listed explicitly if an allowlist is configured.
-- `allowed_attachment_roots`: optional local filesystem roots for `graph_mail_attachment_upload_file`. Relative paths resolve under the site root. Defaults to the site root when omitted.
+- `allowed_attachment_roots`: optional local filesystem roots for guarded attachment upload and inbound download materialization. Relative paths resolve under the site root. Defaults to the site root when omitted.
 - `allow_device_code_auth`: defaults to `false`. Enables operator-approved delegated proof auth tools.
 - `device_code_tenant_id`: tenant id for device-code auth. May fall back to `GRAPH_TENANT_ID`.
 - `device_code_client_id`: public-client app id for device-code auth. Do not use a confidential client or client secret for device-code auth.
@@ -121,7 +121,8 @@ Telemetry is optional and off by default. When a site enables `.ai/mcp-telemetry
 - `graph_mail_folder_create`: creates a mail folder only when policy allows mailbox organization writes and the call includes `confirm_write: true`.
 - `graph_mail_message_move`: moves a message only when policy allows mailbox organization writes and the call includes `confirm_write: true`.
 - `graph_mail_attachment_list`: lists attachments for a message or draft.
-- `graph_mail_attachment_get`: shows one attachment and can strip `contentBytes`/`content` when `include_content` is `false`.
+- `graph_mail_attachment_get`: shows one attachment as metadata by default; bounded inline content requires explicit `include_content: true`.
+- `graph_mail_attachment_download_file`: downloads one permitted inbound document to an allowed local path, enforcing MIME and size limits without returning base64 through MCP. Repeated requests are hash-idempotent.
 - `graph_mail_attachment_add`: adds a small file attachment with `name`, `content_type`, and `content_base64` using `@odata.type` `#microsoft.graph.fileAttachment`.
 - `graph_mail_attachment_upload_session_create`: creates an upload session for a large file attachment with `name`, positive `size`, and optional content metadata.
 - `graph_mail_attachment_upload_chunk`: uploads one chunk to a guarded upload URL with `upload_url`, `content_base64`, `range_start`, `range_end`, and `total_size`, using binary body bytes and explicit `Content-Length` / `Content-Range` headers.

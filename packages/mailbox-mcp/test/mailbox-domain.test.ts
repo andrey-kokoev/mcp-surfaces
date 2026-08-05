@@ -184,9 +184,18 @@ try {
     scope_id: 'support',
   });
   assert.equal(immutableFact.status, 'ok');
+  assert.equal(immutableFact.projection, 'safe');
+  assert.equal(record(immutableFact.fact).payload_content_included, false);
   assert.equal(record(immutableFact.fact).fact_id, record(allowedEvent.payload).fact_id);
   assert.equal(typeof record(immutableFact.fact).payload_sha256, 'string');
   assert.equal(JSON.stringify(record(immutableFact.fact).payload).includes('Allowed body must not cross admission receipt'), true);
+  const explicitFact = await service.factShow({
+    fact_id: String(record(allowedEvent.payload).fact_id),
+    scope_id: 'support',
+    include_content: true,
+  });
+  assert.equal(explicitFact.projection, 'full');
+  assert.equal(record(explicitFact.fact).payload_content_included, true);
 
   const rejected = await service.admitMessage({
     idempotency_key: 'admission-action-rejected',
