@@ -12,7 +12,9 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use time::format_description::well_known::Rfc3339;
 use time::OffsetDateTime;
 
-const CONTRACT_VERSION: u64 = 3;
+mod filesystem;
+
+const CONTRACT_VERSION: u64 = 4;
 const DEFAULT_REQUEST_TIMEOUT_MS: u64 = 240_000;
 const DEFAULT_TOOL_TIMEOUT_GRACE_MS: u64 = 15_000;
 const MAX_TRANSPORT_TIMEOUT_MS: u64 = 900_000;
@@ -25,6 +27,8 @@ const TAIL_LIMIT: usize = 8_000;
 struct Options {
     child_command: String,
     entrypoint: PathBuf,
+    child_invocation_kind: String,
+    child_applet: Option<String>,
     child_prefix_args: Vec<String>,
     child_args: Vec<String>,
     carrier_id: Option<String>,
@@ -92,6 +96,7 @@ fn main() {
     let args = env::args().skip(1).collect::<Vec<_>>();
     let result = match args.first().map(String::as_str) {
         Some("proxy") => run_proxy(&args[1..]),
+        Some("filesystem") => filesystem::run(&args[1..]),
         Some(other) => Err(format!("narada_mcp_runtime_unknown_applet:{other}")),
         None => Err("narada_mcp_runtime_applet_required".to_string()),
     };
@@ -130,6 +135,17 @@ fn parse_options(args: &[String]) -> Result<Options, String> {
         .get("--child-command")
         .cloned()
         .ok_or("mcp_runtime_proxy_missing_child_command")?;
+    let child_invocation_kind = values
+        .get("--child-invocation-kind")
+        .cloned()
+        .unwrap_or_else(|| "entrypoint".to_string());
+    if child_invocation_kind != "entrypoint" && child_invocation_kind != "native_applet" {
+        return Err("mcp_runtime_proxy_invalid_child_invocation_kind".to_string());
+    }
+    let child_applet = values.get("--child-applet").cloned();
+    if child_invocation_kind == "native_applet" && child_applet.is_none() {
+        return Err("mcp_runtime_proxy_missing_child_applet".to_string());
+    }
     let child_prefix_args = values
         .get("--child-prefix-args")
         .map(|value| serde_json::from_str::<Vec<String>>(value).map_err(|_| "mcp_runtime_proxy_invalid_child_prefix_args".to_string()))
@@ -151,6 +167,8 @@ fn parse_options(args: &[String]) -> Result<Options, String> {
     Ok(Options {
         child_command,
         entrypoint: absolute(entrypoint),
+        child_invocation_kind,
+        child_applet,
         child_prefix_args,
         child_args: if split < args.len() {
             args[split + 1..].to_vec()
@@ -260,10 +278,15 @@ fn run_proxy(args: &[String]) -> Result<(), String> {
         "artifact_manifest_fingerprint": manifest_fingerprint,
     }), false);
     let mut command = Command::new(&options.child_command);
+    let child_entry = if options.child_invocation_kind == "native_applet" {
+        Path::new(options.child_applet.as_deref().unwrap_or_default())
+    } else {
+        options.entrypoint.as_path()
+    };
     command
         .args(
             options.child_prefix_args.iter().map(AsRef::as_ref)
-                .chain(std::iter::once(options.entrypoint.as_os_str()))
+                .chain(std::iter::once(child_entry.as_os_str()))
                 .chain(options.child_args.iter().map(AsRef::as_ref)),
         )
         .stdin(Stdio::piped())
@@ -285,6 +308,8 @@ fn run_proxy(args: &[String]) -> Result<(), String> {
         "child_pid": child_pid,
         "child_command": options.child_command,
         "child_prefix_args": options.child_prefix_args,
+        "child_invocation_kind": options.child_invocation_kind,
+        "child_applet": options.child_applet,
     }), false);
     let child_stdin = Arc::new(Mutex::new(child.lock().map_err(lock_error)?.stdin.take()));
     let child_stdout = child
@@ -724,6 +749,8 @@ fn status_response(
             "managed_child_pid": child_pid,
             "server_pid": child_pid,
             "entrypoint": options.entrypoint,
+            "child_invocation_kind": options.child_invocation_kind,
+            "child_applet": options.child_applet,
             "started_at": freshness.started_at,
             "heartbeat_at": heartbeat_at,
             "lease_expires_at": lease_expires_at,
@@ -1669,6 +1696,8 @@ fn write_startup_phase_trace(options: &Options, preflight_ms: f64) {
             "surface_id": options.surface_id,
             "observed_at": now_iso(),
             "preflight_ms": preflight_ms,
+            "child_invocation_kind": options.child_invocation_kind,
+            "child_applet": options.child_applet,
         }),
     );
 }

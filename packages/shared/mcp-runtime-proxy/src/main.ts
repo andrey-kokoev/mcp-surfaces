@@ -60,6 +60,8 @@ type PendingRequest = {
 type ProxyOptions = {
   childCommand: string;
   entrypoint: string;
+  childInvocationKind: 'entrypoint' | 'native_applet';
+  childApplet: string | null;
   childPrefixArgs: string[];
   childArgs: string[];
   carrierId: string | null;
@@ -102,6 +104,8 @@ const STARTUP_TRACE_SCHEMA = 'narada.mcp_runtime_proxy.startup_trace.v1';
 function parseArgs(argv: string[]): ProxyOptions {
   let childCommand = '';
   let entrypoint = '';
+  let childInvocationKind: 'entrypoint' | 'native_applet' = 'entrypoint';
+  let childApplet: string | null = null;
   let childPrefixArgs: string[] = [];
   let carrierId: string | null = null;
   let carrierKind: string | null = null;
@@ -123,6 +127,12 @@ function parseArgs(argv: string[]): ProxyOptions {
     const arg = prelude[index];
     if (arg === '--child-command' && prelude[index + 1]) childCommand = prelude[++index];
     else if (arg === '--entrypoint' && prelude[index + 1]) entrypoint = prelude[++index];
+    else if (arg === '--child-invocation-kind' && prelude[index + 1]) {
+      const value = prelude[++index];
+      if (value !== 'entrypoint' && value !== 'native_applet') throw new Error('mcp_runtime_proxy_invalid_child_invocation_kind');
+      childInvocationKind = value;
+    }
+    else if (arg === '--child-applet' && prelude[index + 1]) childApplet = prelude[++index];
     else if (arg === '--child-prefix-args' && prelude[index + 1]) {
       const raw = prelude[++index];
       let parsed: unknown;
@@ -145,6 +155,7 @@ function parseArgs(argv: string[]): ProxyOptions {
     else if (arg === '--orphan-grace-ms' && prelude[index + 1]) orphanGraceMs = parsePositiveInteger(prelude[++index], 'orphan_grace_ms', MAX_ORPHAN_GRACE_MS);
   }
   if (!entrypoint) throw new Error('mcp_runtime_proxy_missing_entrypoint');
+  if (childInvocationKind === 'native_applet' && !childApplet) throw new Error('mcp_runtime_proxy_missing_child_applet');
   if (runtimeContractVersion !== null && runtimeContractVersion >= 3 && !childCommand) {
     throw new Error('mcp_runtime_proxy_missing_child_command');
   }
@@ -154,6 +165,8 @@ function parseArgs(argv: string[]): ProxyOptions {
   return {
     childCommand: childCommand || process.execPath,
     entrypoint: resolve(entrypoint),
+    childInvocationKind,
+    childApplet,
     childPrefixArgs,
     childArgs: argv.slice(Math.min(passthroughIndex + 1, argv.length)),
     carrierId,
@@ -432,6 +445,8 @@ function recordStartupTrace(
       schema: STARTUP_TRACE_SCHEMA,
       surface_id: options.surfaceId,
       entrypoint: options.entrypoint,
+      child_invocation_kind: options.childInvocationKind,
+      child_applet: options.childApplet,
       child_prefix_args: options.childPrefixArgs,
       child_args: options.childArgs,
       started_at: trace.startedAt,
@@ -1235,7 +1250,7 @@ function spawnProxyChild(options: ProxyOptions, supervisorPath: string | null): 
         '--',
         options.childCommand,
         ...options.childPrefixArgs,
-        options.entrypoint,
+        options.childInvocationKind === 'native_applet' ? options.childApplet! : options.entrypoint,
         ...options.childArgs,
       ], spawnOptions) as ChildProcessWithoutNullStreams,
       supervisorPath,
@@ -1243,7 +1258,11 @@ function spawnProxyChild(options: ProxyOptions, supervisorPath: string | null): 
     };
   }
   return {
-    child: spawn(options.childCommand, [...options.childPrefixArgs, options.entrypoint, ...options.childArgs], spawnOptions) as ChildProcessWithoutNullStreams,
+    child: spawn(options.childCommand, [
+      ...options.childPrefixArgs,
+      options.childInvocationKind === 'native_applet' ? options.childApplet! : options.entrypoint,
+      ...options.childArgs,
+    ], spawnOptions) as ChildProcessWithoutNullStreams,
     supervisorPath: null,
     supervisorIdentityPath: null,
   };

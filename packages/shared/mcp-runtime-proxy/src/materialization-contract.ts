@@ -3,7 +3,7 @@ import { existsSync, mkdirSync, readFileSync, renameSync, unlinkSync, writeFileS
 import { dirname, resolve } from 'node:path';
 import { describeUnknownError } from './error-description.js';
 
-export const MCP_RUNTIME_CONTRACT_VERSION = 3 as const;
+export const MCP_RUNTIME_CONTRACT_VERSION = 4 as const;
 export const MATERIALIZATION_GENERATION_SCHEMA = 'narada.mcp_materialization_generation.v1' as const;
 
 type JsonRecord = Record<string, unknown>;
@@ -177,6 +177,8 @@ export function validateMaterializedConfiguration(input: {
     }
     const childEntrypoint = argValue(launch.args, '--entrypoint');
     const childCommand = argValue(launch.args, '--child-command');
+    const childInvocationKind = argValue(launch.args, '--child-invocation-kind') ?? 'entrypoint';
+    const childApplet = argValue(launch.args, '--child-applet');
     if (!childCommand) {
       errors.push({ code: 'materialized_config_child_command_missing', server_key: serverKey });
     }
@@ -184,6 +186,12 @@ export function validateMaterializedConfiguration(input: {
       errors.push({ code: 'materialized_config_child_entrypoint_missing', server_key: serverKey });
     } else if (!existsSync(childEntrypoint)) {
       errors.push({ code: 'materialized_config_child_entrypoint_missing', server_key: serverKey, detail: { path: childEntrypoint } });
+    }
+    if (childInvocationKind !== 'entrypoint' && childInvocationKind !== 'native_applet') {
+      errors.push({ code: 'materialized_config_child_invocation_kind_invalid', server_key: serverKey, detail: { child_invocation_kind: childInvocationKind } });
+    }
+    if (childInvocationKind === 'native_applet' && !childApplet) {
+      errors.push({ code: 'materialized_config_child_applet_missing', server_key: serverKey });
     }
     const registrarEntrypoint = argValue(launch.args, '--registrar-entrypoint');
     if (registrarEntrypoint && !argValue(launch.args, '--registrar-command')) {

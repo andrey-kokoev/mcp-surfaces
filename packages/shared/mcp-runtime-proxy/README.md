@@ -39,7 +39,7 @@ longer matches an export target. Re-run the workspace build before retrying;
 the proxy never starts a server against an unverified workspace.
 
 Carrier materialization adds a second contract gate. Every generated proxy
-launch declares `--runtime-contract-version 3`, the current
+launch declares `--runtime-contract-version 4`, the current
 `--artifact-manifest`, and, for a materialized carrier file, a
 `--materialization-sidecar` path. The registrar validates every generated
 proxy, child entrypoint, and manifest reference before writing the carrier
@@ -95,10 +95,18 @@ bun packages/mcp-registrar/dist/src/main.js --materialize-all --runtime-proxy-im
 
 `bun` remains the registrar default and is the rollback path. Native mode is
 Windows-only and materialization refuses it when the built executable is
-absent. Both modes use runtime contract v3 and therefore carry explicit
+absent. Both modes use runtime contract v4 and therefore carry explicit
 `--child-command` and `--registrar-command` values; the proxy executable never
 guesses which JavaScript runtime should launch a domain surface or recovery
 registrar.
+
+The native executable is a multicall host. Its filesystem applet provides the
+read-only local-filesystem MCP surface: bounded reads, stat, glob, grep,
+inventory, metrics, doctor, and patch-outcome readback. A surface may opt in
+with surface_implementation=native; JavaScript remains the default and write
+mode remains on the JavaScript implementation. Native launches declare an
+explicit child invocation kind and applet so entrypoint paths are not
+overloaded with applet semantics.
 
 The selected implementation, executable path, and executable fingerprint are
 recorded in the carrier sidecar and checked before child launch. Rust sources,

@@ -132,6 +132,7 @@ type SurfaceOverride = {
   entrypoint?: string;
   args?: string[];
   env_vars?: string[];
+  surface_implementation?: 'js' | 'native';
   approval_mode?: 'auto' | 'approve';
   enabled?: boolean;
 };
@@ -148,6 +149,7 @@ type MaterializedServer = {
   local?: SiteLocalSurface;
   env_vars?: string[];
   enabled?: boolean;
+  surface_implementation?: 'js' | 'native';
   narada_scope: NaradaScopeMetadata;
 } & SurfaceScopeMetadata;
 
@@ -404,7 +406,18 @@ export function readSiteSurfaceOverrides(
         required_field: 'enabled:boolean',
       });
     }
-    overrides[surfaceId] = { enabled: record.enabled };
+    const implementation = record.surface_implementation;
+    if (implementation !== undefined && implementation !== 'js' && implementation !== 'native') {
+      throw diagnosticError('registrar_site_surface_override_invalid', 'registrar_site_surface_override_invalid:' + surfaceId, {
+        config_path: configPath,
+        surface_id: surfaceId,
+        required_field: 'surface_implementation:js|native',
+      });
+    }
+    overrides[surfaceId] = {
+      enabled: record.enabled,
+      ...(implementation === 'js' || implementation === 'native' ? { surface_implementation: implementation } : {}),
+    };
   }
   return overrides;
 }
@@ -1647,6 +1660,7 @@ function applySurfaceOverrides(carrier: CarrierDef, server: MaterializedServer, 
     entrypoint: overrides.entrypoint ?? server.entrypoint,
     args: overrides.args ?? server.args,
     env_vars: overrides.env_vars ?? server.env_vars,
+    surface_implementation: overrides.surface_implementation ?? server.surface_implementation,
     enabled: overrides.enabled ?? server.enabled,
   };
 }
@@ -1660,6 +1674,8 @@ type CarrierLaunchCommand = {
   artifact_manifest_path?: string;
   runtime_contract_version?: number;
   materialization_sidecar_path?: string;
+  child_invocation_kind?: 'entrypoint' | 'native_applet';
+  child_applet?: string;
   child_entrypoint: string;
   child_args: string[];
 };
@@ -1673,6 +1689,12 @@ function carrierLaunchCommand(
   const childEntrypoint = server.entrypoint;
   const childArgs = server.args;
   const runtimeCommand = server.command ?? server.projection?.command ?? 'node';
+  const useNativeFilesystemApplet = server.surface_implementation === 'native'
+    && surfaceId === 'local-filesystem'
+    && childArgs.includes('--mode')
+    && childArgs[childArgs.indexOf('--mode') + 1] === 'read';
+  const effectiveChildCommand = useNativeFilesystemApplet ? MCP_NATIVE_RUNTIME_PROXY_ENTRYPOINT : runtimeCommand;
+  const effectiveChildEntrypoint = useNativeFilesystemApplet ? MCP_NATIVE_RUNTIME_PROXY_ENTRYPOINT : childEntrypoint;
   const sidecarPath = configPath ? materializationSidecarPath(configPath) : null;
   if (server.kind === 'local') {
     return {
@@ -1701,14 +1723,15 @@ function carrierLaunchCommand(
         MCP_REGISTRAR_RUNTIME_ENTRYPOINT,
       ] : []),
       '--child-command',
-      runtimeCommand,
+      effectiveChildCommand,
       '--artifact-manifest',
       MCP_WORKSPACE_ARTIFACT_MANIFEST,
       '--runtime-contract-version',
       String(MCP_RUNTIME_CONTRACT_VERSION),
       ...(sidecarPath ? ['--materialization-sidecar', sidecarPath] : []),
       '--entrypoint',
-      childEntrypoint,
+      effectiveChildEntrypoint,
+      ...(useNativeFilesystemApplet ? ['--child-invocation-kind', 'native_applet', '--child-applet', 'filesystem'] : []),
       '--',
       ...childArgs,
     ],
@@ -1718,7 +1741,8 @@ function carrierLaunchCommand(
     artifact_manifest_path: MCP_WORKSPACE_ARTIFACT_MANIFEST,
     runtime_contract_version: MCP_RUNTIME_CONTRACT_VERSION,
     ...(sidecarPath ? { materialization_sidecar_path: sidecarPath } : {}),
-    child_entrypoint: childEntrypoint,
+    ...(useNativeFilesystemApplet ? { child_invocation_kind: 'native_applet' as const, child_applet: 'filesystem' } : {}),
+    child_entrypoint: effectiveChildEntrypoint,
     child_args: childArgs,
   };
 }
@@ -3120,6 +3144,7 @@ export function buildSiteBindConfig(site: SiteDef, surface: RegistrarSurfaceReco
     args: resolvedArgs,
     surface,
     projection,
+    surface_implementation: site.surface_overrides?.[surfaceId]?.surface_implementation,
     ...scopeMetadata,
     narada_scope: naradaScope,
   }, surfaceId);
@@ -3276,6 +3301,8 @@ type SiteMcpFabricServer = {
   entrypoint: string;
   launch_entrypoint: string;
   uses_runtime_proxy: boolean;
+  child_invocation_kind?: 'entrypoint' | 'native_applet';
+  child_applet?: string;
   surface_id?: string;
   projection_id?: string;
   runtime_kind?: McpRuntimeKind;
@@ -3285,16 +3312,21 @@ type SiteMcpFabricServer = {
   projection_kind: 'site_fabric' | 'carrier_projection';
 };
 
-function unwrapRuntimeProxyLaunch(entrypoint: string, args: string[]): { entrypoint: string; args: string[]; usesRuntimeProxy: boolean; launchEntrypoint: string } {
+function unwrapRuntimeProxyLaunch(entrypoint: string, args: string[]): { entrypoint: string; args: string[]; usesRuntimeProxy: boolean; launchEntrypoint: string; childInvocationKind?: 'entrypoint' | 'native_applet'; childApplet?: string } {
   const launchEntrypoint = entrypoint;
-  if (portablePath(entrypoint) !== portablePath(MCP_RUNTIME_PROXY_ENTRYPOINT)) {
+  if (portablePath(entrypoint) !== portablePath(MCP_RUNTIME_PROXY_ENTRYPOINT)
+    && portablePath(entrypoint) !== portablePath(MCP_NATIVE_RUNTIME_PROXY_ENTRYPOINT)) {
     return { entrypoint, args, usesRuntimeProxy: false, launchEntrypoint };
   }
   const entrypointIndex = args.indexOf('--entrypoint');
   const separatorIndex = args.indexOf('--');
   const childEntrypoint = entrypointIndex >= 0 ? args[entrypointIndex + 1] : '';
   const childArgs = separatorIndex >= 0 ? args.slice(separatorIndex + 1) : [];
-  return { entrypoint: childEntrypoint, args: childArgs, usesRuntimeProxy: true, launchEntrypoint };
+  const invocationIndex = args.indexOf('--child-invocation-kind');
+  const appletIndex = args.indexOf('--child-applet');
+  const childInvocationKind = invocationIndex >= 0 && args[invocationIndex + 1] === 'native_applet' ? 'native_applet' : 'entrypoint';
+  const childApplet = appletIndex >= 0 ? args[appletIndex + 1] : undefined;
+  return { entrypoint: childEntrypoint, args: childArgs, usesRuntimeProxy: true, launchEntrypoint, childInvocationKind, ...(childApplet ? { childApplet } : {}) };
 }
 
 function portablePath(path: string): string {
@@ -3394,6 +3426,8 @@ function discoverMcpConfigDirectory(
         entrypoint: unwrapped.entrypoint,
         launch_entrypoint: unwrapped.launchEntrypoint,
         uses_runtime_proxy: unwrapped.usesRuntimeProxy,
+        child_invocation_kind: unwrapped.childInvocationKind,
+        child_applet: unwrapped.childApplet,
         surface_id: server.surface_id ? String(server.surface_id) : undefined,
         projection_id: optionalString(server.projection_id) ?? optionalString(surfaceProjection.projection_id) ?? undefined,
         runtime_kind: surfaceProjection.runtime_kind === 'nars' ? 'nars' : undefined,
@@ -3488,6 +3522,9 @@ function runtimeBindingForFabricServer(site: SiteDef, server: SiteMcpFabricServe
       String(MCP_RUNTIME_CONTRACT_VERSION),
       '--entrypoint',
       server.entrypoint,
+      ...(server.child_invocation_kind === 'native_applet'
+        ? ['--child-invocation-kind', 'native_applet', '--child-applet', server.child_applet ?? 'filesystem']
+        : []),
       '--',
       ...server.args,
     ]
