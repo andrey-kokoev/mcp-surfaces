@@ -94,6 +94,7 @@ The repository-level strong profile is the heavier acceptance-oriented scenario.
 | `payload-load` | Framing and transport remain correct under size and concurrency pressure. | 8 samples; 32 B, 4 KB, 64 KB; sequential plus two batches of 8 concurrent calls |
 | `restart-soak` | Repeated replacement does not leak processes or fail to complete warm work. | 200 cold restarts; 2,000 warm calls |
 | `real-structured-command` | The benchmark reaches a real surface and performs policy inspection plus a safe command. | 8 samples; Bun, Node, Deno when available, and native Node proxy lanes |
+| `filesystem-search-load` | The benchmark reaches the real local-filesystem MCP surface and exercises search/read work over a large deterministic haystack. | 8 samples; 2,048 files (~54 MB), eight sequential filesystem commands, and eight concurrent searches per sample across the fixed topology matrix |
 
 Run it with:
 
@@ -104,3 +105,10 @@ pnpm --filter @narada-core/mcp-runtime-proxy benchmark:strong
 The strong report is canonical JSON plus an offline HTML artifact. It retains raw samples, phase timings, attributed processes, runtime versions, skipped reasons, and failures. Deno is experimental: a missing executable is `not_run`; a measured Deno failure is retained as evidence and is not silently converted into a pass.
 
 The strong payload gate compares native Node with Node using `max(1.05 * baseline, baseline + 1 ms)`. The absolute term is a declared allowance for fixed proxy/IPC cost on tiny payloads; it is not applied to representative initialization or lifecycle correctness.
+
+The filesystem-search-load workload is selected by default in the strong profile. Use
+--filesystem-files, --filesystem-lines, and --filesystem-concurrent to scale
+the deterministic haystack and concurrent search pressure. The workload uses
+read-only fs_grep_search (files, counts, and content), fs_glob_search,
+fs_file_metrics, fs_read_file_range, and fs_stat; every response and process
+lifecycle must remain valid.

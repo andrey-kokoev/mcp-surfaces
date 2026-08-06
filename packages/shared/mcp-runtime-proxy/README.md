@@ -134,14 +134,15 @@ The stronger user-runnable profile is available with:
 pnpm --filter @narada-core/mcp-runtime-proxy benchmark:strong
 ```
 
-It exercises four workloads over the shared transport harness and writes a canonical JSON report plus an offline interactive HTML report under `.ai/runtime/mcp-runtime-benchmarks/<report-id>/`:
+It exercises five workloads over the shared transport harness and writes a canonical JSON report plus an offline interactive HTML report under `.ai/runtime/mcp-runtime-benchmarks/<report-id>/`:
 
 - `representative`: 32 domain tools plus one proxy-owned status tool, imported schemas, 24 deterministic data files loaded at initialization, and 20 warm domain calls;
 - `payload-load`: 32-byte, 4-KB, and 64-KB payloads, sequential calls, and two eight-request concurrent batches;
 - `restart-soak`: 200 cold restart cycles and 2,000 warm calls with per-process memory, process-tree, and leak evidence;
+- `filesystem-search-load`: a deterministic 2,048-file (~54 MB) haystack, eight sequential local-filesystem MCP commands, and eight concurrent searches per sample;
 - `real-structured-command`: the actual structured-command entrypoint, policy inspection, and a safe allowlisted command.
 
-Use `--samples`, `--load-repetitions`, `--soak-cycles`, `--soak-warm-calls`, `--workloads`, and `--topologies` to make a reproducible smaller or focused run. Deno remains an experimental lane: unavailable Deno is reported as `not_run`, while a measured protocol or tool-call failure remains a real failure. The payload latency gate is explicit about fixed transport cost: native Node must be within 1.05x of the Node baseline or within 1 ms of it, whichever threshold is greater.
+Use `--samples`, `--load-repetitions`, `--soak-cycles`, `--soak-warm-calls`, `--filesystem-files`, `--filesystem-lines`, `--filesystem-concurrent`, `--workloads`, and `--topologies` to make a reproducible smaller or focused run. Deno remains an experimental lane: unavailable Deno is reported as `not_run`, while a measured protocol or tool-call failure remains a real failure. The payload latency gate is explicit about fixed transport cost: native Node must be within 1.05x of the Node baseline or within 1 ms of it, whichever threshold is greater.
 
 In Bun mode on Windows, the JavaScript proxy starts the existing native Rust
 process supervisor after preflight. The supervisor owns the MCP server in a Job

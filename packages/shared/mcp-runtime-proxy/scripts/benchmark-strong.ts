@@ -35,6 +35,19 @@ type Surface = {
   workingDirectory: string;
   childArgs: string[];
 };
+type FilesystemSurface = Surface & {
+  filesystem: {
+    root: string;
+    primaryNeedle: string;
+    secondaryNeedle: string;
+    primaryFile: string;
+    fileCount: number;
+    linesPerFile: number;
+    totalBytes: number;
+    primaryFileCount: number;
+    secondaryFileCount: number;
+  };
+};
 type WorkloadTopology = {
   id: string;
   status: 'measured' | 'skipped' | 'failed';
@@ -74,6 +87,9 @@ function parseArgs(argv: string[]) {
     loadRepetitions: positiveInteger(process.env['NARADA_MCP_STRONG_LOAD_REPETITIONS'] ?? '8', 'load_repetitions'),
     soakCycles: positiveInteger(process.env['NARADA_MCP_STRONG_SOAK_CYCLES'] ?? '200', 'soak_cycles'),
     soakWarmCalls: positiveInteger(process.env['NARADA_MCP_STRONG_SOAK_WARM_CALLS'] ?? '2000', 'soak_warm_calls'),
+    filesystemFiles: positiveInteger(process.env['NARADA_MCP_STRONG_FILESYSTEM_FILES'] ?? '2048', 'filesystem_files'),
+    filesystemLines: positiveInteger(process.env['NARADA_MCP_STRONG_FILESYSTEM_LINES'] ?? '64', 'filesystem_lines'),
+    filesystemConcurrent: positiveInteger(process.env['NARADA_MCP_STRONG_FILESYSTEM_CONCURRENT'] ?? '8', 'filesystem_concurrent'),
     workloads: selectionValues(process.env['NARADA_MCP_STRONG_WORKLOADS']),
     topologies: selectionValues(process.env['NARADA_MCP_STRONG_TOPOLOGIES']),
   };
@@ -84,6 +100,9 @@ function parseArgs(argv: string[]) {
     else if (arg === '--load-repetitions') result.loadRepetitions = positiveInteger(argv[++index], 'load_repetitions');
     else if (arg === '--soak-cycles') result.soakCycles = positiveInteger(argv[++index], 'soak_cycles');
     else if (arg === '--soak-warm-calls') result.soakWarmCalls = positiveInteger(argv[++index], 'soak_warm_calls');
+    else if (arg === '--filesystem-files') result.filesystemFiles = positiveInteger(argv[++index], 'filesystem_files');
+    else if (arg === '--filesystem-lines') result.filesystemLines = positiveInteger(argv[++index], 'filesystem_lines');
+    else if (arg === '--filesystem-concurrent') result.filesystemConcurrent = positiveInteger(argv[++index], 'filesystem_concurrent');
     else if (arg === '--workloads') result.workloads = selectionValues(argv[++index]);
     else if (arg === '--topologies') result.topologies = selectionValues(argv[++index]);
     else throw new Error(`strong_benchmark_unknown_argument:${arg}`);
@@ -120,6 +139,243 @@ function availableCommand(runtime: RuntimeName): RuntimeCommand | null {
     if (commandVersion(command) !== null) return command;
   }
   return null;
+}
+
+function writeFilesystemSearchFixture(): FilesystemSurface {
+  const hayRoot = join(root, 'filesystem-hay');
+  const fileCount = args.filesystemFiles;
+  const linesPerFile = Math.max(32, args.filesystemLines);
+  const primaryNeedle = 'NARADA_FILESYSTEM_BENCHMARK_PRIMARY_NEEDLE';
+  const secondaryNeedle = 'NARADA_FILESYSTEM_BENCHMARK_SECONDARY_NEEDLE';
+  const shardCount = Math.min(32, Math.max(1, Math.ceil(fileCount / 64)));
+  const filler = 'haystack-' + '0123456789abcdef'.repeat(24);
+  const primaryFiles: string[] = [];
+  const secondaryFiles: string[] = [];
+  let primaryFile = '';
+  let totalBytes = 0;
+
+  for (let index = 0; index < fileCount; index += 1) {
+    const shard = join(hayRoot, 'shard-' + String(index % shardCount).padStart(2, '0'));
+    mkdirSync(shard, { recursive: true });
+    const filePath = join(shard, 'hay-' + String(index).padStart(5, '0') + '.txt');
+    const hasPrimaryNeedle = index % 64 === 0;
+    const hasSecondaryNeedle = index % 128 === 0;
+    if (hasPrimaryNeedle) {
+      primaryFiles.push(filePath);
+      if (!primaryFile) primaryFile = filePath;
+    }
+    if (hasSecondaryNeedle) secondaryFiles.push(filePath);
+    const content = Array.from({ length: linesPerFile }, (_unused, line) => {
+      if (line === 17 && hasPrimaryNeedle) return primaryNeedle + ' file=' + index + ' ' + filler + '\n';
+      if (line === 29 && hasSecondaryNeedle) return secondaryNeedle + ' file=' + index + ' ' + filler + '\n';
+      return 'file=' + index + ' line=' + line + ' ' + filler + '\n';
+    }).join('');
+    writeFileSync(filePath, content, 'utf8');
+    totalBytes += Buffer.byteLength(content);
+  }
+
+  const manifestPath = join(root, 'filesystem-artifact-manifest.json');
+  buildWorkspaceArtifactManifest({
+    workspaceRoot,
+    packageRoots: [
+      join(workspaceRoot, 'packages', 'local-filesystem-mcp'),
+      join(workspaceRoot, 'packages', 'shared', 'mcp-fabric-contracts'),
+      join(workspaceRoot, 'packages', 'shared', 'mcp-transport'),
+    ],
+    outputPath: manifestPath,
+  });
+  return {
+    id: 'local-filesystem-search',
+    entrypoint: join(workspaceRoot, 'packages', 'local-filesystem-mcp', 'dist', 'src', 'main.js'),
+    manifestPath,
+    workingDirectory: hayRoot,
+    childArgs: ['--mode', 'read', '--allowed-root', hayRoot],
+    filesystem: {
+      root: hayRoot,
+      primaryNeedle,
+      secondaryNeedle,
+      primaryFile,
+      fileCount,
+      linesPerFile,
+      totalBytes,
+      primaryFileCount: primaryFiles.length,
+      secondaryFileCount: secondaryFiles.length,
+    },
+  };
+}
+
+function filesystemStructuredContent(response: JsonRecord, operation: string): JsonRecord {
+  const value = response.result?.structuredContent as JsonRecord | undefined;
+  assert.ok(value && typeof value.schema === 'string', operation + ':missing_structured_content');
+  return value;
+}
+
+async function runFilesystemSearchLoad(surface: FilesystemSurface): Promise<WorkloadReport> {
+  const requiredTools = ['fs_doctor', 'fs_grep_search', 'fs_glob_search', 'fs_file_metrics', 'fs_read_file_range', 'fs_stat'];
+  const reports: WorkloadTopology[] = [];
+  for (const topology of proxyTopologies.filter((candidate) => selectedTopology(candidate.id))) {
+    const unavailable = topologyAvailable(topology);
+    if (unavailable) { reports.push({ id: topology.id, status: 'skipped', reason: unavailable, samples: [] }); continue; }
+    const samples: Sample[] = [];
+    try {
+      for (let ordinal = 0; ordinal < args.samples; ordinal += 1) {
+        let session: Session | null = null;
+        try {
+          session = await openSession(topology, surface, 'filesystem-search-load', ordinal);
+          const toolNames = session.tools.map((tool) => String(tool.name));
+          for (const requiredTool of requiredTools) assert.ok(toolNames.includes(requiredTool), topology.id + ':missing_tool:' + requiredTool);
+          const sequentialLatencies: number[] = [];
+          const timedCall = async (name: string, tool: string, input: JsonRecord): Promise<{ value: JsonRecord; elapsed_ms: number }> => {
+            const started = performance.now();
+            const response = await call(session!, name + '-' + ordinal, tool, input);
+            const elapsedMs = performance.now() - started;
+            sequentialLatencies.push(elapsedMs);
+            return { value: filesystemStructuredContent(response, tool), elapsed_ms: elapsedMs };
+          };
+          const doctor = await timedCall('doctor', 'fs_doctor', {});
+          assert.equal(doctor.value.status, 'ok', topology.id + ':doctor_not_ok');
+          const primary = await timedCall('primary', 'fs_grep_search', {
+            path: surface.filesystem.root,
+            pattern: surface.filesystem.primaryNeedle,
+            output_mode: 'files_with_matches',
+            limit: 100,
+            cache_policy: 'bypass',
+            timeout_ms: 60_000,
+          });
+          const primaryReturned = Number(primary.value.returned ?? 0);
+          assert.ok(primaryReturned >= surface.filesystem.primaryFileCount, topology.id + ':primary_match_count:' + primaryReturned);
+          const secondary = await timedCall('secondary', 'fs_grep_search', {
+            path: surface.filesystem.root,
+            pattern: surface.filesystem.secondaryNeedle,
+            output_mode: 'count_matches',
+            limit: 100,
+            cache_policy: 'bypass',
+            timeout_ms: 60_000,
+          });
+          const secondaryReturned = Number(secondary.value.returned ?? 0);
+          assert.ok(secondaryReturned >= surface.filesystem.secondaryFileCount, topology.id + ':secondary_match_count:' + secondaryReturned);
+          const content = await timedCall('content', 'fs_grep_search', {
+            path: surface.filesystem.root,
+            pattern: surface.filesystem.primaryNeedle,
+            output_mode: 'content',
+            limit: 20,
+            cache_policy: 'bypass',
+            timeout_ms: 60_000,
+          });
+          assert.ok(Number(content.value.returned ?? 0) > 0, topology.id + ':content_search_empty');
+          const glob = await timedCall('glob', 'fs_glob_search', {
+            directory: surface.filesystem.root,
+            pattern: '**/*.txt',
+            limit: 100,
+            cache_policy: 'bypass',
+            timeout_ms: 60_000,
+          });
+          assert.ok(Number(glob.value.returned ?? 0) > 0, topology.id + ':glob_empty');
+          const metrics = await timedCall('metrics', 'fs_file_metrics', {
+            directory: surface.filesystem.root,
+            pattern: '**/*.txt',
+            limit: 100,
+            max_total_scan_bytes: 8_000_000,
+            cache_policy: 'bypass',
+            timeout_ms: 60_000,
+          });
+          assert.ok(Number(metrics.value.returned ?? 0) > 0, topology.id + ':metrics_empty');
+          const readRange = await timedCall('read-range', 'fs_read_file_range', {
+            path: surface.filesystem.primaryFile,
+            start_line: 17,
+            end_line: 18,
+            timeout_ms: 60_000,
+          });
+          assert.ok(Number(readRange.value.returned_lines ?? 0) > 0, topology.id + ':read_range_empty');
+          const stat = await timedCall('stat', 'fs_stat', { path: surface.filesystem.root });
+          assert.equal(stat.value.type, 'directory', topology.id + ':stat_not_directory');
+
+          const concurrentStarted = performance.now();
+          const concurrent = await Promise.all(Array.from({ length: args.filesystemConcurrent }, async (_unused, index) => {
+            const started = performance.now();
+            const response = await call(session!, 'concurrent-' + ordinal + '-' + index, 'fs_grep_search', {
+              path: surface.filesystem.root,
+              pattern: index % 2 === 0 ? surface.filesystem.primaryNeedle : surface.filesystem.secondaryNeedle,
+              output_mode: 'files_with_matches',
+              limit: 100,
+              cache_policy: 'bypass',
+              timeout_ms: 60_000,
+            });
+            const value = filesystemStructuredContent(response, 'fs_grep_search');
+            assert.ok(Number(value.returned ?? 0) > 0, topology.id + ':concurrent_search_empty:' + index);
+            return performance.now() - started;
+          }));
+          const concurrentBatchMs = performance.now() - concurrentStarted;
+          const close = await closeSession(session);
+          const concurrentP95 = percentile(concurrent);
+          samples.push(makeSample(session, ordinal, close, {
+            fixture_file_count: surface.filesystem.fileCount,
+            fixture_lines_per_file: surface.filesystem.linesPerFile,
+            fixture_total_bytes: surface.filesystem.totalBytes,
+            sequential_command_count: sequentialLatencies.length,
+            sequential_command_latencies_ms: sequentialLatencies,
+            sequential_command_p95_ms: percentile(sequentialLatencies),
+            concurrent_command_count: concurrent.length,
+            concurrent_command_latencies_ms: concurrent,
+            concurrent_batch_ms: concurrentBatchMs,
+            concurrent_command_p95_ms: concurrentP95,
+            primary_files_returned: primaryReturned,
+            secondary_files_returned: secondaryReturned,
+            content_matches_returned: Number(content.value.returned ?? 0),
+            glob_files_returned: Number(glob.value.returned ?? 0),
+            metrics_files_returned: Number(metrics.value.returned ?? 0),
+            read_lines_returned: Number(readRange.value.returned_lines ?? 0),
+            filesystem_commands_ok: true,
+          }));
+          session = null;
+        } finally {
+          if (session) await closeSession(session).catch(() => undefined);
+        }
+      }
+      const sequentialLatencies = samples.flatMap((sample) => sample.metrics.sequential_command_latencies_ms as number[]);
+      const concurrentLatencies = samples.flatMap((sample) => sample.metrics.concurrent_command_latencies_ms as number[]);
+      reports.push({
+        id: topology.id,
+        status: 'measured',
+        samples,
+        summary: {
+          ...summary(samples),
+          fixture_file_count: surface.filesystem.fileCount,
+          fixture_lines_per_file: surface.filesystem.linesPerFile,
+          fixture_total_bytes: surface.filesystem.totalBytes,
+          sequential_command_count: samples[0]?.metrics.sequential_command_count ?? 0,
+          concurrent_command_count: samples[0]?.metrics.concurrent_command_count ?? 0,
+          sequential_command_p95_ms: percentile(sequentialLatencies),
+          concurrent_batch_p95_ms: percentile(samples.map((sample) => Number(sample.metrics.concurrent_batch_ms))),
+          concurrent_command_p95_ms: percentile(concurrentLatencies),
+          filesystem_commands_ok: samples.every((sample) => sample.metrics.filesystem_commands_ok === true),
+        },
+      });
+    } catch (error) { reports.push({ id: topology.id, status: 'failed', samples, error: 'filesystem_benchmark_error:' + String(error).slice(0, 2_000) }); }
+  }
+  const gates = reports.map((report) => {
+    const name = report.id + '.filesystem_search_protocol_and_lifecycle';
+    if (report.status === 'skipped') return { name, status: 'not_run', reason: report.reason ?? 'unavailable' };
+    return booleanGate(name, report.status === 'measured' && report.summary?.filesystem_commands_ok === true && report.summary?.lifecycle_passed === true);
+  });
+  return {
+    id: 'filesystem-search-load',
+    description: 'Real local-filesystem MCP search workload over a deterministic large haystack: multiple grep modes, glob, file metrics, range read, stat, and concurrent repeated searches.',
+    configuration: {
+      samples: args.samples,
+      file_count: surface.filesystem.fileCount,
+      lines_per_file: surface.filesystem.linesPerFile,
+      total_bytes: surface.filesystem.totalBytes,
+      primary_needle_files: surface.filesystem.primaryFileCount,
+      secondary_needle_files: surface.filesystem.secondaryFileCount,
+      sequential_commands_per_sample: 8,
+      concurrent_searches_per_sample: args.filesystemConcurrent,
+      topologies: proxyTopologies.map((topology) => topology.id),
+    },
+    topologies: reports,
+    gates,
+    verdict: workloadVerdict(reports, gates),
+  };
 }
 
 function commandSpec(command: RuntimeCommand | null): JsonRecord | null {
@@ -693,10 +949,12 @@ const realSurface = writeRealSurface();
 
 try {
   const workloadRequested = (id: string) => !args.workloads?.length || args.workloads.includes(id);
+  const filesystemSurface = workloadRequested('filesystem-search-load') ? writeFilesystemSearchFixture() : null;
   const workloads = [
     workloadRequested('representative') ? await runRepresentative(representativeSurface) : null,
     workloadRequested('payload-load') ? await runPayloadLoad(representativeSurface) : null,
     workloadRequested('restart-soak') ? await runSoak(representativeSurface) : null,
+    filesystemSurface ? await runFilesystemSearchLoad(filesystemSurface) : null,
     workloadRequested('real-structured-command') ? await runRealSurface(realSurface) : null,
   ].filter((workload): workload is WorkloadReport => workload !== null);
   const correctnessFailed = workloads.some((workload) => workload.verdict.correctness === 'failed');
@@ -706,9 +964,9 @@ try {
     schema: 'narada.mcp_runtime_proxy.strong_benchmark_report.v1',
     report_id: reportId,
     generated_at: new Date().toISOString(),
-    objective: 'Measure runtime behavior under representative, payload/load, restart/soak, and real-surface workloads without replacing the minimal attribution benchmark.',
+    objective: 'Measure runtime behavior under representative, payload/load, restart/soak, filesystem-search, and real-surface workloads without replacing the minimal attribution benchmark.',
     environment: { platform: process.platform, architecture: process.arch, runner: process.execPath, workspace_root: workspaceRoot, runtimes: Object.fromEntries(Object.entries(runtimeCommands).map(([name, command]) => [name, command ? commandVersion(command) : null])), runtime_commands: Object.fromEntries(Object.entries(runtimeCommands).map(([name, command]) => [name, commandSpec(command)])), native_artifact: process.platform === 'win32' && existsSync(nativeProxyPath), real_surface: { id: realSurface.id, entrypoint: realSurface.entrypoint }, diagnostics_root: keepArtifacts ? root : null },
-    configuration: { samples: args.samples, load_repetitions: args.loadRepetitions, soak_cycles: args.soakCycles, soak_warm_calls: args.soakWarmCalls, workloads: args.workloads ?? ['representative', 'payload-load', 'restart-soak', 'real-structured-command'], topologies: args.topologies ?? 'all', runtime_contract_version: MCP_RUNTIME_CONTRACT_VERSION },
+    configuration: { samples: args.samples, load_repetitions: args.loadRepetitions, soak_cycles: args.soakCycles, soak_warm_calls: args.soakWarmCalls, filesystem_files: args.filesystemFiles, filesystem_lines: Math.max(32, args.filesystemLines), filesystem_concurrent: args.filesystemConcurrent, workloads: args.workloads ?? ['representative', 'payload-load', 'restart-soak', 'filesystem-search-load', 'real-structured-command'], topologies: args.topologies ?? 'all', runtime_contract_version: MCP_RUNTIME_CONTRACT_VERSION },
     workloads,
     verdict: { correctness: correctnessFailed ? 'failed' : 'passed', performance: performanceTargetNotMet ? 'performance_target_not_met' : performanceNotComparable ? 'not_comparable' : 'passed', native_default: 'not_a_goal', deno_support: 'experimental_lane_only' },
   };
