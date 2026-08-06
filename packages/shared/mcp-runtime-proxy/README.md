@@ -108,8 +108,14 @@ The native executable is a multicall host. Its filesystem applet provides the
 read-only local-filesystem MCP surface: bounded reads, stat, glob, grep,
 inventory, metrics, doctor, and patch-outcome readback. Read-mode
 `local-filesystem` surfaces use this applet by default when the native artifact
-is available. JavaScript remains the fallback for write mode, unsupported
-hosts, missing artifacts, and an explicit `surface_implementation=js` override.
+is available. The applet also accepts explicit `--mode write` launches and
+currently exposes the governed `fs_write_file` vertical slice (direct text
+content, allowed-root checks, audit logging, and `.ai/tmp`/`.ai/temp` script
+refusal).
+The registrar keeps write-mode surfaces on JavaScript until the remaining
+mutation tools have native parity. JavaScript is also the fallback for
+unsupported hosts, missing artifacts, and an explicit `surface_implementation=js`
+override.
 Native launches declare an explicit child invocation kind and applet so
 entrypoint paths are not overloaded with applet semantics.
 

@@ -3,6 +3,7 @@ use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::env;
 use std::fs;
+use std::fs::OpenOptions;
 use std::io::{self, BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -11,6 +12,7 @@ use time::OffsetDateTime;
 
 const PROTOCOL_VERSION: &str = "2024-11-05";
 const READ_TIMEOUT_MS: u64 = 5_000;
+const WRITE_TIMEOUT_MS: u64 = 10_000;
 const SEARCH_TIMEOUT_MS: u64 = 60_000;
 const DEFAULT_GLOB_IGNORES: &[&str] = &[
     "**/.git/**", "**/node_modules/**", "**/dist/**", "**/build/**",
@@ -29,6 +31,7 @@ const GENERATED_MARKERS: &[&str] = &[
     "/.narada/tmp/", "/.narada/local-filesystem-mcp/patch-outcomes/",
     "/.tmp-tests/",
 ];
+const TRANSIENT_EXECUTABLE_EXTENSIONS: &[&str] = &[".cmd", ".bat", ".ps1", ".psm1", ".js", ".mjs", ".cjs", ".ts"];
 
 #[derive(Clone)]
 pub(crate) struct State {
@@ -100,7 +103,7 @@ fn parse_state(args: &[String]) -> Result<State, String> {
     }
     if let Some(path) = roots_config { roots.extend(parse_roots_config(Path::new(&path))); }
     for spec in anchored { roots.push(resolve_anchor(&spec)?); }
-    if mode != "read" { return Err("native_filesystem_write_mode_unsupported".to_string()); }
+    if mode != "read" && mode != "write" { return Err("filesystem_mode_must_be_read_or_write".to_string()); }
     let mut entries = Vec::new();
     let mut allowed_roots = Vec::new();
     for root in roots {
@@ -127,11 +130,11 @@ pub(crate) fn parse_state_for_rhai(args: &[String]) -> Result<State, String> {
 }
 
 pub(crate) fn initialize_for_rhai(request: &Value) -> Value {
-    initialize(request)
+    initialize(request, "read")
 }
 
 pub(crate) fn tools_list_for_rhai() -> Value {
-    json!({"tools": list_tools()})
+    json!({"tools": list_tools("read")})
 }
 
 pub(crate) fn tool_call_for_rhai(state: &mut State, params: &Value) -> Value {
@@ -185,8 +188,8 @@ fn handle_request(state: &mut State, request: &Value) -> Option<Value> {
     if request.get("id").is_none() { return None; }
     let id = request.get("id").cloned().unwrap_or(Value::Null);
     let result = match method {
-        "initialize" => Ok(initialize(request)),
-        "tools/list" => Ok(json!({"tools": list_tools()})),
+        "initialize" => Ok(initialize(request, &state.mode)),
+        "tools/list" => Ok(json!({"tools": list_tools(&state.mode)})),
         "tools/call" => call_tool(state, request.get("params").unwrap_or(&Value::Null)),
         "resources/list" => Ok(json!({"resources": []})),
         "resources/read" => Err(FsError::new("resource_not_found", "resource_not_found", json!({}))),
@@ -202,11 +205,11 @@ fn handle_request(state: &mut State, request: &Value) -> Option<Value> {
     })
 }
 
-fn initialize(request: &Value) -> Value {
+fn initialize(request: &Value, mode: &str) -> Value {
     json!({
         "protocolVersion": request.get("params").and_then(|value| value.get("protocolVersion")).cloned().unwrap_or(json!(PROTOCOL_VERSION)),
         "capabilities": {"tools": {}, "resources": {}, "prompts": {}, "completions": {}, "logging": {}},
-        "serverInfo": {"name": "local-filesystem-read-native", "version": "0.1.0"}
+        "serverInfo": {"name": format!("local-filesystem-{mode}-native"), "version": "0.1.0"}
     })
 }
 
@@ -219,6 +222,9 @@ fn prompt_get(state: &State, params: &Value) -> Result<Value, FsError> {
 fn call_tool(state: &mut State, params: &Value) -> Result<Value, FsError> {
     let name = params.get("name").and_then(Value::as_str).ok_or_else(|| FsError::new("tools_call_requires_name", "tools_call_requires_name", json!({})))?;
     let args = params.get("arguments").unwrap_or(&Value::Null);
+    if is_write_tool(name) && state.mode != "write" {
+        return Err(FsError::new(format!("tool_not_available_in_{}_mode", state.mode), format!("tool_not_available_in_{}_mode: {name}", state.mode), json!({"tool_name": name, "mode": state.mode})));
+    }
     let value = match name {
         "fs_guidance" => guidance(args),
         "fs_read_file" => read_file(state, args, false),
@@ -230,9 +236,14 @@ fn call_tool(state: &mut State, params: &Value) -> Result<Value, FsError> {
         "fs_file_metrics" => file_metrics(state, args),
         "fs_doctor" => Ok(doctor(state)),
         "fs_patch_outcome_show" => patch_outcome(state, args),
+        "fs_write_file" => write_file(state, args),
         _ => Err(FsError::new(format!("tool_not_available_in_{}_mode", state.mode), format!("tool_not_available_in_{}_mode: {name}", state.mode), json!({"tool_name": name, "mode": state.mode}))),
     }?;
     Ok(tool_result(value))
+}
+
+fn is_write_tool(name: &str) -> bool {
+    name == "fs_write_file"
 }
 
 fn tool_result(value: Value) -> Value {
@@ -285,7 +296,9 @@ fn guidance(args: &Value) -> Result<Value, FsError> {
 
 fn doctor(state: &State) -> Value {
     let read_tools = vec!["fs_guidance", "fs_read_file", "fs_read_file_range", "fs_stat", "fs_glob_search", "fs_grep_search", "fs_repository_inventory", "fs_file_metrics", "fs_doctor", "fs_patch_outcome_show"];
-    let write_tools: Vec<&str> = vec!["fs_write_file", "fs_str_replace_file", "fs_replace_range", "fs_apply_patch", "fs_move_path", "fs_create_directory", "fs_rename_directory", "fs_delete_directory"];
+    let write_tools: Vec<&str> = vec!["fs_write_file"];
+    let available_tools: Vec<String> = list_tools(&state.mode).iter().filter_map(|tool| tool.get("name").and_then(Value::as_str).map(str::to_string)).collect();
+    let can_write = state.mode == "write";
     json!({
         "schema": "local.filesystem.doctor.v1",
         "status": "ok",
@@ -302,8 +315,8 @@ fn doctor(state: &State) -> Value {
         "output_root": state.output_root.to_string_lossy(),
         "audit_log_dir": state.audit_log_dir.as_ref().map(|path| path.to_string_lossy().to_string()),
         "client_roots": {"supported": false, "roots": [], "lastUpdatedAt": Value::Null},
-        "effective_permissions": {"can_read": true, "can_write": false, "can_mutate_paths": false, "can_delete_directories": false},
-        "available_tools": read_tools,
+        "effective_permissions": {"can_read": true, "can_write": can_write, "can_mutate_paths": can_write, "can_delete_directories": false},
+        "available_tools": available_tools,
         "read_tools": read_tools,
         "write_tools": write_tools,
         "default_glob_ignore_patterns": DEFAULT_GLOB_IGNORES,
@@ -363,6 +376,135 @@ fn read_file(state: &State, args: &Value, range: bool) -> Result<Value, FsError>
         "content_window_sha256": sha256_bytes(content.as_bytes()),
         "timeout_ms": timeout
     }))
+}
+
+fn write_file(state: &State, args: &Value) -> Result<Value, FsError> {
+    if args.get("payload_ref").is_some() || args.get("payload_path").is_some() {
+        return Err(FsError::new(
+            "payload_transport_not_supported_in_native_write",
+            "payload_transport_not_supported_in_native_write",
+            json!({"supported": ["content"]}),
+        ));
+    }
+    let (path, root) = resolve_allowed(state, args.get("path").and_then(Value::as_str), "fs_write_file")?;
+    assert_mutation_target_allowed(&path, &root, "fs_write_file")?;
+    let content = args.get("content").and_then(Value::as_str).unwrap_or_default();
+    let overwrite = args.get("overwrite").and_then(Value::as_bool).unwrap_or(true);
+    let create_only = args.get("create_only").and_then(Value::as_bool).unwrap_or(false);
+    let create_parent_directories = args.get("create_parent_directories").and_then(Value::as_bool).unwrap_or(true);
+    let timeout_ms = integer(args, "timeout_ms").unwrap_or(WRITE_TIMEOUT_MS as i64).max(1).min(300_000) as u64;
+    let started = std::time::Instant::now();
+
+    let before_bytes = match fs::metadata(&path) {
+        Ok(metadata) if metadata.is_file() => Some(fs::read(&path).map_err(|error| {
+            FsError::new("fs_write_file_read_failed", format!("fs_write_file_read_failed: {error}"), path_details(&path, &root))
+        })?),
+        Ok(metadata) if metadata.is_dir() => {
+            return Err(FsError::new("fs_write_file_destination_is_directory", "fs_write_file_destination_is_directory", path_details(&path, &root)));
+        }
+        Ok(_) => {
+            return Err(FsError::new("fs_write_file_destination_not_regular_file", "fs_write_file_destination_not_regular_file", path_details(&path, &root)));
+        }
+        Err(error) if error.kind() == io::ErrorKind::NotFound => None,
+        Err(error) => {
+            return Err(FsError::new("fs_write_file_read_failed", format!("fs_write_file_read_failed: {error}"), path_details(&path, &root)));
+        }
+    };
+    let before_sha256 = before_bytes.as_ref().map(|bytes| sha256_bytes(bytes));
+    if create_only && before_bytes.is_some() {
+        return Err(FsError::new("write_file_destination_exists", "write_file_destination_exists", path_details(&path, &root)));
+    }
+    if !overwrite && before_bytes.is_some() {
+        return Err(FsError::new("write_file_overwrite_refused", "write_file_overwrite_refused", path_details(&path, &root)));
+    }
+    if let Some(expected) = args.get("expected_sha256").and_then(Value::as_str).filter(|value| !value.is_empty()) {
+        if before_sha256.as_deref() != Some(expected) {
+            return Err(FsError::new(
+                "fs_write_file_expected_sha256_mismatch",
+                "fs_write_file_expected_sha256_mismatch",
+                json!({"operation": "fs_write_file", "expected_sha256": expected, "actual_sha256": before_sha256, "path": path, "root": root, "relative_path": relative_path(&root, &path)}),
+            ));
+        }
+    }
+
+    let parent = path.parent().unwrap_or(root.as_path());
+    if !parent.exists() {
+        if !create_parent_directories {
+            return Err(FsError::new("write_file_parent_not_found", "write_file_parent_not_found", json!({"path": path, "root": root, "relative_path": relative_path(&root, &path), "parent": parent})));
+        }
+        fs::create_dir_all(parent).map_err(|error| FsError::new("fs_write_file_parent_failed", format!("fs_write_file_parent_failed: {error}"), json!({"path": path, "root": root, "relative_path": relative_path(&root, &path), "parent": parent})))?;
+    }
+    if started.elapsed().as_millis() as u64 > timeout_ms {
+        return Err(FsError::new("fs_write_file_timed_out", "filesystem write timed out", json!({"timeout_ms": timeout_ms, "path": path, "root": root, "relative_path": relative_path(&root, &path)})));
+    }
+    fs::write(&path, content.as_bytes()).map_err(|error| FsError::new("fs_write_file_failed", format!("fs_write_file_failed: {error}"), path_details(&path, &root)))?;
+    let after_sha256 = sha256_bytes(content.as_bytes());
+    append_audit(
+        state,
+        "fs_write_file",
+        &path,
+        &root,
+        json!({
+            "size": content.len(),
+            "create_parent_directories": create_parent_directories,
+            "before_sha256": before_sha256,
+            "after_sha256": after_sha256,
+        }),
+    )?;
+    Ok(json!({
+        "schema": "local.filesystem.write_file.v1",
+        "status": "written",
+        "path": path,
+        "root": root,
+        "relative_path": relative_path(&root, &path),
+        "size": content.len(),
+        "create_parent_directories": create_parent_directories,
+        "before_sha256": before_sha256,
+        "after_sha256": after_sha256,
+        "timeout_ms": timeout_ms,
+    }))
+}
+
+fn assert_mutation_target_allowed(path: &Path, root: &Path, operation: &str) -> Result<(), FsError> {
+    let normalized = normalize_path(path);
+    let in_transient_directory = normalized.contains("/.ai/tmp/")
+        || normalized.contains("/.ai/temp/")
+        || normalized.starts_with(".ai/tmp/")
+        || normalized.starts_with(".ai/temp/");
+    let extension = path.extension().and_then(|value| value.to_str()).map(|value| format!(".{}", value.to_ascii_lowercase()));
+    if in_transient_directory && extension.as_deref().is_some_and(|value| TRANSIENT_EXECUTABLE_EXTENSIONS.contains(&value)) {
+        return Err(FsError::new(
+            "transient_executable_write_disallowed",
+            "transient_executable_write_disallowed",
+            json!({
+                "operation": operation,
+                "path": path,
+                "root": root,
+                "relative_path": relative_path(root, path),
+                "refusal_reason": format!("transient_executable_write_disallowed:{}", path.display()),
+                "remediation": "Do not create or edit executable wrappers/scripts under .ai/tmp or .ai/temp. Use structured_command_start or the owning MCP surface directly and preserve its execution_ref as evidence.",
+            }),
+        ));
+    }
+    Ok(())
+}
+
+fn append_audit(state: &State, operation: &str, path: &Path, root: &Path, detail: Value) -> Result<(), FsError> {
+    let Some(directory) = state.audit_log_dir.as_ref() else { return Ok(()) };
+    fs::create_dir_all(directory).map_err(|error| FsError::new("fs_write_file_audit_failed", format!("fs_write_file_audit_failed: {error}"), json!({"directory": directory})))?;
+    let audit_path = directory.join("filesystem-mcp-audit.jsonl");
+    let mut file = OpenOptions::new().create(true).append(true).open(&audit_path).map_err(|error| FsError::new("fs_write_file_audit_failed", format!("fs_write_file_audit_failed: {error}"), json!({"path": audit_path})))?;
+    let record = json!({
+        "schema": "local.filesystem.audit.v1",
+        "at": OffsetDateTime::now_utc().format(&Rfc3339).unwrap_or_else(|_| "unknown".to_string()),
+        "operation": operation,
+        "path": path,
+        "root": root,
+        "relative_path": relative_path(root, path),
+        "detail": detail,
+    });
+    writeln!(file, "{}", serde_json::to_string(&record).unwrap_or_else(|_| "{}".to_string())).map_err(|error| FsError::new("fs_write_file_audit_failed", format!("fs_write_file_audit_failed: {error}"), json!({"path": audit_path})))?;
+    Ok(())
 }
 
 fn stat_tool(state: &State, args: &Value) -> Result<Value, FsError> {
@@ -655,8 +797,8 @@ fn patch_outcome(state: &State, args: &Value) -> Result<Value, FsError> {
     serde_json::from_str(&text).map_err(|_| FsError::new("fs_patch_outcome_invalid", "fs_patch_outcome_invalid", json!({"operation_id": operation, "path": path})))
 }
 
-fn list_tools() -> Vec<Value> {
-    let names = [
+fn list_tools(mode: &str) -> Vec<Value> {
+    let mut names = vec![
         ("fs_guidance", "Show model-facing operating guidance for local-filesystem MCP workflows."),
         ("fs_read_file", "Read a text file under an allowed root with line offset and limit."),
         ("fs_read_file_range", "Read a text file line range under an allowed root. Lines are 1-based and inclusive."),
@@ -666,8 +808,11 @@ fn list_tools() -> Vec<Value> {
         ("fs_repository_inventory", "Return a bounded candidate-source inventory under an allowed root."),
         ("fs_file_metrics", "Return bounded metadata-only file metrics under an allowed root."),
         ("fs_doctor", "Inspect local-filesystem MCP policy posture."),
-        ("fs_patch_outcome_show", "Read and durably reconcile the outcome for an fs_apply_patch operation_id.")
+        ("fs_patch_outcome_show", "Read and durably reconcile the outcome for an fs_apply_patch operation_id."),
     ];
+    if mode == "write" {
+        names.push(("fs_write_file", "Write a text file under an allowed root and append an audit record. Refuses executable scripts under .ai/tmp or .ai/temp."));
+    }
     names.iter().map(|(name, description)| {
         let mut properties = Map::new();
         match *name {
@@ -680,6 +825,15 @@ fn list_tools() -> Vec<Value> {
             "fs_repository_inventory" => { properties.insert("pattern".into(), json!({"type":"string","default":"**/*"})); properties.insert("directory".into(), json!({"type":"string","default":"."})); properties.insert("ignore".into(), json!({"type":"array","items":{"type":"string"}})); properties.insert("include_generated".into(), json!({"type":"boolean","default":false})); properties.insert("offset".into(), json!({"type":"integer","default":0})); properties.insert("limit".into(), json!({"type":"integer","default":100})); properties.insert("timeout_ms".into(), json!({"type":"integer"})); properties.insert("cache_policy".into(), json!({"type":"string","enum":["auto","snapshot","refresh","bypass"],"default":"auto"})); properties.insert("snapshot_id".into(), json!({"type":"string"})); }
             "fs_file_metrics" => { properties.insert("pattern".into(), json!({"type":"string","default":"**/*"})); properties.insert("directory".into(), json!({"type":"string","default":"."})); properties.insert("root".into(), json!({"type":"string"})); properties.insert("ignore".into(), json!({"type":"array","items":{"type":"string"}})); properties.insert("exclude".into(), json!({"type":"array","items":{"type":"string"}})); properties.insert("offset".into(), json!({"type":"integer","default":0})); properties.insert("limit".into(), json!({"type":"integer","default":100})); properties.insert("max_bytes_per_file".into(), json!({"type":"integer"})); properties.insert("max_total_scan_bytes".into(), json!({"type":"integer"})); properties.insert("timeout_ms".into(), json!({"type":"integer"})); properties.insert("cache_policy".into(), json!({"type":"string","enum":["auto","snapshot","refresh","bypass"],"default":"auto"})); properties.insert("snapshot_id".into(), json!({"type":"string"})); }
             "fs_patch_outcome_show" => { properties.insert("operation_id".into(), json!({"type":"string"})); }
+            "fs_write_file" => {
+                properties.insert("path".into(), json!({"type":"string"}));
+                properties.insert("content".into(), json!({"type":"string"}));
+                properties.insert("overwrite".into(), json!({"type":"boolean","default":true}));
+                properties.insert("create_only".into(), json!({"type":"boolean","default":false}));
+                properties.insert("create_parent_directories".into(), json!({"type":"boolean","default":true}));
+                properties.insert("timeout_ms".into(), json!({"type":"integer","default":WRITE_TIMEOUT_MS}));
+                properties.insert("expected_sha256".into(), json!({"type":"string"}));
+            }
             _ => {}
         }
         let required: Vec<&str> = match *name {
@@ -691,7 +845,8 @@ fn list_tools() -> Vec<Value> {
             "fs_patch_outcome_show" => vec!["operation_id"],
             _ => Vec::new()
         };
-        json!({"name": name, "canonical_name": name, "description": description, "inputSchema": {"type":"object","properties": properties,"required": required,"additionalProperties":false}, "annotations": {"title":name,"readOnlyHint":true,"destructiveHint":false,"idempotentHint":true,"openWorldHint":false}, "outputSchema":{"type":"object","additionalProperties":true}})
+        let write_tool = is_write_tool(name);
+        json!({"name": name, "canonical_name": name, "description": description, "inputSchema": {"type":"object","properties": properties,"required": required,"additionalProperties":false}, "annotations": {"title":name,"readOnlyHint":!write_tool,"destructiveHint":write_tool,"idempotentHint":true,"openWorldHint":false}, "outputSchema":{"type":"object","additionalProperties":true}})
     }).collect()
 }
 
@@ -703,12 +858,27 @@ fn resolve_allowed(state: &State, input: Option<&str>, operation: &str) -> Resul
     let Some(root) = root else {
         return Err(FsError::new("path_outside_allowed_roots", format!("path_outside_allowed_roots: {input}"), json!({"operation": operation, "requested_path": input, "active_resolution_base": base, "resolution_rule": "first_allowed_root_for_relative_paths", "allowed_roots": state.allowed_roots})));
     };
-    let check_path = fs::canonicalize(&candidate).unwrap_or(candidate.clone());
-    let check_root = fs::canonicalize(&root).unwrap_or(root.clone());
+    let check_path = canonicalize_with_missing(&candidate);
+    let check_root = canonicalize_with_missing(&root);
     if !within(&check_root, &check_path) {
         return Err(FsError::new("path_outside_allowed_roots", format!("path_outside_allowed_roots: {input}"), path_details(&candidate, &root)));
     }
     Ok((candidate, root))
+}
+
+fn canonicalize_with_missing(path: &Path) -> PathBuf {
+    let mut missing = Vec::new();
+    let mut current = path.to_path_buf();
+    while !current.exists() {
+        let Some(name) = current.file_name().map(|value| value.to_os_string()) else { break };
+        missing.push(name);
+        if !current.pop() { break; }
+    }
+    let mut canonical = fs::canonicalize(&current).unwrap_or(current);
+    for component in missing.iter().rev() {
+        canonical.push(component);
+    }
+    canonical
 }
 
 fn path_details(path: &Path, root: &Path) -> Value {
