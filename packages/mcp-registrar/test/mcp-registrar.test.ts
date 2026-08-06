@@ -1,13 +1,13 @@
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { DatabaseSync } from '@narada-core/sqlite';
 import { payloadCreate } from '@narada-core/mcp-transport';
 import { buildGuidanceResult } from '../src/guidance.js';
-import { appendLoaderAllowedSiteRoots, buildSiteBindConfig, buildSiteSurfaceRegistry, checkOutputReaderClosureForRegistry, checkSiteRegistryConformance, checkSiteRegistryConformanceFromObservation, compareCarrierProjection, createServerState, handleRequest, readCodexPluginOverrides, readSiteSurfaceOverrides, sharedSurfaceIdsForBinding, siteBindSidecarRefusal, siteSurfaceServerKey, validateSiteMcpFabric, validateSiteToolInventoryObservation } from '../src/main.js';
+import { appendLoaderAllowedSiteRoots, buildSiteBindConfig, buildSiteSurfaceRegistry, checkOutputReaderClosureForRegistry, checkSiteRegistryConformance, checkSiteRegistryConformanceFromObservation, compareCarrierProjection, createServerState, defaultRuntimeProxyImplementation, defaultSurfaceImplementation, handleRequest, parseArgs, readCodexPluginOverrides, readSiteSurfaceOverrides, sharedSurfaceIdsForBinding, siteBindSidecarRefusal, siteSurfaceServerKey, validateSiteMcpFabric, validateSiteToolInventoryObservation } from '../src/main.js';
 
 const workspaceRoot = fileURLToPath(new URL('../../../../', import.meta.url));
 const portableWorkspaceRoot = workspaceRoot.replace(/\\/g, '/').replace(/\/$/, '');
@@ -18,6 +18,24 @@ const expectedUserSiteRoot = resolve(
     || (process.env.HOME ? join(process.env.HOME, 'Narada') : '')
     || join(workspaceRoot, '.narada', 'user-site'),
 ).replace(/\\/g, '/');
+const nativeRuntimeArtifactAvailable = process.platform === 'win32'
+  && existsSync(join(workspaceRoot, 'packages', 'shared', 'mcp-runtime-proxy', 'dist', 'native', 'narada-mcp-runtime.exe'));
+assert.equal(
+  defaultRuntimeProxyImplementation(process.platform, nativeRuntimeArtifactAvailable),
+  nativeRuntimeArtifactAvailable ? 'native' : 'bun',
+);
+const defaultMaterializationArgs = parseArgs(['--materialize-all']);
+assert.equal(defaultMaterializationArgs.mode, 'materialize-all');
+if (defaultMaterializationArgs.mode === 'materialize-all') {
+  assert.equal(defaultMaterializationArgs.runtimeProxyImplementation, nativeRuntimeArtifactAvailable ? 'native' : 'bun');
+}
+const explicitBunArgs = parseArgs(['--materialize-all', '--runtime-proxy-implementation', 'bun']);
+assert.equal(explicitBunArgs.mode, 'materialize-all');
+if (explicitBunArgs.mode === 'materialize-all') assert.equal(explicitBunArgs.runtimeProxyImplementation, 'bun');
+assert.equal(defaultSurfaceImplementation('local-filesystem', ['--mode', 'read'], true), 'native');
+assert.equal(defaultSurfaceImplementation('local-filesystem', ['--mode', 'write'], true), 'js');
+assert.equal(defaultSurfaceImplementation('local-filesystem', ['--mode', 'read'], false), 'js');
+assert.equal(defaultSurfaceImplementation('mcp-loader', ['--mode', 'read'], true), undefined);
 const root: any = mkdtempSync(join(tmpdir(), 'mcp-registrar-behavior-'));
 const siteOverrideConfig = join(root, 'site-overrides.json');
 writeFileSync(siteOverrideConfig, JSON.stringify({ surface_overrides: { 'task-lifecycle': { enabled: false } } }), 'utf8');
@@ -133,8 +151,14 @@ try {
   }
   function assertRuntimeProxy(server: Record<string, any>, childEntrypoint: string, runtime = 'node'): void {
     const args: any = server.args as string[];
-    assert.equal(server.command, runtime);
-    assert.match(args[0].replace(/\\/g, '/'), /packages\/shared\/mcp-runtime-proxy\/dist\/src\/main\.js$/);
+    if (nativeRuntimeArtifactAvailable) {
+      assert.match(String(server.command).replace(/\\/g, '/'), /packages\/shared\/mcp-runtime-proxy\/dist\/native\/narada-mcp-runtime\.exe$/i);
+      assert.equal(args[0], 'proxy');
+      assert.equal(args[args.indexOf('--child-command') + 1], runtime);
+    } else {
+      assert.equal(server.command, runtime);
+      assert.match(args[0].replace(/\\/g, '/'), /packages\/shared\/mcp-runtime-proxy\/dist\/src\/main\.js$/);
+    }
     assert.equal(args[args.indexOf('--entrypoint') + 1].replace(/\\/g, '/'), childEntrypoint.replace(/\\/g, '/'));
     assert.ok(args.includes('--'));
   }

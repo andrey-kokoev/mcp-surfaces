@@ -17,6 +17,8 @@ const workspaceRoot = resolve(packageRoot, '..', '..');
 const registrarEntrypoint = join(packageRoot, 'dist', 'src', 'main.js');
 const artifactManifestPath = join(workspaceRoot, '.ai', 'runtime', 'workspace-artifact-manifest.json');
 const surfacesRoot = join(workspaceRoot, 'packages');
+const nativeRuntimeArtifactAvailable = process.platform === 'win32'
+  && existsSync(join(surfacesRoot, 'shared', 'mcp-runtime-proxy', 'dist', 'native', 'narada-mcp-runtime.exe'));
 
 type RpcRun = {
   exitCode: number | null;
@@ -167,10 +169,19 @@ test('fresh registrar materializes, validates, and launches a carrier generation
     assert.equal(directResult.carrier_count, 3);
     const directCodex = (directResult.carriers as JsonRecord[]).find((carrier) => carrier.carrier_id === 'codex-andrey')!;
     assert.equal(directCodex.materialization_validation.ok, true, JSON.stringify(directCodex));
+    assert.equal(directCodex.materialization_generation.proxy_implementation, nativeRuntimeArtifactAvailable ? 'native' : 'bun');
     assert.equal(existsSync(configPath), true);
     assert.equal(existsSync(sidecarPath), true);
     assert.equal(existsSync(join(root, 'mcp.json')), true);
     assert.equal(existsSync(join(root, 'opencode.jsonc')), true);
+    const directConfig = readFileSync(join(root, 'config.toml'), 'utf8');
+    const directRegistrarLaunch = codexLaunch(directConfig, 'narada-site-andrey-user-mcp-registrar');
+    if (nativeRuntimeArtifactAvailable) {
+      assert.match(directRegistrarLaunch.command, /narada-mcp-runtime\.exe$/i);
+      assert.equal(directRegistrarLaunch.args[0], 'proxy');
+    } else {
+      assert.match(directRegistrarLaunch.command, /node(?:\.exe)?$/i);
+    }
 
     const nativeRoot = join(root, 'native');
     const nativeMaterialize = await runCli([
@@ -332,7 +343,7 @@ test('fresh registrar materializes, validates, and launches a carrier generation
     const missingVersionArgs = [...launch.args];
     const versionIndex = missingVersionArgs.indexOf('--runtime-contract-version');
     missingVersionArgs.splice(versionIndex, 2);
-    const missingVersionRun = await runRpc(process.execPath, missingVersionArgs, {
+    const missingVersionRun = await runRpc(launch.command === 'node' ? process.execPath : launch.command, missingVersionArgs, {
       jsonrpc: '2.0',
       id: 5,
       method: 'initialize',
@@ -344,7 +355,7 @@ test('fresh registrar materializes, validates, and launches a carrier generation
     const missingManifestArgs = [...launch.args];
     const manifestIndex = missingManifestArgs.indexOf('--artifact-manifest');
     missingManifestArgs.splice(manifestIndex, 2);
-    const missingManifestRun = await runRpc(process.execPath, missingManifestArgs, {
+    const missingManifestRun = await runRpc(launch.command === 'node' ? process.execPath : launch.command, missingManifestArgs, {
       jsonrpc: '2.0',
       id: 6,
       method: 'initialize',

@@ -407,7 +407,7 @@ function buildReport(reports: TopologyReport[], environment: JsonRecord): JsonRe
     schema: 'narada.mcp_runtime_proxy.benchmark_report.v1',
     report_id: reportId,
     generated_at: new Date().toISOString(),
-    objective: 'Measure attributable Bun/Node/Deno/native MCP runtime topology differences; native remains opt-in and Deno remains experimental.',
+    objective: 'Measure attributable Bun/Node/Deno/native MCP runtime topology differences; native is the supported-Windows default and Deno remains experimental.',
     scope: { runtimes: ['bun', 'node', 'deno'], native_windows_only: true, deno_included: true, network_required: false },
     environment,
     configuration: { sample_count: sampleCount, warm_calls_per_sample: warmCalls, runtime_contract_version: MCP_RUNTIME_CONTRACT_VERSION, matrix: ['bun-bun', 'node-node', 'deno-deno', 'native-bun', 'native-node', 'native-deno'] },
@@ -417,8 +417,8 @@ function buildReport(reports: TopologyReport[], environment: JsonRecord): JsonRe
     verdict: {
       performance: gates.some((item) => item.status === 'failed') ? 'failed_predeclared_gate' : gates.some((item) => item.status === 'passed') && gates.every((item) => item.status === 'passed' || item.status === 'not_comparable') ? 'passed' : 'not_comparable',
       correctness: lifecycleFailures.length === 0 ? 'passed' : 'failed',
-      native_default: 'not_a_goal',
-      native_availability: nativeCandidates.length > 0 ? 'available_as_opt_in' : 'unavailable_on_this_host',
+      native_default: process.platform === 'win32' && existsSync(nativeProxyPath) ? 'default_when_available' : 'bun_fallback',
+      native_availability: nativeCandidates.length > 0 ? 'available_as_default_on_supported_host' : 'unavailable_on_this_host',
     },
   };
 }

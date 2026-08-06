@@ -199,7 +199,30 @@ const MCP_REGISTRAR_ENTRYPOINT = '{mcp_surfaces_root}/mcp-registrar/dist/src/mai
 const SPEECH_PROVIDER_REGISTRY_PATH = `${MCP_SURFACES_ROOT}/speech-mcp/config/provider-registry.v2.json`;
 
 type RuntimeProxyImplementation = 'bun' | 'native';
-let runtimeProxyImplementation: RuntimeProxyImplementation = 'bun';
+
+function nativeRuntimeProxyAvailable(): boolean {
+  return process.platform === 'win32' && existsSync(MCP_NATIVE_RUNTIME_PROXY_ENTRYPOINT);
+}
+
+export function defaultRuntimeProxyImplementation(
+  platform: NodeJS.Platform = process.platform,
+  nativeAvailable = nativeRuntimeProxyAvailable(),
+): RuntimeProxyImplementation {
+  return platform === 'win32' && nativeAvailable ? 'native' : 'bun';
+}
+
+export function defaultSurfaceImplementation(
+  surfaceId: string,
+  args: string[],
+  nativeAvailable = nativeRuntimeProxyAvailable(),
+): 'js' | 'native' | undefined {
+  if (surfaceId !== 'local-filesystem') return undefined;
+  const modeIndex = args.indexOf('--mode');
+  const mode = modeIndex >= 0 ? args[modeIndex + 1] : undefined;
+  return mode === 'read' && nativeAvailable ? 'native' : 'js';
+}
+
+let runtimeProxyImplementation: RuntimeProxyImplementation = defaultRuntimeProxyImplementation();
 
 function selectedRuntimeProxyEntrypoint(): string {
   return runtimeProxyImplementation === 'native'
@@ -1483,6 +1506,7 @@ function materializeSharedSurface(binding: SiteBinding, site: SiteDef, surfaceId
       surface,
       projection,
       env_vars: projectionEnvVars(surface, projection),
+      surface_implementation: site.surface_overrides?.[surfaceId]?.surface_implementation,
       ...naradaScope,
       narada_scope: naradaScope,
     },
@@ -1689,10 +1713,18 @@ function carrierLaunchCommand(
   const childEntrypoint = server.entrypoint;
   const childArgs = server.args;
   const runtimeCommand = server.command ?? server.projection?.command ?? 'node';
-  const useNativeFilesystemApplet = server.surface_implementation === 'native'
+  const surfaceImplementation = server.surface_implementation ?? defaultSurfaceImplementation(surfaceId, childArgs);
+  const useNativeFilesystemApplet = surfaceImplementation === 'native'
     && surfaceId === 'local-filesystem'
     && childArgs.includes('--mode')
     && childArgs[childArgs.indexOf('--mode') + 1] === 'read';
+  if (useNativeFilesystemApplet && !nativeRuntimeProxyAvailable()) {
+    throw diagnosticError(
+      'registrar_native_filesystem_applet_missing',
+      `Native filesystem applet is unavailable: ${MCP_NATIVE_RUNTIME_PROXY_ENTRYPOINT}`,
+      { entrypoint: MCP_NATIVE_RUNTIME_PROXY_ENTRYPOINT, surface_id: surfaceId },
+    );
+  }
   const effectiveChildCommand = useNativeFilesystemApplet ? MCP_NATIVE_RUNTIME_PROXY_ENTRYPOINT : runtimeCommand;
   const effectiveChildEntrypoint = useNativeFilesystemApplet ? MCP_NATIVE_RUNTIME_PROXY_ENTRYPOINT : childEntrypoint;
   const sidecarPath = configPath ? materializationSidecarPath(configPath) : null;
@@ -4185,7 +4217,8 @@ export function parseArgs(argv: string[]): RegistrarCliOptions {
   let outputDir: string | null = null;
   let materializeAll = false;
   let allowSingleCarrier = false;
-  let selectedProxyImplementation: RuntimeProxyImplementation = 'bun';
+  let selectedProxyImplementation: RuntimeProxyImplementation = defaultRuntimeProxyImplementation();
+  let selectedProxyImplementationExplicit = false;
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index];
     if (arg === '--help' || arg === '-h') return { mode: 'help' };
@@ -4219,6 +4252,7 @@ export function parseArgs(argv: string[]): RegistrarCliOptions {
       const value = argv[++index];
       if (value !== 'bun' && value !== 'native') throw new Error('registrar_invalid_runtime_proxy_implementation');
       selectedProxyImplementation = value;
+      selectedProxyImplementationExplicit = true;
       continue;
     }
     // Keep the historical launch hint accepted by Site Fabric clients. The
@@ -4239,7 +4273,7 @@ export function parseArgs(argv: string[]): RegistrarCliOptions {
   if (carrierId && !allowSingleCarrier) throw new Error('registrar_single_carrier_materialization_requires_explicit_escape_hatch');
   if (!carrierId && allowSingleCarrier) throw new Error('registrar_allow_single_carrier_requires_materialize_carrier');
   if (!materializeAll && !carrierId && (outputPath || outputDir)) throw new Error('registrar_output_requires_materialization_mode');
-  if (!materializeAll && !carrierId && selectedProxyImplementation !== 'bun') throw new Error('registrar_runtime_proxy_implementation_requires_materialization_mode');
+  if (!materializeAll && !carrierId && selectedProxyImplementationExplicit && selectedProxyImplementation !== 'bun') throw new Error('registrar_runtime_proxy_implementation_requires_materialization_mode');
   if (materializeAll) return { mode: 'materialize-all', outputDir, runtimeProxyImplementation: selectedProxyImplementation };
   if (carrierId) return { mode: 'materialize-carrier', carrierId, outputPath, allowSingleCarrier: true, runtimeProxyImplementation: selectedProxyImplementation };
   return { mode: 'stdio' };
@@ -4248,11 +4282,10 @@ export function parseArgs(argv: string[]): RegistrarCliOptions {
 async function runDirectMaterialization(options: Extract<RegistrarCliOptions, { mode: 'materialize-all' | 'materialize-carrier' }>): Promise<void> {
   process.env[FRESH_REGISTRAR_ENV] = '1';
   runtimeProxyImplementation = options.runtimeProxyImplementation;
-  if (runtimeProxyImplementation === 'native' && process.platform !== 'win32') {
-    throw new Error(`registrar_native_runtime_proxy_unsupported_platform:${process.platform}`);
-  }
-  if (runtimeProxyImplementation === 'native' && !existsSync(MCP_NATIVE_RUNTIME_PROXY_ENTRYPOINT)) {
-    throw new Error(`registrar_native_runtime_proxy_missing:${MCP_NATIVE_RUNTIME_PROXY_ENTRYPOINT}`);
+  if (runtimeProxyImplementation === 'native' && !nativeRuntimeProxyAvailable()) {
+    throw new Error(process.platform === 'win32'
+      ? `registrar_native_runtime_proxy_missing:${MCP_NATIVE_RUNTIME_PROXY_ENTRYPOINT}`
+      : `registrar_native_runtime_proxy_unsupported_platform:${process.platform}`);
   }
   const result = options.mode === 'materialize-all'
     ? await registrarMaterializeAll({ ...(options.outputDir ? { output_dir: resolve(options.outputDir) } : {}) })

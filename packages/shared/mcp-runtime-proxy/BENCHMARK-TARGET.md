@@ -2,12 +2,13 @@
 
 ## Objective
 
-Determine whether the optional native Rust MCP proxy provides a material,
-attributable benefit for the currently supported Bun and Node topologies, and
+Determine whether the native Rust MCP proxy provides a material, attributable
+benefit for the currently supported Bun and Node topologies, and
 measure Deno as an explicitly experimental compatibility lane. The benchmark
-is diagnostic and user-runnable. It does not make native the default and a
-measured Deno lane does not by itself make Deno a supported production
-runtime.
+is diagnostic and user-runnable. It does not choose the production default;
+the registrar selects native on supported Windows hosts and falls back to Bun
+when the artifact is unavailable. A measured Deno lane does not by itself make
+Deno a supported production runtime.
 
 The benchmark must measure the same protocol fixture through each available
 topology, attribute startup and resource costs by phase and process, and emit
@@ -76,9 +77,9 @@ The gates are verdicts, not reasons to hide or discard a result:
 - protocol, refusal, timeout, and process-tree checks pass.
 
 The HTML report displays each gate as `passed`, `failed`, `not_comparable`, or
-`not_run`. Performance-gate failure does not make the user benchmark command
-fail; it records that native remains opt-in. Harness, protocol, or lifecycle
-failure does fail the command. An explicit `--enforce-gates` mode may turn
+`not_run`. Performance-gate failure does not change the configured runtime
+default. Harness, protocol, or lifecycle failure does fail the command. An
+explicit `--enforce-gates` mode may turn
 performance verdicts into a nonzero exit for CI experiments.
 
 ## Artifact contract

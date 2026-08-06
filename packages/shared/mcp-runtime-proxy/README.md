@@ -89,26 +89,29 @@ kill-on-close Windows Job Object, and only then resumes its main thread. This
 removes the assignment race and the separate supervisor process while keeping
 the domain surface in its declared Bun or Node runtime.
 
-Carrier materialization selects the implementation explicitly:
+On supported Windows hosts, carrier materialization uses the native Rust proxy
+by default:
 
 ```powershell
-bun packages/mcp-registrar/dist/src/main.js --materialize-all --runtime-proxy-implementation native
+bun packages/mcp-registrar/dist/src/main.js --materialize-all
 ```
 
-`bun` remains the registrar default and is the rollback path. Native mode is
-Windows-only and materialization refuses it when the built executable is
-absent. Both modes use runtime contract v4 and therefore carry explicit
+Pass `--runtime-proxy-implementation bun` for the JavaScript rollback path.
+Native mode is Windows-only; non-Windows hosts and Windows hosts without the
+built executable fall back to Bun. An explicit `native` selection still fails
+clearly when the artifact is unavailable. Both modes use runtime contract v4 and therefore carry explicit
 `--child-command` and `--registrar-command` values; the proxy executable never
 guesses which JavaScript runtime should launch a domain surface or recovery
 registrar.
 
 The native executable is a multicall host. Its filesystem applet provides the
 read-only local-filesystem MCP surface: bounded reads, stat, glob, grep,
-inventory, metrics, doctor, and patch-outcome readback. A surface may opt in
-with surface_implementation=native; JavaScript remains the default and write
-mode remains on the JavaScript implementation. Native launches declare an
-explicit child invocation kind and applet so entrypoint paths are not
-overloaded with applet semantics.
+inventory, metrics, doctor, and patch-outcome readback. Read-mode
+`local-filesystem` surfaces use this applet by default when the native artifact
+is available. JavaScript remains the fallback for write mode, unsupported
+hosts, missing artifacts, and an explicit `surface_implementation=js` override.
+Native launches declare an explicit child invocation kind and applet so
+entrypoint paths are not overloaded with applet semantics.
 
 The Rust + Rhai filesystem executable keeps filesystem operations in the Rust
 host and uses a fixed, capability-limited Rhai dispatch script. It is a
@@ -133,8 +136,9 @@ warm-call latency with per-process attribution across Bun/Bun, Node/Node,
 Deno/Deno, native/Bun, native/Node, and native/Deno when available. Deno is an
 experimental compatibility lane; a skipped Deno topology means that Deno was
 not available or executable on the host, not that the other lanes failed.
-Performance-gate failure is shown in the report and leaves native opt-in;
-harness, protocol, or lifecycle failure returns nonzero. Use
+Performance-gate failure is shown in the report but does not change the
+configured native default; harness, protocol, or lifecycle failure returns
+nonzero. Use
 `--enforce-gates` for CI experiments that need a nonzero performance verdict.
 The benchmark discovers `deno` on `PATH`; for a shell whose environment has
 not refreshed after installation, set `NARADA_MCP_BENCHMARK_DENO` to the Deno
