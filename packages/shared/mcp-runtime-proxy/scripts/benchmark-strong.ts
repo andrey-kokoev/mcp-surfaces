@@ -77,6 +77,7 @@ mkdirSync(diagnosticsRoot, { recursive: true });
 const reportId = `mcp-runtime-strong-${new Date().toISOString().replace(/[-:.TZ]/g, '').slice(0, 14)}`;
 const bunProxyPath = fileURLToPath(new URL('../dist/src/main.js', import.meta.url));
 const nativeProxyPath = fileURLToPath(new URL('../dist/native/narada-mcp-runtime.exe', import.meta.url));
+const nativeRhaiFilesystemPath = fileURLToPath(new URL('../dist/native/narada-mcp-rhai-filesystem.exe', import.meta.url));
 const dotnetFilesystemPath = join(workspaceRoot, 'packages', 'local-filesystem-mcp', 'native-dotnet', 'publish', 'narada-filesystem-dotnet.exe');
 
 function selectionValues(value: string | undefined): string[] | undefined {
@@ -179,6 +180,7 @@ function writeFilesystemSearchFixture(): FilesystemSurface {
 
   const manifestPath = join(root, 'filesystem-artifact-manifest.json');
   const nativeManifestPath = join(root, 'native-filesystem-artifact-manifest.json');
+  const rhaiManifestPath = join(root, 'rhai-filesystem-artifact-manifest.json');
   const dotnetManifestPath = join(root, 'dotnet-filesystem-artifact-manifest.json');
   buildWorkspaceArtifactManifest({
     workspaceRoot,
@@ -193,6 +195,10 @@ function writeFilesystemSearchFixture(): FilesystemSurface {
     rust: {
       entrypoint: nativeProxyPath,
       manifestPath: writeSyntheticManifest([nativeProxyPath], nativeManifestPath),
+    },
+    rhai: {
+      entrypoint: nativeRhaiFilesystemPath,
+      manifestPath: writeSyntheticManifest([nativeRhaiFilesystemPath], rhaiManifestPath),
     },
   };
   if (existsSync(dotnetFilesystemPath)) {
@@ -727,14 +733,16 @@ const proxyTopologies: Topology[] = [
 const filesystemTopologies: Topology[] = [
   ...proxyTopologies,
   { id: 'native-filesystem', proxy: 'native', proxyRuntime: 'native', childRuntime: 'native_applet', childApplet: 'filesystem', nativeVariant: 'rust' },
+  { id: 'native-rhai-filesystem', proxy: 'native', proxyRuntime: 'native', childRuntime: 'native_applet', childApplet: 'rhai-filesystem', nativeVariant: 'rhai' },
   { id: 'native-dotnet-filesystem', proxy: 'native', proxyRuntime: 'native', childRuntime: 'native_applet', childApplet: 'filesystem', nativeVariant: 'dotnet' },
 ];
 
 function topologyAvailable(topology: Topology): string | null {
   if (topology.childRuntime !== 'native_applet' && !runtimeCommands[topology.childRuntime]) return topology.childRuntime + '_runtime_unavailable';
- if (topology.childRuntime === 'native_applet' && topology.proxy !== 'native') return 'native_applet_requires_native_proxy';
- if (topology.proxy === 'native' && (process.platform !== 'win32' || !existsSync(nativeProxyPath))) return 'native_windows_artifact_unavailable';
+  if (topology.childRuntime === 'native_applet' && topology.proxy !== 'native') return 'native_applet_requires_native_proxy';
+  if (topology.proxy === 'native' && (process.platform !== 'win32' || !existsSync(nativeProxyPath))) return 'native_windows_artifact_unavailable';
   if (topology.childRuntime === 'native_applet' && topology.nativeVariant === 'dotnet' && !existsSync(dotnetFilesystemPath)) return 'dotnet_native_applet_unavailable';
+  if (topology.childRuntime === 'native_applet' && topology.nativeVariant === 'rhai' && !existsSync(nativeRhaiFilesystemPath)) return 'rhai_native_applet_unavailable';
   if (topology.proxy !== 'native' && !runtimeCommands[topology.proxyRuntime]) return `${topology.proxyRuntime}_runtime_unavailable`;
   return null;
 }

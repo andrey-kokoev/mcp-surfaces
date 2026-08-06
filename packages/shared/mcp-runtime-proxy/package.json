@@ -9,7 +9,7 @@
     "build:native-dotnet": "bun scripts/build-native-dotnet.ts",
     "build:postcompile": "pnpm run build:native",
     "benchmark:runtime": "bun scripts/benchmark-native.ts",
-    "benchmark:strong": "bun scripts/build-native-dotnet.ts && bun scripts/benchmark-strong.ts",
+    "benchmark:strong": "pnpm run build:native && bun scripts/build-native-dotnet.ts && bun scripts/benchmark-strong.ts",
     "benchmark:native": "pnpm run benchmark:runtime",
     "typecheck": "tsc -b --pretty false",
     "test": "pnpm run test:bun",
@@ -18,7 +18,10 @@
   },
   "types": "./dist/src/main.d.ts",
   "naradaRuntimeArtifacts": {
-    "win32": ["./dist/native/narada-mcp-runtime.exe"]
+    "win32": [
+      "./dist/native/narada-mcp-runtime.exe",
+      "./dist/native/narada-mcp-rhai-filesystem.exe"
+    ]
   },
   "exports": {
     ".": {

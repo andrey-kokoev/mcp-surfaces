@@ -31,7 +31,7 @@ const GENERATED_MARKERS: &[&str] = &[
 ];
 
 #[derive(Clone)]
-struct State {
+pub(crate) struct State {
     mode: String,
     allowed_roots: Vec<PathBuf>,
     root_entries: Vec<Value>,
@@ -120,6 +120,32 @@ fn parse_state(args: &[String]) -> Result<State, String> {
         cache: HashMap::new(),
         snapshots: HashMap::new(),
     })
+}
+
+pub(crate) fn parse_state_for_rhai(args: &[String]) -> Result<State, String> {
+    parse_state(args)
+}
+
+pub(crate) fn initialize_for_rhai(request: &Value) -> Value {
+    initialize(request)
+}
+
+pub(crate) fn tools_list_for_rhai() -> Value {
+    json!({"tools": list_tools()})
+}
+
+pub(crate) fn tool_call_for_rhai(state: &mut State, params: &Value) -> Value {
+    match call_tool(state, params) {
+        Ok(result) => json!({"ok": true, "result": result}),
+        Err(error) => json!({
+            "ok": false,
+            "error": {
+                "code": -32000,
+                "message": error.message,
+                "data": diagnostic(&error)
+            }
+        }),
+    }
 }
 
 fn parse_roots_config(path: &Path) -> Vec<String> {
@@ -843,7 +869,7 @@ fn aggregate_metrics(files: &[Value]) -> Value {
     json!({"file_count": files.len(), "byte_count": bytes, "line_count": if exact {json!(lines)} else {Value::Null}, "line_count_status": if exact {"exact"} else {"partial"}, "binary_file_count": binary, "too_large_file_count": too_large, "unavailable_file_count": unavailable, "scan_budget_exceeded_file_count": budget})
 }
 
-fn read_message<R: BufRead>(reader: &mut R) -> io::Result<Option<(Value, bool)>> {
+pub(crate) fn read_message<R: BufRead>(reader: &mut R) -> io::Result<Option<(Value, bool)>> {
     let mut first = String::new();
     loop {
         if reader.read_line(&mut first)? == 0 { return Ok(None); }
@@ -865,7 +891,7 @@ fn read_message<R: BufRead>(reader: &mut R) -> io::Result<Option<(Value, bool)>>
     serde_json::from_str(first.trim()).map(|value| Some((value, false))).map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))
 }
 
-fn write_message<W: Write>(writer: &mut W, value: &Value, framed: bool) -> io::Result<()> {
+pub(crate) fn write_message<W: Write>(writer: &mut W, value: &Value, framed: bool) -> io::Result<()> {
     let body = serde_json::to_string(value).map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
     if framed { write!(writer, "Content-Length: {}\r\n\r\n{}", body.as_bytes().len(), body) } else { writeln!(writer, "{body}") }
 }

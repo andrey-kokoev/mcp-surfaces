@@ -12,6 +12,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use time::format_description::well_known::Rfc3339;
 use time::OffsetDateTime;
 
+#[allow(dead_code)]
 mod filesystem;
 
 const CONTRACT_VERSION: u64 = 4;

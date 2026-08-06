@@ -8,8 +8,22 @@ publish = false
 name = "narada-mcp-runtime"
 path = "src/main.rs"
 
+[[bin]]
+name = "narada-mcp-rhai-filesystem"
+path = "src/rhai_main.rs"
+
 [dependencies]
 hex = "0.4"
+rhai = { version = "1.25.1", default-features = false, features = [
+  "std",
+  "sync",
+  "no_module",
+  "no_index",
+  "no_object",
+  "no_custom_syntax",
+  "no_position",
+  "only_i64"
+] }
 serde_json = { version = "1", features = ["preserve_order"] }
 sha2 = "0.10"
 time = { version = "0.3", features = ["formatting", "macros", "parsing"] }

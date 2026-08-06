@@ -80,7 +80,9 @@ in a new or restarted session.
 ## Native Windows proxy
 
 The package builds `dist/native/narada-mcp-runtime.exe`, a Rust multicall
-executable whose first applet is `proxy`. In native mode this process performs
+executable whose first applet is `proxy`, plus the benchmark-only
+`dist/native/narada-mcp-rhai-filesystem.exe` applet. In native mode this
+process performs
 preflight, stdio framing, timeout/cancellation, diagnostics, and process-tree
 ownership itself. It creates the MCP server suspended, assigns it to a
 kill-on-close Windows Job Object, and only then resumes its main thread. This
@@ -107,6 +109,10 @@ with surface_implementation=native; JavaScript remains the default and write
 mode remains on the JavaScript implementation. Native launches declare an
 explicit child invocation kind and applet so entrypoint paths are not
 overloaded with applet semantics.
+
+The Rust + Rhai filesystem executable keeps filesystem operations in the Rust
+host and uses a fixed, capability-limited Rhai dispatch script. It is a
+benchmark lane, not the production default.
 
 The selected implementation, executable path, and executable fingerprint are
 recorded in the carrier sidecar and checked before child launch. Rust sources,
