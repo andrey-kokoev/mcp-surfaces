@@ -6,9 +6,10 @@
   "scripts": {
     "build": "tsc -b && pnpm run build:native",
     "build:native": "bun scripts/build-native.ts",
+    "build:native-dotnet": "bun scripts/build-native-dotnet.ts",
     "build:postcompile": "pnpm run build:native",
     "benchmark:runtime": "bun scripts/benchmark-native.ts",
-    "benchmark:strong": "bun scripts/benchmark-strong.ts",
+    "benchmark:strong": "bun scripts/build-native-dotnet.ts && bun scripts/benchmark-strong.ts",
     "benchmark:native": "pnpm run benchmark:runtime",
     "typecheck": "tsc -b --pretty false",
     "test": "pnpm run test:bun",

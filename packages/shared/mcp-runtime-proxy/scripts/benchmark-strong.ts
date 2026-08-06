@@ -14,7 +14,7 @@ type RuntimeName = 'bun' | 'node' | 'deno';
 type RuntimeCommand = { executable: string; runtime_args: string[] };
 type ProxyImplementation = 'javascript' | 'native';
 type ChildRuntime = RuntimeName | 'native_applet';
-type Topology = { id: string; proxy: ProxyImplementation; proxyRuntime: RuntimeName | 'native'; childRuntime: ChildRuntime; childApplet?: string };
+type Topology = { id: string; proxy: ProxyImplementation; proxyRuntime: RuntimeName | 'native'; childRuntime: ChildRuntime; childApplet?: string; nativeVariant?: string };
 type ProcessMemory = { pid: number; name: string; private_bytes: number; working_set_bytes: number };
 type Sample = {
   ordinal: number;
@@ -33,7 +33,7 @@ type Surface = {
   id: string;
   entrypoint: string;
   manifestPath: string;
-  nativeManifestPath?: string;
+  nativeVariants?: Record<string, { entrypoint: string; manifestPath: string }>;
   workingDirectory: string;
   childArgs: string[];
 };
@@ -77,6 +77,7 @@ mkdirSync(diagnosticsRoot, { recursive: true });
 const reportId = `mcp-runtime-strong-${new Date().toISOString().replace(/[-:.TZ]/g, '').slice(0, 14)}`;
 const bunProxyPath = fileURLToPath(new URL('../dist/src/main.js', import.meta.url));
 const nativeProxyPath = fileURLToPath(new URL('../dist/native/narada-mcp-runtime.exe', import.meta.url));
+const dotnetFilesystemPath = join(workspaceRoot, 'packages', 'local-filesystem-mcp', 'native-dotnet', 'publish', 'narada-filesystem-dotnet.exe');
 
 function selectionValues(value: string | undefined): string[] | undefined {
   return value?.split(/[\s,]+/).map((item) => item.trim()).filter(Boolean);
@@ -178,6 +179,7 @@ function writeFilesystemSearchFixture(): FilesystemSurface {
 
   const manifestPath = join(root, 'filesystem-artifact-manifest.json');
   const nativeManifestPath = join(root, 'native-filesystem-artifact-manifest.json');
+  const dotnetManifestPath = join(root, 'dotnet-filesystem-artifact-manifest.json');
   buildWorkspaceArtifactManifest({
     workspaceRoot,
     packageRoots: [
@@ -187,11 +189,23 @@ function writeFilesystemSearchFixture(): FilesystemSurface {
     ],
     outputPath: manifestPath,
   });
+  const nativeVariants: NonNullable<Surface['nativeVariants']> = {
+    rust: {
+      entrypoint: nativeProxyPath,
+      manifestPath: writeSyntheticManifest([nativeProxyPath], nativeManifestPath),
+    },
+  };
+  if (existsSync(dotnetFilesystemPath)) {
+    nativeVariants.dotnet = {
+      entrypoint: dotnetFilesystemPath,
+      manifestPath: writeSyntheticManifest([dotnetFilesystemPath], dotnetManifestPath),
+    };
+  }
   return {
     id: 'local-filesystem-search',
     entrypoint: join(workspaceRoot, 'packages', 'local-filesystem-mcp', 'dist', 'src', 'main.js'),
     manifestPath,
-    nativeManifestPath: writeSyntheticManifest([nativeProxyPath], nativeManifestPath),
+    nativeVariants,
     workingDirectory: hayRoot,
     childArgs: ['--mode', 'read', '--allowed-root', hayRoot],
     filesystem: {
@@ -373,16 +387,17 @@ async function runFilesystemSearchLoad(surface: FilesystemSurface): Promise<Work
       primary_needle_files: surface.filesystem.primaryFileCount,
       secondary_needle_files: surface.filesystem.secondaryFileCount,
       sequential_commands_per_sample: 8,
-     concurrent_searches_per_sample: args.filesystemConcurrent,
-     topologies: filesystemTopologies.map((topology) => topology.id),
+      concurrent_searches_per_sample: args.filesystemConcurrent,
+      topologies: filesystemTopologies.map((topology) => topology.id),
       topology_definitions: filesystemTopologies.map((topology) => ({
         id: topology.id,
         proxy: topology.proxy,
         proxy_runtime: topology.proxyRuntime,
         child_runtime: topology.childRuntime,
         ...(topology.childApplet ? { child_applet: topology.childApplet } : {}),
+        ...(topology.nativeVariant ? { native_variant: topology.nativeVariant } : {}),
       })),
-   },
+    },
     topologies: reports,
     gates,
     verdict: workloadVerdict(reports, gates),
@@ -546,10 +561,13 @@ function sendRequest(child: ChildProcessWithoutNullStreams, read: (id: string | 
 function proxyLaunch(topology: Topology, surface: Surface, child: RuntimeCommand | null, diagnostics: string, ordinal: number, scenario: string): { command: string; args: string[] } {
   const nativeApplet = topology.childRuntime === 'native_applet';
   if (nativeApplet) assert.equal(topology.proxy, 'native', topology.id + ':native_applet_requires_native_proxy');
-  const childCommand = nativeApplet ? nativeProxyPath : child?.executable;
+  const nativeVariant = topology.nativeVariant ?? 'rust';
+  const nativeChild = nativeApplet ? surface.nativeVariants?.[nativeVariant] : undefined;
+  const childCommand = nativeApplet ? nativeChild?.entrypoint : child?.executable;
   const childPrefixArgs = nativeApplet ? [] : child?.runtime_args ?? [];
-  const childEntrypoint = nativeApplet ? nativeProxyPath : surface.entrypoint;
-  const artifactManifest = nativeApplet ? surface.nativeManifestPath : surface.manifestPath;
+  const childEntrypoint = nativeApplet ? nativeChild?.entrypoint : surface.entrypoint;
+  const artifactManifest = nativeApplet ? nativeChild?.manifestPath : surface.manifestPath;
+  if (nativeApplet) assert.ok(nativeChild, topology.id + ':native_variant_unavailable:' + nativeVariant);
   assert.ok(childCommand, topology.id + ':missing_child_command');
   assert.ok(artifactManifest, topology.id + ':missing_artifact_manifest');
   const common = [
@@ -708,13 +726,15 @@ const proxyTopologies: Topology[] = [
 
 const filesystemTopologies: Topology[] = [
   ...proxyTopologies,
-  { id: 'native-filesystem', proxy: 'native', proxyRuntime: 'native', childRuntime: 'native_applet', childApplet: 'filesystem' },
+  { id: 'native-filesystem', proxy: 'native', proxyRuntime: 'native', childRuntime: 'native_applet', childApplet: 'filesystem', nativeVariant: 'rust' },
+  { id: 'native-dotnet-filesystem', proxy: 'native', proxyRuntime: 'native', childRuntime: 'native_applet', childApplet: 'filesystem', nativeVariant: 'dotnet' },
 ];
 
 function topologyAvailable(topology: Topology): string | null {
   if (topology.childRuntime !== 'native_applet' && !runtimeCommands[topology.childRuntime]) return topology.childRuntime + '_runtime_unavailable';
-  if (topology.childRuntime === 'native_applet' && topology.proxy !== 'native') return 'native_applet_requires_native_proxy';
-  if (topology.proxy === 'native' && (process.platform !== 'win32' || !existsSync(nativeProxyPath))) return 'native_windows_artifact_unavailable';
+ if (topology.childRuntime === 'native_applet' && topology.proxy !== 'native') return 'native_applet_requires_native_proxy';
+ if (topology.proxy === 'native' && (process.platform !== 'win32' || !existsSync(nativeProxyPath))) return 'native_windows_artifact_unavailable';
+  if (topology.childRuntime === 'native_applet' && topology.nativeVariant === 'dotnet' && !existsSync(dotnetFilesystemPath)) return 'dotnet_native_applet_unavailable';
   if (topology.proxy !== 'native' && !runtimeCommands[topology.proxyRuntime]) return `${topology.proxyRuntime}_runtime_unavailable`;
   return null;
 }

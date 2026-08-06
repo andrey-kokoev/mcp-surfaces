@@ -42,6 +42,7 @@ outside the runtime matrix:
 | Topology | Proxy | Child | Role |
 | --- | --- | --- | --- |
 | `native-filesystem` | Rust native proxy | Rust `filesystem` applet | measure the native local-filesystem implementation itself |
+| `native-dotnet-filesystem` | Rust native proxy | .NET NativeAOT filesystem applet | compare a second native implementation under the same contract |
 
 This lane is selected only for the filesystem workload; it does not replace
 the six-topology matrix for the other strong workloads.
@@ -104,11 +105,15 @@ The repository-level strong profile is the heavier acceptance-oriented scenario.
 | `payload-load` | Framing and transport remain correct under size and concurrency pressure. | 8 samples; 32 B, 4 KB, 64 KB; sequential plus two batches of 8 concurrent calls |
 | `restart-soak` | Repeated replacement does not leak processes or fail to complete warm work. | 200 cold restarts; 2,000 warm calls |
 | `real-structured-command` | The benchmark reaches a real surface and performs policy inspection plus a safe command. | 8 samples; Bun, Node, Deno when available, and native Node proxy lanes |
-| `filesystem-search-load` | The benchmark reaches the real local-filesystem MCP surface and exercises search/read work over a large deterministic haystack. | 8 samples; 2,048 files (~54 MB), eight sequential filesystem commands, and eight concurrent searches per sample across the fixed matrix plus the native-filesystem lane |
+| `filesystem-search-load` | The benchmark reaches the real local-filesystem MCP surface and exercises search/read work over a large deterministic haystack. | 8 samples; 2,048 files (~54 MB), eight sequential filesystem commands, and eight concurrent searches per sample across the fixed matrix plus Rust and .NET native applet lanes |
 
-The filesystem workload's topology list includes `native-filesystem`, which
-launches the Rust proxy with `--child-invocation-kind native_applet` and
-`--child-applet filesystem`; its artifact manifest covers the native binary.
+The .NET lane uses the same `native_applet` invocation contract and is
+reported as skipped when the .NET SDK or published executable is unavailable.
+
+The filesystem workload's topology list includes `native-filesystem` and
+`native-dotnet-filesystem`. Both launch the Rust proxy with
+`--child-invocation-kind native_applet` and `--child-applet filesystem`; each
+lane has an artifact manifest covering its native child binary.
 
 Run it with:
 
