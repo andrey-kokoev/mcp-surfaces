@@ -1,0 +1,20 @@
+[package]
+name = "narada-mcp-boa-fixture"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[[bin]]
+name = "narada-mcp-boa-fixture"
+path = "src/main.rs"
+
+[dependencies]
+boa_engine = "0.21.1"
+serde_json = "1"
+
+[profile.release]
+codegen-units = 1
+lto = true
+opt-level = "z"
+panic = "abort"
+strip = true

@@ -10,10 +10,10 @@ import { MCP_RUNTIME_CONTRACT_VERSION } from '../src/materialization-contract.js
 import { fingerprintWorkspaceArtifactManifest } from '../src/workspace-artifact-manifest.js';
 
 type JsonRecord = Record<string, any>;
-type RuntimeName = 'bun' | 'node' | 'deno';
+type RuntimeName = 'bun' | 'node' | 'deno' | 'boa';
 type RuntimeCommand = { executable: string; runtime_args: string[] };
 type ProxyImplementation = 'javascript' | 'native';
-type TopologyId = 'bun-bun' | 'node-node' | 'deno-deno' | 'native-bun' | 'native-node' | 'native-deno';
+type TopologyId = 'bun-bun' | 'node-node' | 'deno-deno' | 'native-bun' | 'native-node' | 'native-deno' | 'native-boa';
 type TopologyStatus = 'measured' | 'skipped' | 'failed';
 type ProcessMemory = { pid: number; name: string; private_bytes: number; working_set_bytes: number };
 type TraceEvent = { at?: string; elapsed_ms?: number; event: string; detail?: JsonRecord };
@@ -50,10 +50,12 @@ const args = parseArgs(process.argv.slice(2));
 const sampleCount = args.samples ?? Number(process.env['NARADA_MCP_BENCHMARK_SAMPLES'] ?? 12);
 const warmCalls = args.warmCalls ?? Number(process.env['NARADA_MCP_BENCHMARK_WARM_CALLS'] ?? 200);
 const root = mkdtempSync(join(tmpdir(), 'mcp-runtime-benchmark-'));
-const fixturePath = join(root, 'fixture.mjs');
+const fixtureHandlerPath = join(root, 'fixture-handler.js');
+const fixtureHostPath = join(root, 'fixture-host.mjs');
 const manifestPath = join(root, 'workspace-artifact-manifest.json');
 const bunProxyPath = fileURLToPath(new URL('../dist/src/main.js', import.meta.url));
 const nativeProxyPath = fileURLToPath(new URL('../dist/native/narada-mcp-runtime.exe', import.meta.url));
+const nativeBoaPath = fileURLToPath(new URL('../dist/native/narada-mcp-boa-fixture.exe', import.meta.url));
 const reportId = `mcp-runtime-${new Date().toISOString().replace(/[-:.TZ]/g, '').slice(0, 14)}`;
 
 function parseArgs(argv: string[]): { outputDir?: string; samples?: number; warmCalls?: number; enforceGates: boolean } {
@@ -100,6 +102,9 @@ function commandVersion(command: RuntimeCommand): string | null {
 }
 
 function availableCommand(runtime: RuntimeName): RuntimeCommand | null {
+  if (runtime === 'boa') {
+    return existsSync(nativeBoaPath) ? { executable: nativeBoaPath, runtime_args: [] } : null;
+  }
   const own = basename(process.execPath).toLowerCase();
   const candidates = runtime === 'bun'
     ? [own.includes('bun') ? process.execPath : 'bun']
@@ -246,15 +251,21 @@ function proxyLaunch(
   diagnostics: string,
   runtimeCommands: Record<RuntimeName, RuntimeCommand | null>,
 ): { command: string; args: string[] } {
+  const child = runtimeCommands[topology.childRuntime];
+  assert.ok(child);
+  const childEntrypoint = topology.childRuntime === 'boa' ? fixtureHandlerPath : fixtureHostPath;
+  const childArgs = topology.childRuntime === 'boa' ? [] : [fixtureHandlerPath];
   const common = [
     '--surface-id', `benchmark-${topology.proxyRuntime}-${topology.childRuntime}`,
     '--artifact-manifest', manifestPath,
     '--runtime-contract-version', String(MCP_RUNTIME_CONTRACT_VERSION),
     '--child-command', childCommand,
-    '--entrypoint', fixturePath,
+    '--child-prefix-args', JSON.stringify(child.runtime_args),
+    '--entrypoint', childEntrypoint,
     '--diagnostics-dir', diagnostics,
     '--orphan-grace-ms', '100',
     '--',
+    ...childArgs,
   ];
   if (topology.proxy === 'native') return { command: nativeProxyPath, args: ['proxy', ...common] };
   const proxyCommand = runtimeCommands[topology.proxyRuntime];
@@ -267,7 +278,7 @@ async function measure(
   runtimeCommands: Record<RuntimeName, RuntimeCommand | null>,
 ): Promise<TopologyReport> {
   const childRuntime = runtimeCommands[topology.childRuntime];
-  if (!childRuntime) return { ...topology, status: 'skipped', samples: [], reason: `${topology.childRuntime}_runtime_unavailable` };
+  if (!childRuntime) return { ...topology, status: 'skipped', samples: [], reason: topology.childRuntime === 'boa' ? 'boa_artifact_unavailable' : `${topology.childRuntime}_runtime_unavailable` };
   if (topology.proxy === 'native' && (process.platform !== 'win32' || !existsSync(nativeProxyPath))) {
     return { ...topology, status: 'skipped', samples: [], reason: 'native_windows_artifact_unavailable' };
   }
@@ -372,6 +383,7 @@ function topologyMatrix(): Array<{ id: TopologyId; proxy: ProxyImplementation; p
     { id: 'native-bun', proxy: 'native', proxyRuntime: 'native', childRuntime: 'bun' },
     { id: 'native-node', proxy: 'native', proxyRuntime: 'native', childRuntime: 'node' },
     { id: 'native-deno', proxy: 'native', proxyRuntime: 'native', childRuntime: 'deno' },
+    { id: 'native-boa', proxy: 'native', proxyRuntime: 'native', childRuntime: 'boa' },
   ];
 }
 
@@ -407,10 +419,10 @@ function buildReport(reports: TopologyReport[], environment: JsonRecord): JsonRe
     schema: 'narada.mcp_runtime_proxy.benchmark_report.v1',
     report_id: reportId,
     generated_at: new Date().toISOString(),
-    objective: 'Measure attributable Bun/Node/Deno/native MCP runtime topology differences; native is the supported-Windows default and Deno remains experimental.',
-    scope: { runtimes: ['bun', 'node', 'deno'], native_windows_only: true, deno_included: true, network_required: false },
+    objective: 'Measure attributable Bun/Node/Deno/native MCP runtime topology differences; native is the supported-Windows default, Deno remains experimental, and Native/Boa is diagnostic-only.',
+    scope: { runtimes: ['bun', 'node', 'deno', 'boa'], native_windows_only: true, deno_included: true, boa_diagnostic_only: true, network_required: false },
     environment,
-    configuration: { sample_count: sampleCount, warm_calls_per_sample: warmCalls, runtime_contract_version: MCP_RUNTIME_CONTRACT_VERSION, matrix: ['bun-bun', 'node-node', 'deno-deno', 'native-bun', 'native-node', 'native-deno'] },
+    configuration: { sample_count: sampleCount, warm_calls_per_sample: warmCalls, runtime_contract_version: MCP_RUNTIME_CONTRACT_VERSION, matrix: ['bun-bun', 'node-node', 'deno-deno', 'native-bun', 'native-node', 'native-deno', 'native-boa'], diagnostic_only: ['native-boa'] },
     baseline: baseline?.id ?? null,
     topologies: reports,
     gates,
@@ -463,20 +475,34 @@ function writeArtifacts(report: JsonRecord): { jsonPath: string; htmlPath: strin
   return { jsonPath, htmlPath };
 }
 
-writeFileSync(fixturePath, [
+writeFileSync(fixtureHandlerPath, [
+  "globalThis.naradaFixtureHandle = function(request) {",
+  "  if (request.method === 'initialize') return { protocolVersion: '2024-11-05', capabilities: { tools: {} }, serverInfo: { name: 'benchmark', version: '1' } };",
+  "  if (request.method === 'tools/list') return { tools: [{ name: 'fixture_echo', inputSchema: { type: 'object' } }] };",
+  "  return { content: [{ type: 'text', text: String(request.params.arguments.value) }] };",
+  "};",
+].join('\n'));
+writeFileSync(fixtureHostPath, [
+  "import { readFileSync } from 'node:fs';",
+  "const handlerPath = process.argv[2];",
+  "if (!handlerPath) throw new Error('benchmark_fixture_handler_path_required');",
+  "eval(readFileSync(handlerPath, 'utf8'));",
   "let buffer = ''; process.stdin.setEncoding('utf8');",
   "process.stdin.on('data', chunk => { buffer += chunk; let end; while ((end = buffer.indexOf('\\n')) >= 0) {",
   "  const line = buffer.slice(0, end).trim(); buffer = buffer.slice(end + 1); if (!line) continue; const request = JSON.parse(line);",
-  "  const result = request.method === 'initialize' ? { protocolVersion: '2024-11-05', capabilities: { tools: {} }, serverInfo: { name: 'benchmark', version: '1' } } : request.method === 'tools/list' ? { tools: [{ name: 'fixture_echo', inputSchema: { type: 'object' } }] } : { content: [{ type: 'text', text: String(request.params.arguments.value) }] };",
+  "  const result = globalThis.naradaFixtureHandle(request);",
   "  process.stdout.write(JSON.stringify({ jsonrpc: '2.0', id: request.id, result }) + '\\n');",
   "}});",
 ].join('\n'));
-const unsigned = { schema: 'narada.workspace_artifact_manifest.v1', generated_at: new Date().toISOString(), workspace_root: root, packages: [], artifacts: [artifact(fixturePath)] };
+const manifestArtifacts = [artifact(fixtureHandlerPath), artifact(fixtureHostPath)];
+if (existsSync(nativeBoaPath)) manifestArtifacts.push(artifact(nativeBoaPath));
+const unsigned = { schema: 'narada.workspace_artifact_manifest.v1', generated_at: new Date().toISOString(), workspace_root: root, packages: [], artifacts: manifestArtifacts };
 writeFileSync(manifestPath, JSON.stringify({ ...unsigned, manifest_fingerprint: fingerprintWorkspaceArtifactManifest(unsigned) }, null, 2) + '\n');
 
 const bunCommand = availableCommand('bun');
 const nodeCommand = availableCommand('node');
 const denoCommand = availableCommand('deno');
+const boaCommand = availableCommand('boa');
 if (!Number.isSafeInteger(sampleCount) || sampleCount <= 0) throw new Error('benchmark_invalid_sample_count');
 if (!Number.isSafeInteger(warmCalls) || warmCalls <= 0) throw new Error('benchmark_invalid_warm_call_count');
 const matrix = topologyMatrix();
@@ -484,14 +510,15 @@ const environment = {
   platform: process.platform,
   architecture: process.arch,
   runner: process.execPath,
-  runtimes: { bun: bunCommand ? commandVersion(bunCommand) : null, node: nodeCommand ? commandVersion(nodeCommand) : null, deno: denoCommand ? commandVersion(denoCommand) : null },
-  runtime_commands: { bun: commandSpec(bunCommand), node: commandSpec(nodeCommand), deno: commandSpec(denoCommand) },
+  runtimes: { bun: bunCommand ? commandVersion(bunCommand) : null, node: nodeCommand ? commandVersion(nodeCommand) : null, deno: denoCommand ? commandVersion(denoCommand) : null, boa: boaCommand ? commandVersion(boaCommand) : null },
+  runtime_commands: { bun: commandSpec(bunCommand), node: commandSpec(nodeCommand), deno: commandSpec(denoCommand), boa: commandSpec(boaCommand) },
   native_artifact: process.platform === 'win32' && existsSync(nativeProxyPath),
+  boa_artifact: process.platform === 'win32' && existsSync(nativeBoaPath),
 };
 
 try {
   const reports: TopologyReport[] = [];
-  for (const topology of matrix) reports.push(await measure(topology, { bun: bunCommand, node: nodeCommand, deno: denoCommand }));
+  for (const topology of matrix) reports.push(await measure(topology, { bun: bunCommand, node: nodeCommand, deno: denoCommand, boa: boaCommand }));
   const report = buildReport(reports, environment);
   const artifacts = writeArtifacts(report);
   const output = { ...report, artifacts: { json_path: artifacts.jsonPath, html_path: artifacts.htmlPath } };

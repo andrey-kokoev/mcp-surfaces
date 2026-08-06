@@ -20,6 +20,11 @@ const artifacts = executableNames.map((name) => ({
   source: join(nativeRoot, 'target', 'release', name),
   destination: join(packageRoot, 'dist', 'native', name),
 }));
+const boaManifest = join(nativeRoot, 'boa-fixture', 'Cargo.toml');
+const boaArtifact = {
+  source: join(nativeRoot, 'boa-fixture', 'target', 'release', 'narada-mcp-boa-fixture.exe'),
+  destination: join(packageRoot, 'dist', 'native', 'narada-mcp-boa-fixture.exe'),
+};
 
 const result = spawnSync('cargo', [
   'build',
@@ -50,10 +55,40 @@ for (const artifact of artifacts) {
   }
 }
 
+let boaBuild: { status: 'built' | 'skipped'; reason?: string } = { status: 'skipped', reason: 'windows_only' };
+if (process.platform === 'win32') {
+  const boaResult = spawnSync('cargo', [
+    'build',
+    '--release',
+    '--locked',
+    '--manifest-path',
+    boaManifest,
+  ], {
+    cwd: packageRoot,
+    stdio: 'inherit',
+    windowsHide: true,
+  });
+  if (!boaResult.error && boaResult.status === 0 && existsSync(boaArtifact.source)) {
+    const temporary = `${boaArtifact.destination}.tmp-${process.pid}`;
+    copyFileSync(boaArtifact.source, temporary);
+    try {
+      if (existsSync(boaArtifact.destination)) rmSync(boaArtifact.destination, { force: true });
+      renameSync(temporary, boaArtifact.destination);
+    } finally {
+      if (existsSync(temporary)) rmSync(temporary, { force: true });
+    }
+    boaBuild = { status: 'built' };
+  } else {
+    if (existsSync(boaArtifact.destination)) rmSync(boaArtifact.destination, { force: true });
+    boaBuild = { status: 'skipped', reason: boaResult.error?.code === 'ENOENT' ? 'cargo_unavailable' : 'boa_build_failed' };
+  }
+}
+
 process.stdout.write(`${JSON.stringify({
   schema: 'narada.mcp_runtime_proxy.native_build.v1',
   executable: artifacts[0].destination,
   executables: artifacts.map((artifact) => artifact.destination),
+  boa_fixture: { ...boaBuild, executable: boaBuild.status === 'built' ? boaArtifact.destination : null },
   platform: process.platform,
   architecture: process.arch,
 })}\n`);

@@ -4,7 +4,9 @@
 
 Determine whether the native Rust MCP proxy provides a material, attributable
 benefit for the currently supported Bun and Node topologies, and
-measure Deno as an explicitly experimental compatibility lane. The benchmark
+measure Deno as an explicitly experimental compatibility lane. The runtime
+fixture also exposes a diagnostic Native/Boa lane without making Boa a
+supported runtime. The benchmark
 is diagnostic and user-runnable. It does not choose the production default;
 the registrar selects native on supported Windows hosts and falls back to Bun
 when the artifact is unavailable. A measured Deno lane does not by itself make
@@ -29,6 +31,7 @@ The primary matrix is fixed before observing results:
 | `native-bun` | Rust native proxy | Bun | native candidate |
 | `native-node` | Rust native proxy | Node | native candidate |
 | `native-deno` | Rust native proxy | Deno | experimental native candidate |
+| `native-boa` | Rust native proxy | Boa embedded in a Rust runner | diagnostic-only native candidate |
 
 Unavailable runtimes are reported as skipped with a reason. Cross-runtime
 combinations are out of the primary target unless an existing carrier emits
@@ -36,6 +39,11 @@ them. The Deno lanes test the narrow conjecture that the existing JavaScript
 proxy and native proxy can execute the benchmark fixture under Deno's
 Node-compatible runtime; they do not assert full Deno support for every
 surface.
+
+The `native-boa` lane is Windows-oriented and diagnostic-only. Boa is embedded
+in a separate Rust child runner; it is not treated as a production JavaScript
+runtime and does not participate in the predeclared native-vs-baseline
+performance gates.
 
 The `filesystem-search-load` workload also includes an implementation lane
 outside the runtime matrix:
@@ -47,7 +55,7 @@ outside the runtime matrix:
 | `native-dotnet-filesystem` | Rust native proxy | .NET NativeAOT filesystem applet | compare a second native implementation under the same contract |
 
 This lane is selected only for the filesystem workload; it does not replace
-the six-topology matrix for the other strong workloads.
+the runtime matrix or add Boa to the strong workloads.
 
 ## Measurements
 
