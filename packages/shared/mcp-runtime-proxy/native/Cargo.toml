@@ -39,6 +39,6 @@ windows-sys = { version = "0.59", features = [
 [profile.release]
 codegen-units = 1
 lto = true
-opt-level = "s"
+opt-level = "z"
 panic = "abort"
 strip = true
