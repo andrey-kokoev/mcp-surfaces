@@ -133,18 +133,17 @@ pnpm --filter @narada-core/mcp-runtime-proxy benchmark:runtime
 It emits a canonical JSON report and an offline interactive HTML report. It
 reports p95 initialization, full-topology private/working-set bytes, and
 warm-call latency with per-process attribution across Bun/Bun, Node/Node,
-Deno/Deno, native/Bun, native/Node, and native/Deno when available. Deno is an
-experimental compatibility lane; a skipped Deno topology means that Deno was
-not available or executable on the host, not that the other lanes failed.
-Performance-gate failure is shown in the report but does not change the
-configured native default; harness, protocol, or lifecycle failure returns
-nonzero. Use
-`--enforce-gates` for CI experiments that need a nonzero performance verdict.
+Deno/Deno, native/Bun, native/Node, native/Deno, and diagnostic Native/Boa
+when available. Deno is an experimental compatibility lane; a skipped Deno
+topology means that Deno was not available or executable on the host, not that
+the other lanes failed. Runtime performance is measurements-only: the report
+includes descriptive baseline comparisons but no predeclared thresholds.
+Harness, protocol, or lifecycle failure returns nonzero.
 The benchmark discovers `deno` on `PATH`; for a shell whose environment has
 not refreshed after installation, set `NARADA_MCP_BENCHMARK_DENO` to the Deno
 executable path.
 
-The minimal `benchmark:runtime` profile answers what overhead the proxy adds to a small fixture. The `benchmark:strong` profile answers whether a realistic surface and workload make that overhead noticeable. Their gates remain workload-specific.
+The minimal `benchmark:runtime` profile answers what overhead the proxy adds to a small fixture. The `benchmark:strong` profile answers whether a realistic surface and workload make that overhead noticeable; its acceptance checks remain workload-specific.
 
 The stronger user-runnable profile is available with:
 

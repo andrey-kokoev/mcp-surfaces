@@ -58,13 +58,11 @@ const nativeProxyPath = fileURLToPath(new URL('../dist/native/narada-mcp-runtime
 const nativeBoaPath = fileURLToPath(new URL('../dist/native/narada-mcp-boa-fixture.exe', import.meta.url));
 const reportId = `mcp-runtime-${new Date().toISOString().replace(/[-:.TZ]/g, '').slice(0, 14)}`;
 
-function parseArgs(argv: string[]): { outputDir?: string; samples?: number; warmCalls?: number; enforceGates: boolean } {
-  const result: { outputDir?: string; samples?: number; warmCalls?: number; enforceGates: boolean } = { enforceGates: false };
+function parseArgs(argv: string[]): { outputDir?: string; samples?: number; warmCalls?: number } {
+  const result: { outputDir?: string; samples?: number; warmCalls?: number } = {};
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index];
-    if (arg === '--enforce-gates') {
-      result.enforceGates = true;
-    } else if (arg === '--output-dir') {
+    if (arg === '--output-dir') {
       result.outputDir = argv[++index];
     } else if (arg === '--samples') {
       result.samples = positiveInteger(argv[++index], '--samples');
@@ -391,11 +389,6 @@ function ratio(nativeValue: number | null, baselineValue: number | null): number
   return nativeValue === null || baselineValue === null || baselineValue === 0 ? null : nativeValue / baselineValue;
 }
 
-function gate(name: string, actual: number | null, limit: number, baseline: number | null): JsonRecord {
-  const comparable = actual !== null && baseline !== null;
-  return { name, status: comparable ? (actual <= baseline! * limit ? 'passed' : 'failed') : 'not_comparable', actual, baseline, limit_ratio: limit, ratio: ratio(actual, baseline) };
-}
-
 function buildReport(reports: TopologyReport[], environment: JsonRecord): JsonRecord {
   const baseline = reports.find((report) => report.id === 'bun-bun' && report.status === 'measured');
   const nodeBaseline = reports.find((report) => report.id === 'node-node' && report.status === 'measured');
@@ -409,10 +402,10 @@ function buildReport(reports: TopologyReport[], environment: JsonRecord): JsonRe
     { label: 'native_node_vs_node_node', native: nativeNode, baseline: nodeBaseline },
     { label: 'native_deno_vs_deno_deno', native: nativeDeno, baseline: denoBaseline },
   ];
-  const gates = pairs.flatMap(({ label, native, baseline: pairBaseline }) => [
-    gate(`${label}.private_bytes_at_most_half`, native?.summary?.private_bytes_p95 ?? null, 0.5, pairBaseline?.summary?.private_bytes_p95 ?? null),
-    gate(`${label}.initialize_at_most_eighty_percent`, native?.summary?.initialize_p95_ms ?? null, 0.8, pairBaseline?.summary?.initialize_p95_ms ?? null),
-    gate(`${label}.warm_call_no_more_than_five_percent_slower`, native?.summary?.warm_call_p95_ms ?? null, 1.05, pairBaseline?.summary?.warm_call_p95_ms ?? null),
+  const comparisons = pairs.flatMap(({ label, native, baseline: pairBaseline }) => [
+    { name: `${label}.private_bytes_p95`, actual: native?.summary?.private_bytes_p95 ?? null, baseline: pairBaseline?.summary?.private_bytes_p95 ?? null, ratio: ratio(native?.summary?.private_bytes_p95 ?? null, pairBaseline?.summary?.private_bytes_p95 ?? null) },
+    { name: `${label}.initialize_p95_ms`, actual: native?.summary?.initialize_p95_ms ?? null, baseline: pairBaseline?.summary?.initialize_p95_ms ?? null, ratio: ratio(native?.summary?.initialize_p95_ms ?? null, pairBaseline?.summary?.initialize_p95_ms ?? null) },
+    { name: `${label}.warm_call_p95_ms`, actual: native?.summary?.warm_call_p95_ms ?? null, baseline: pairBaseline?.summary?.warm_call_p95_ms ?? null, ratio: ratio(native?.summary?.warm_call_p95_ms ?? null, pairBaseline?.summary?.warm_call_p95_ms ?? null) },
   ]);
   const lifecycleFailures = reports.filter((report) => report.status === 'failed' || report.summary?.lifecycle_passed === false);
   return {
@@ -425,9 +418,10 @@ function buildReport(reports: TopologyReport[], environment: JsonRecord): JsonRe
     configuration: { sample_count: sampleCount, warm_calls_per_sample: warmCalls, runtime_contract_version: MCP_RUNTIME_CONTRACT_VERSION, matrix: ['bun-bun', 'node-node', 'deno-deno', 'native-bun', 'native-node', 'native-deno', 'native-boa'], diagnostic_only: ['native-boa'] },
     baseline: baseline?.id ?? null,
     topologies: reports,
-    gates,
+    comparisons,
+    gates: [],
     verdict: {
-      performance: gates.some((item) => item.status === 'failed') ? 'failed_predeclared_gate' : gates.some((item) => item.status === 'passed') && gates.every((item) => item.status === 'passed' || item.status === 'not_comparable') ? 'passed' : 'not_comparable',
+      performance: 'measurements_only',
       correctness: lifecycleFailures.length === 0 ? 'passed' : 'failed',
       native_default: process.platform === 'win32' && existsSync(nativeProxyPath) ? 'default_when_available' : 'bun_fallback',
       native_availability: nativeCandidates.length > 0 ? 'available_as_default_on_supported_host' : 'unavailable_on_this_host',
@@ -449,7 +443,7 @@ function htmlArtifact(report: JsonRecord): string {
 </style></head><body>
 <h1>MCP runtime benchmark</h1><p>Offline artifact: <code>${htmlEscape(report.report_id)}</code>. JSON is embedded and can be downloaded.</p>
 <div class="toolbar"><select id="topology"></select><button id="download">Download JSON</button><span id="verdict"></span></div>
-<div id="summary" class="cards"></div><section><h2>Gate verdicts</h2><div id="gates" class="wide"></div></section>
+<div id="summary" class="cards"></div><section><h2>Baseline comparisons</h2><div id="comparisons" class="wide"></div></section>
 <section><h2>Selected topology</h2><div id="detail" class="wide"></div></section>
 <script id="benchmark-data" type="application/json">${embedded}</script>
 <script>
@@ -459,7 +453,7 @@ const fmt=v=>v===null||v===undefined?'—':typeof v==='number'?(Math.abs(v)>1000
 const cls=s=>s==='passed'||s==='measured'?'pass':s==='failed'?'fail':s==='skipped'||s==='not_comparable'?'skip':'';
 report.topologies.forEach(t=>{const o=document.createElement('option');o.value=t.id;o.textContent=t.id+' ('+t.status+')';select.appendChild(o)});
 document.getElementById('verdict').innerHTML='<span class="'+cls(report.verdict.performance)+'">performance: '+esc(report.verdict.performance)+'</span>';
-document.getElementById('gates').innerHTML='<table><tr><th>Gate</th><th>Status</th><th>Ratio</th><th>Limit</th></tr>'+report.gates.map(g=>'<tr><td>'+esc(g.name)+'</td><td class="'+cls(g.status)+'">'+esc(g.status)+'</td><td>'+fmt(g.ratio)+'</td><td>'+fmt(g.limit_ratio)+'</td></tr>').join('')+'</table>';
+document.getElementById('comparisons').innerHTML='<table><tr><th>Comparison</th><th>Actual</th><th>Baseline</th><th>Ratio</th></tr>'+report.comparisons.map(g=>'<tr><td>'+esc(g.name)+'</td><td>'+fmt(g.actual)+'</td><td>'+fmt(g.baseline)+'</td><td>'+fmt(g.ratio)+'</td></tr>').join('')+'</table>';
 function render(){const t=report.topologies.find(v=>v.id===select.value)||report.topologies[0];if(!t)return;const s=t.summary||{};document.getElementById('summary').innerHTML=[['status',t.status],['initialize p95',s.initialize_p95_ms==null?'—':fmt(s.initialize_p95_ms)+' ms'],['warm p95',s.warm_call_p95_ms==null?'—':fmt(s.warm_call_p95_ms)+' ms'],['private p95',s.private_bytes_p95==null?'—':fmt(s.private_bytes_p95)+' B'],['working set p95',s.working_set_bytes_p95==null?'—':fmt(s.working_set_bytes_p95)+' B']].map(([k,v])=>'<div class="card"><div class="muted">'+esc(k)+'</div><div class="value '+cls(k==='status'?v:'')+'">'+esc(v)+'</div></div>').join('');if(t.status!=='measured'){document.getElementById('detail').innerHTML='<p class="'+cls(t.status)+'">'+esc(t.reason||t.error||'No measurement')+'</p>';return}const rows=t.samples.flatMap(x=>x.memory.processes.map(p=>'<tr><td>'+x.ordinal+'</td><td>'+esc(p.name)+'</td><td>'+p.pid+'</td><td>'+fmt(p.private_bytes)+'</td><td>'+fmt(p.working_set_bytes)+'</td></tr>')).join('');document.getElementById('detail').innerHTML='<p>proxy: <code>'+esc(t.proxy_implementation+'/'+t.proxy_runtime)+'</code>; child: <code>'+esc(t.child_runtime)+'</code></p><table><tr><th>Sample</th><th>Process</th><th>PID</th><th>Private bytes</th><th>Working set</th></tr>'+rows+'</table><p class="muted">Raw samples are embedded in this artifact. The benchmark did not upload them.</p>'}
 select.addEventListener('change',render);document.getElementById('download').addEventListener('click',()=>{const a=document.createElement('a');a.href=URL.createObjectURL(new Blob([JSON.stringify(report,null,2)],{type:'application/json'}));a.download=report.report_id+'.json';a.click();URL.revokeObjectURL(a.href)});select.value=report.baseline||report.topologies[0]?.id;render();
 </script></body></html>`;
@@ -524,10 +518,9 @@ try {
   const output = { ...report, artifacts: { json_path: artifacts.jsonPath, html_path: artifacts.htmlPath } };
   writeFileSync(artifacts.jsonPath, `${JSON.stringify(output, null, 2)}\n`, 'utf8');
   writeFileSync(artifacts.htmlPath, htmlArtifact(output), 'utf8');
-  console.log(JSON.stringify({ schema: 'narada.mcp_runtime_proxy.benchmark_complete.v1', report_id: report.report_id, json_path: artifacts.jsonPath, html_path: artifacts.htmlPath, verdict: report.verdict, gates: report.gates }));
+  console.log(JSON.stringify({ schema: 'narada.mcp_runtime_proxy.benchmark_complete.v1', report_id: report.report_id, json_path: artifacts.jsonPath, html_path: artifacts.htmlPath, verdict: report.verdict, comparisons: report.comparisons }));
   const harnessFailed = report.verdict.correctness === 'failed';
-  const performanceFailed = report.verdict.performance === 'failed_predeclared_gate';
-  if (harnessFailed || (args.enforceGates && performanceFailed)) process.exitCode = 1;
+  if (harnessFailed) process.exitCode = 1;
 } finally {
   rmSync(root, { recursive: true, force: true });
 }

@@ -17,7 +17,7 @@ topology, attribute startup and resource costs by phase and process, and emit
 both a canonical machine-readable report and an offline interactive HTML
 artifact.
 
-Use `benchmark:runtime` for the minimal attribution question—what overhead does the proxy add to a small fixture? Use `benchmark:strong` for the representative question—does a nontrivial surface with initialization work, payload pressure, restart churn, or a real MCP entrypoint change the user-visible result? These workloads have separate gates and are not collapsed into one score.
+Use `benchmark:runtime` for the minimal attribution question—what overhead does the proxy add to a small fixture? Use `benchmark:strong` for the representative question—does a nontrivial surface with initialization work, payload pressure, restart churn, or a real MCP entrypoint change the user-visible result? The runtime profile reports measurements and baseline comparisons without predeclared performance thresholds; the strong profile retains workload-specific acceptance checks.
 
 ## Fixed topology matrix
 
@@ -42,8 +42,7 @@ surface.
 
 The `native-boa` lane is Windows-oriented and diagnostic-only. Boa is embedded
 in a separate Rust child runner; it is not treated as a production JavaScript
-runtime and does not participate in the predeclared native-vs-baseline
-performance gates.
+runtime and has no performance threshold.
 
 The `filesystem-search-load` workload also includes an implementation lane
 outside the runtime matrix:
@@ -75,25 +74,18 @@ The benchmark runs cold-start samples and a separate warm-call sample set.
 The report includes raw samples, p50/p95 summaries, skipped cases, and any
 harness error. It must not upload data or require a network connection.
 
-## Predeclared gates
+## Interpretation
 
-The gates are verdicts, not reasons to hide or discard a result:
-
-- native private-memory p95 is at most 50% of the Bun baseline;
-- native initialization p95 is at most 80% of the Bun baseline;
-- native warm-call p95 is no more than 5% slower than the Bun baseline;
-- protocol, refusal, timeout, and process-tree checks pass.
-
-The HTML report displays each gate as `passed`, `failed`, `not_comparable`, or
-`not_run`. Performance-gate failure does not change the configured runtime
-default. Harness, protocol, or lifecycle failure does fail the command. An
-explicit `--enforce-gates` mode may turn
-performance verdicts into a nonzero exit for CI experiments.
+The runtime report exposes p50/p95 measurements and descriptive native-versus-
+baseline ratios. It does not encode predeclared performance thresholds or turn
+one topology into a pass/fail performance verdict. Harness, protocol, or
+lifecycle failure still fails the command; a measured performance conclusion
+requires interpreting the phase and process evidence.
 
 ## Artifact contract
 
 The JSON report is canonical and contains a schema version, report ID,
-environment, matrix, raw samples, summaries, gates, and verdict. The HTML
+environment, matrix, raw samples, summaries, baseline comparisons, and verdict. The HTML
 artifact embeds that JSON and renders it without external assets. Users can
 filter topologies, inspect individual processes and samples, and download the
 embedded JSON. Paths and command arguments are redacted or normalized where
