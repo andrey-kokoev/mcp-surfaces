@@ -33,11 +33,11 @@ effort; the existing implementation remains the authority.
 | `local-filesystem` | Rust-native target | Rust read applet and `fs_write_file` vertical slice exist. Finish remaining mutation parity, then compare full read/write workloads. |
 | `structured-command` | Intentionally dual | Rust policy, synchronous argv execution, timeout/cancellation, input refs, paging, output refs, and parse-check canary exist. JavaScript remains authoritative for durable background execution and confirmed Windows UAC elevation; benchmark both lanes without changing the default. |
 | `git` | Intentionally dual | Rust read-only Git subprocess canary is a coherent bounded implementation; JavaScript remains authoritative for scoped mutation, conflict recovery, and publication until those semantics justify a second authority. |
-| `mcp-loader` | Intentionally dual | Child attachment and lifecycle are mechanical, but loader projections and live contract discovery are tightly coupled to the JS catalog. Extract stable contracts first; benchmark attachment/restart behavior. |
-| `mcp-registrar` | Intentionally dual | Config projection is mechanical, but the registrar composes every package descriptor and carrier schema. A Rust implementation is only coherent after descriptor/compiler authority is separated. |
-| `runtime-introspection` | Intentionally dual | Read-only trace and SQLite analysis may fit Rust. Compare query/analysis workloads and memory before duplicating the current authority. |
-| `launcher` | Intentionally dual | Read-only registry and plan modeling is small, but currently has no demonstrated Rust advantage. Keep a Rust canary as an evidence question, not a rewrite. |
-| `scheduler` | Intentionally dual | Host task control is mechanical, but Windows Task Scheduler remains the domain authority. Benchmark a Rust actuator only after the command/contract boundary is isolated. |
+| `mcp-loader` | JavaScript-native | Child attachment is mechanical, but loader projections and live contract discovery are coupled to the JavaScript catalog; a Rust port would duplicate the descriptor authority without a demonstrated lifecycle benefit. |
+| `mcp-registrar` | JavaScript-native | The registrar composes every package descriptor and carrier schema, then projects carrier-specific configuration; moving that compiler to Rust would create a second authority. |
+| `runtime-introspection` | JavaScript-native | Trace analysis is portable, but the memory observer includes V8-attributed/residual process semantics and a Node-owned SQLite store; a Rust port would change the meaning of the evidence rather than merely change the runtime. |
+| `launcher` | JavaScript-native | Registry and plan modeling are small, but launcher behavior is host-console policy with no independent Rust advantage established. |
+| `scheduler` | JavaScript-native | Task activation, outbox dispatch, and Windows Task Scheduler behavior are policy/domain orchestration; a Rust actuator would not replace that authority. |
 | `agent-context` | JavaScript-native | Session, checkpoint, continuation, and hydration semantics are Narada domain behavior backed by shared SQLite and filesystem contracts. |
 | `artifacts` | JavaScript-native | Artifact registration and renderable-reference semantics are domain projections; no independent Rust benefit is established. |
 | `browser-control` | JavaScript-native | Loopback CDP and authenticated UX verification are host/provider adapters with sensitive lifecycle semantics. |
@@ -75,7 +75,7 @@ implementations.
 | Local filesystem | Native read tests; native `fs_write_file` protocol test; direct write microbenchmark; `filesystem-write-load` strong workload across JavaScript and Rust-native lanes | Full write-tool parity beyond `fs_write_file`; mutation failure/cancellation breadth; integrated parity for every remaining mutation tool |
 | Structured command | JavaScript contract tests and realistic command workload; Rust policy/guidance/synchronous slice, direct protocol/timeout test, and native-child integrated benchmark lane | Background durability and confirmed UAC remain JavaScript authority; add parity evidence for the retained Rust canary |
 | Git | JavaScript contract tests and bounded Git policy | Rust read canary, direct protocol test, and `real-git` strong workload now cover policy, status, sync state, branches, dirty summary, diff, log, and show. Mutation/recovery/publication remain JavaScript authority. |
-| Dual infrastructure | JavaScript contract/e2e tests | Rust canaries and evidence strong enough to justify dual maintenance |
+| Dual infrastructure | The shared Rust proxy is already native; structured-command and Git are the only current dual surface canaries | Reopen another infrastructure port only when a concrete Rust-owned boundary and workload hypothesis exists |
 | JavaScript-native surfaces | Package contract tests and domain-specific e2e tests | No Rust comparison is required unless the fit decision changes |
 
 ## Work order
@@ -89,8 +89,8 @@ implementations.
    JavaScript authority unless evidence changes the decision.
 4. Add focused workload rows for filesystem write, structured command, and Git
    inspection/publication to the benchmark report.
-5. Revisit the four dual-runtime infrastructure surfaces only with a concrete
-   workload hypothesis.
+5. Treat the remaining infrastructure surfaces as JavaScript-native unless a
+   concrete workload hypothesis identifies a separable Rust-owned boundary.
 
 Each Rust candidate must pass contract equivalence before a registrar default
 changes. Benchmarks are measurements, not predeclared latency thresholds; the
