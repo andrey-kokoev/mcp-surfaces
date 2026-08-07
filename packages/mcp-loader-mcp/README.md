@@ -49,6 +49,14 @@ Surface requests resolve by exact declared `surface_id` metadata or exact fabric
 
 The payload's declared creator and id namespace are lineage hints and accidental-misrouting guards, not cryptographic provenance or policy authority.
 
+## Native loader slice (experimental)
+
+`pnpm build:native` builds an opt-in Rust child-session kernel at `dist/native/narada-mcp-loader.exe` on Windows. It preserves MCP initialize, tools/list, tools/call, bounded child timeouts, JSONL/Content-Length input, attach, detach, and replayable child restart for one explicitly configured stdio child.
+
+This slice deliberately does not own Site-fabric resolution, surface admission policy, multi-connection inventory, runtime observation, stable handles, or output-reference materialization. The Bun loader remains the production implementation and the runtime matrix is not changed until those boundaries have parity evidence.
+
+Run `pnpm test:native` for the native smoke test; run the existing `test:bun` and `test:node` suites for loader parity.
+
 ## Boundary
 
 MCP Loader owns child attachment, initialization, tool discovery, call proxying, and detachment. It does not own the attached surfaces, authorize their domain operations, or materialize the Site action-admission registry.
