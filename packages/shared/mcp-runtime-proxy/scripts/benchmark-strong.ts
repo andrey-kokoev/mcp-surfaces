@@ -1059,6 +1059,10 @@ async function runRealGitSurface(surface: GitSurface): Promise<WorkloadReport> {
           const showStarted = performance.now();
           const show = await call(session, 'show-' + ordinal, 'git_show', { working_directory: surface.git.root, commit: surface.git.head, include_patch: false });
           const showCallMs = performance.now() - showStarted;
+          const refusalStarted = performance.now();
+          const refusal = await sendRequest(session.child, session.read, 'refusal-' + ordinal, 'tools/call', { name: 'git_show', arguments: { working_directory: surface.git.root, commit: 'bad!commit', include_patch: false } });
+          const refusalCallMs = performance.now() - refusalStarted;
+          assert.equal(refusal.error?.data?.code, 'git_invalid_commitish', topology.id + ':invalid_commit_refusal');
           const close = await closeSession(session);
           samples.push(makeSample(session, ordinal, close, {
             actual_entrypoint: surface.entrypoint,
@@ -1076,6 +1080,8 @@ async function runRealGitSurface(surface: GitSurface): Promise<WorkloadReport> {
             diff_call_ms: diffCallMs,
             log_call_ms: logCallMs,
             show_call_ms: showCallMs,
+            invalid_commit_refusal_ok: refusal.error?.data?.code === 'git_invalid_commitish',
+            invalid_commit_refusal_call_ms: refusalCallMs,
             status_response: status.result?.structuredContent ?? null,
           }));
           session = null;
@@ -1092,14 +1098,15 @@ async function runRealGitSurface(surface: GitSurface): Promise<WorkloadReport> {
         diff_call_p95_ms: percentile(samples.map((sample) => sample.metrics.diff_call_ms)),
         log_call_p95_ms: percentile(samples.map((sample) => sample.metrics.log_call_ms)),
         show_call_p95_ms: percentile(samples.map((sample) => sample.metrics.show_call_ms)),
-        protocol_successes: samples.filter((sample) => sample.metrics.policy_inspect_ok && sample.metrics.status_ok && sample.metrics.changed_summary_ok && sample.metrics.diff_ok && sample.metrics.log_ok && sample.metrics.show_ok).length,
+        invalid_commit_refusal_p95_ms: percentile(samples.map((sample) => sample.metrics.invalid_commit_refusal_call_ms)),
+        protocol_successes: samples.filter((sample) => sample.metrics.policy_inspect_ok && sample.metrics.status_ok && sample.metrics.changed_summary_ok && sample.metrics.diff_ok && sample.metrics.log_ok && sample.metrics.show_ok && sample.metrics.invalid_commit_refusal_ok).length,
       } });
     } catch (error) { reports.push({ id: topology.id, status: 'failed', samples, error: `${String(error)}`.slice(0, 2_000) }); }
   }
   const gates: JsonRecord[] = reports.map((report) => {
     const name = `${report.id}.real_git_protocol_and_read_calls`;
     if (report.status === 'skipped') return { name, status: 'not_run', reason: report.reason ?? 'unavailable' };
-    return booleanGate(name, report.status === 'measured' && report.samples.every((sample) => sample.lifecycle.protocol_ok && sample.metrics.policy_inspect_ok && sample.metrics.status_ok && sample.metrics.changed_summary_ok && sample.metrics.diff_ok && sample.metrics.log_ok && sample.metrics.show_ok && sample.lifecycle.leaked_processes === 0));
+    return booleanGate(name, report.status === 'measured' && report.samples.every((sample) => sample.lifecycle.protocol_ok && sample.metrics.policy_inspect_ok && sample.metrics.status_ok && sample.metrics.changed_summary_ok && sample.metrics.diff_ok && sample.metrics.log_ok && sample.metrics.show_ok && sample.metrics.invalid_commit_refusal_ok && sample.lifecycle.leaked_processes === 0));
   });
   return { id: 'real-git', description: 'Git read canary across JavaScript runtimes and the Rust-native applet: policy, status, dirty summary, diff, log, and commit metadata.', configuration: { samples: args.samples, surface: surface.id, tools: ['git_policy_inspect', 'git_status', 'git_changed_summary', 'git_diff', 'git_log', 'git_show'], repository_files: 96, mutated_file: surface.git.changedFile }, topologies: reports, gates, verdict: workloadVerdict(reports, gates) };
 }

@@ -99,12 +99,15 @@ try {
   const showResponses = await run(root, [
     { jsonrpc: '2.0', id: 12, method: 'tools/call', params: { name: 'git_show', arguments: { working_directory: root, commit, include_patch: false } } },
     { jsonrpc: '2.0', id: 13, method: 'tools/call', params: { name: 'git_status', arguments: { working_directory: join(root, '..') } } },
+    { jsonrpc: '2.0', id: 14, method: 'tools/call', params: { name: 'git_show', arguments: { working_directory: root, commit: 'bad!commit', include_patch: false } } },
   ]);
   const show = showResponses.find((response) => response.id === 12);
   const refused = showResponses.find((response) => response.id === 13);
+  const invalidCommit = showResponses.find((response) => response.id === 14);
   assert.equal(show?.result?.structuredContent?.schema, 'narada.git.show.v1');
   assert.equal(show?.result?.structuredContent?.include_patch, false);
   assert.equal(refused?.error?.data?.code, 'git_working_directory_outside_allowed_roots');
+  assert.equal(invalidCommit?.error?.data?.code, 'git_invalid_commitish');
   assert.equal(readFileSync(join(root, 'README.md'), 'utf8'), 'native git\n');
 } finally {
   rmSync(root, { recursive: true, force: true });
