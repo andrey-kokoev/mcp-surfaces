@@ -32,6 +32,7 @@ if ($env:NARADA_LAUNCH_REGISTRY_SITE_ROOT) {
 }
 $userHome = [Environment]::GetFolderPath('UserProfile')
 $sourceRoot = if ($env:NARADA_SRC_ROOT) { $env:NARADA_SRC_ROOT } else { Join-Path $userHome 'src' }
+$env:NARADA_SRC_ROOT = $sourceRoot
 $workspaceRoot = $sourceRoot
 $naradaProperRoot = if ($env:NARADA_PROPER_ROOT) {
   $env:NARADA_PROPER_ROOT

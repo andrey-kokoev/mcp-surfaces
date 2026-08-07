@@ -117,7 +117,7 @@ const TICKET_TOOLS: McpToolDefinition[] = [
     description: 'Freeze one bounded, revision-pinned ticket-processing context for a durable work-due event and return a typed SOP domain-operation receipt.',
     inputSchema: objectSchema({
       ticket_id: stringSchema('Canonical ticket id.'),
-      triggering_event_id: stringSchema('Work Lifecycle ticket-work-due event that admitted this processing occurrence.'),
+      triggering_event_id: stringSchema('Work Lifecycle processing-trigger event that admitted this processing occurrence.'),
       idempotency_key: stringSchema('Stable SOP action occurrence key; exact retries return the same frozen context.'),
     }, ['ticket_id', 'triggering_event_id', 'idempotency_key']),
     annotations: {
@@ -152,6 +152,11 @@ const TICKET_TOOLS: McpToolDefinition[] = [
           scope: stringSchema('Identifier authority scope.'),
           value: stringSchema('Stable identifier value.'),
         }, ['kind', 'scope', 'value']),
+      },
+      work_due_policy: {
+        type: 'string',
+        enum: ['deferred', 'inline'],
+        description: 'Whether this admission emits a deferred work-due trigger or an inline-only processing trigger.',
       },
     }, [
       'source_kind',
@@ -667,6 +672,9 @@ function callTicketTool(
             value: requiredString(key.value, 'correlation_value_required'),
           };
         }),
+        work_due_policy: args.work_due_policy === undefined
+          ? undefined
+          : requiredString(args.work_due_policy, 'work_due_policy_required') as 'deferred' | 'inline',
       })));
     }
     case 'ticket_admit_proposal': {

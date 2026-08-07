@@ -59,6 +59,14 @@ test('surface composes first-class ticket tools and revision-gated task tools', 
     const closeInput = closeTool.inputSchema as JsonRecord;
     const closeRequired = closeInput.required as string[];
     assert.ok(closeRequired.includes('expected_revision'));
+    const admitTool = tools.find((tool) => tool.name === 'ticket_admit_source');
+    assert.ok(admitTool);
+    const admitInput = admitTool.inputSchema as JsonRecord;
+    assert.deepEqual(asRecord(admitInput.properties).work_due_policy, {
+      type: 'string',
+      enum: ['deferred', 'inline'],
+      description: 'Whether this admission emits a deferred work-due trigger or an inline-only processing trigger.',
+    });
 
     const admittedOperation = await call(runtime, 1, 'ticket_admit_source', {
       source_kind: 'mailbox_message',
@@ -90,13 +98,38 @@ test('surface composes first-class ticket tools and revision-gated task tools', 
     assert.equal(asRecord(context.ticket).revision, 1);
     assert.equal(asRecord(context.triggering_event).event_id, admitted.event_id);
 
-    const shown = await call(runtime, 3, 'ticket_show', {
+    const inlineAdmissionOperation = await call(runtime, 3, 'ticket_admit_source', {
+      source_kind: 'mailbox_message',
+      source_scope: 'help@global-maxima.com',
+      immutable_source_id: 'message-2',
+      idempotency_key: 'admit:message-2',
+      causation_id: 'sync:message-2',
+      policy_version: 'admission-v1',
+      summary: 'Second support message',
+      source_ref: { mailbox_id: 'support', message_id: 'message-2' },
+      correlation_keys: [{
+        kind: 'conversation_id',
+        scope: 'help@global-maxima.com',
+        value: 'conversation-2',
+      }],
+      work_due_policy: 'inline',
+    });
+    const inlineAdmission = asRecord(inlineAdmissionOperation.result);
+    const inlineContextOperation = await call(runtime, 4, 'ticket_processing_context_load', {
+      ticket_id: inlineAdmission.ticket_id,
+      triggering_event_id: inlineAdmission.event_id,
+      idempotency_key: 'load-context:message-2',
+    });
+    const inlineContext = asRecord(inlineContextOperation.result);
+    assert.equal(asRecord(inlineContext.triggering_event).topic, 'work.ticket-inline-processing.v1');
+
+    const shown = await call(runtime, 5, 'ticket_show', {
       ticket_id: admitted.ticket_id,
     });
     assert.equal(asRecord(shown.ticket).revision, 1);
     assert.equal((shown.sources as unknown[]).length, 1);
     assert.deepEqual(shown.draft_refs, []);
-    const doctor = await call(runtime, 4, 'work_lifecycle_doctor', {});
+    const doctor = await call(runtime, 6, 'work_lifecycle_doctor', {});
     assert.equal(asRecord(doctor.concurrency).posture, 'sqlite_wal_transactional_multi_process');
   } finally {
     store.close();

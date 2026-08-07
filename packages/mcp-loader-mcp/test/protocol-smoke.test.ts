@@ -20,6 +20,16 @@ try {
     assert.ok(defaultState.policy.allowedSiteRoots.includes(resolve(userProfile, 'Narada').replace(/\\/g, '/')));
     assert.ok(defaultState.policy.allowedEntrypointPrefixes.includes(resolve(userProfile, 'Narada', 'tools').replace(/\\/g, '/')));
   }
+  const previousSourceRoot = process.env.NARADA_SRC_ROOT;
+  process.env.NARADA_SRC_ROOT = join(root, 'source-root');
+  try {
+    const sourceRootState = createServerState();
+    assert.ok(sourceRootState.policy.allowedSiteRoots.includes(resolve(root, 'source-root').replace(/\\/g, '/')));
+    assert.ok(sourceRootState.policy.allowedEnvVars.includes('NARADA_SRC_ROOT'));
+  } finally {
+    if (previousSourceRoot === undefined) delete process.env.NARADA_SRC_ROOT;
+    else process.env.NARADA_SRC_ROOT = previousSourceRoot;
+  }
 
   const syntheticObservation = (path: string, mtime_ms: number) => ({
     path,

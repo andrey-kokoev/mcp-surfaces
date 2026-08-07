@@ -149,6 +149,8 @@ function defaultAllowedSiteRoots(): string[] {
   const roots = [MCP_WORKSPACE_ROOT];
   const configuredRoots = normalizeStringArray(process.env.NARADA_MCP_ALLOWED_SITE_ROOTS) ?? [];
   if (configuredRoots.length > 0) roots.push(...configuredRoots);
+  const configuredSourceRoot = optionalString(process.env.NARADA_SRC_ROOT);
+  if (configuredSourceRoot) roots.push(resolve(configuredSourceRoot));
   const configuredSiteRoot = optionalString(process.env.NARADA_SITE_ROOT);
   if (configuredSiteRoot) roots.push(configuredSiteRoot);
   const userProfile = process.env.USERPROFILE || process.env.HOME;
@@ -343,6 +345,7 @@ const DEFAULT_ALLOWED_ENV_VARS = [
   'NARADA_CARRIER_SESSION_ID',
   'NARADA_SITE_ID',
   'NARADA_ROOT',
+  'NARADA_SRC_ROOT',
 ];
 type JsonRecord = Record<string, unknown>;
 

@@ -827,10 +827,14 @@ try {
     CREATE TABLE site_registry (
       site_id TEXT PRIMARY KEY,
       site_root TEXT NOT NULL,
-      created_at TEXT NOT NULL
+      created_at TEXT NOT NULL,
+      lifecycle_status TEXT NOT NULL DEFAULT 'active'
     );
   `);
-  catalogDb.prepare('INSERT INTO site_registry (site_id, site_root, created_at) VALUES (?, ?, ?)').run('fixture-canonical', root, '2026-07-10T00:00:00Z');
+  catalogDb.prepare('INSERT INTO site_registry (site_id, site_root, created_at, lifecycle_status) VALUES (?, ?, ?, ?)')
+    .run('fixture-canonical', root, '2026-07-10T00:00:00Z', 'active');
+  catalogDb.prepare('INSERT INTO site_registry (site_id, site_root, created_at, lifecycle_status) VALUES (?, ?, ?, ?)')
+    .run('fixture-retired', join(root, 'retired'), '2026-07-10T00:00:01Z', 'retired');
   catalogDb.close();
   const previousCatalogPath: any = process.env.NARADA_SITE_REGISTRY_DB;
   process.env.NARADA_SITE_REGISTRY_DB = catalogDbPath;
@@ -843,6 +847,31 @@ try {
   } finally {
     if (previousCatalogPath === undefined) delete process.env.NARADA_SITE_REGISTRY_DB;
     else process.env.NARADA_SITE_REGISTRY_DB = previousCatalogPath;
+  }
+
+  const legacyCatalogDbPath: any = join(root, 'site-registry-legacy.db');
+  const legacyCatalogDb: any = new DatabaseSync(legacyCatalogDbPath);
+  legacyCatalogDb.exec(`
+    CREATE TABLE site_registry (
+      site_id TEXT PRIMARY KEY,
+      site_root TEXT NOT NULL,
+      created_at TEXT NOT NULL
+    );
+  `);
+  legacyCatalogDb.prepare('INSERT INTO site_registry (site_id, site_root, created_at) VALUES (?, ?, ?)')
+    .run('fixture-legacy', root, '2026-07-10T00:00:02Z');
+  legacyCatalogDb.close();
+  const previousLegacyCatalogPath: any = process.env.NARADA_SITE_REGISTRY_DB;
+  process.env.NARADA_SITE_REGISTRY_DB = legacyCatalogDbPath;
+  try {
+    const sites: any = await call('registrar_site_list', {});
+    const siteData: any = view(sites);
+    assert.equal(siteData.catalog_source, 'user_site_site_registry');
+    assert.equal(siteData.compatibility_fallback_used, false);
+    assert.deepEqual((siteData.items as Array<Record<string, unknown>>).map((site) => site.site_id), ['fixture-legacy']);
+  } finally {
+    if (previousLegacyCatalogPath === undefined) delete process.env.NARADA_SITE_REGISTRY_DB;
+    else process.env.NARADA_SITE_REGISTRY_DB = previousLegacyCatalogPath;
   }
 
   const carriers: any = await call('registrar_carrier_list', {});

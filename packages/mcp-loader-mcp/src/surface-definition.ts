@@ -24,7 +24,7 @@ export function surfaceDefinition(): DefinedSurface {
         kind: 'stdio',
         command: 'node',
         args: [],
-        env: [],
+        env: ['NARADA_SRC_ROOT'],
       },
       injection_scope: 'user_site',
       default_injection: 'enabled',

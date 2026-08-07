@@ -186,7 +186,8 @@ function tomlBasicString(value: string): string {
 
 const MCP_REGISTRAR_PACKAGE_ROOT = findPackageRoot(dirname(fileURLToPath(import.meta.url)));
 const MCP_WORKSPACE_ROOT = resolve(process.env.NARADA_MCP_WORKSPACE_ROOT ?? join(MCP_REGISTRAR_PACKAGE_ROOT, '..', '..'));
-const MCP_WORKSPACE_PARENT = resolve(MCP_WORKSPACE_ROOT, '..');
+const configuredSourceRoot = process.env.NARADA_SRC_ROOT?.trim();
+const MCP_WORKSPACE_PARENT = resolve(configuredSourceRoot || resolve(MCP_WORKSPACE_ROOT, '..'));
 const MCP_SURFACES_ROOT = portablePathLiteral(process.env.NARADA_MCP_SURFACES_ROOT ?? join(MCP_WORKSPACE_ROOT, 'packages'));
 const MCP_RUNTIME_PROXY_ENTRYPOINT = `${MCP_SURFACES_ROOT}/shared/mcp-runtime-proxy/dist/src/main.js`;
 const MCP_NATIVE_RUNTIME_PROXY_ENTRYPOINT = `${MCP_SURFACES_ROOT}/shared/mcp-runtime-proxy/dist/native/narada-mcp-runtime${process.platform === 'win32' ? '.exe' : ''}`;
@@ -336,6 +337,7 @@ type SiteRegistryCatalog = {
 type SiteRegistryRow = {
   site_id?: unknown;
   site_root?: unknown;
+  lifecycle_status?: unknown;
 };
 
 function comparableSiteRoot(root: string): string {
@@ -461,10 +463,19 @@ function readSiteRegistryCatalog(): SiteRegistryCatalog {
   let db: DatabaseSync | null = null;
   try {
     db = new DatabaseSync(path, { readOnly: true });
-    const rows = db.prepare('SELECT site_id, site_root FROM site_registry ORDER BY created_at ASC, site_id ASC').all() as unknown as SiteRegistryRow[];
+    // Older User Site registries predate lifecycle_status. Keep those
+    // registries readable while treating rows without the column as active.
+    const columns = db.prepare('PRAGMA table_info(site_registry)').all() as unknown as Array<{ name?: unknown }>;
+    const hasLifecycleStatus = columns.some((column) => column.name === 'lifecycle_status');
+    const select = hasLifecycleStatus
+      ? 'SELECT site_id, site_root, lifecycle_status FROM site_registry ORDER BY created_at ASC, site_id ASC'
+      : 'SELECT site_id, site_root FROM site_registry ORDER BY created_at ASC, site_id ASC';
+    const rows = db.prepare(select).all() as unknown as SiteRegistryRow[];
     const items = rows.flatMap((row) => {
       const siteId = typeof row.site_id === 'string' ? row.site_id.trim() : '';
       const rawRoot = typeof row.site_root === 'string' ? row.site_root.trim() : '';
+      const lifecycleStatus = typeof row.lifecycle_status === 'string' ? row.lifecycle_status.trim().toLowerCase() : 'active';
+      if (lifecycleStatus !== 'active') return [];
       if (!siteId || !rawRoot) return [];
       const root = canonicalWorkspaceRoot(rawRoot);
       const known = KNOWN_SITES.find((site) => comparableSiteRoot(site.root) === comparableSiteRoot(root));
@@ -1024,7 +1035,7 @@ export function registrarSurfaceDefinition(): DefinedSurface {
         kind: 'stdio',
         command: 'node',
         args: [],
-        env: [],
+        env: ['NARADA_SRC_ROOT'],
       },
       injection_scope: 'user_site',
       default_injection: 'enabled',
