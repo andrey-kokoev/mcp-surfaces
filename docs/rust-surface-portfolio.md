@@ -30,7 +30,7 @@ effort; the existing implementation remains the authority.
 
 | Surface | Decision | Current evidence and next proof |
 |---|---|---|
-| `local-filesystem` | Rust-native target | Rust read applet and `fs_write_file` vertical slice exist. Finish remaining mutation parity, then compare full read/write workloads. |
+| `local-filesystem` | Intentionally dual | Rust read applet and `fs_write_file` vertical slice are tested and benchmarked. JavaScript remains authoritative for string/range edit, patch, move, directory, and delete tools until a full mutation-parity slice earns a default change. |
 | `structured-command` | Intentionally dual | Rust policy, synchronous argv execution, timeout/cancellation, input refs, paging, output refs, and parse-check canary exist. JavaScript remains authoritative for durable background execution and confirmed Windows UAC elevation; benchmark both lanes without changing the default. |
 | `git` | Intentionally dual | Rust read-only Git subprocess canary is a coherent bounded implementation; JavaScript remains authoritative for scoped mutation, conflict recovery, and publication until those semantics justify a second authority. |
 | `mcp-loader` | JavaScript-native | Child attachment is mechanical, but loader projections and live contract discovery are coupled to the JavaScript catalog; a Rust port would duplicate the descriptor authority without a demonstrated lifecycle benefit. |
