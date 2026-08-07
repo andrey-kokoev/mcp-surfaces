@@ -47,12 +47,29 @@ try {
     { jsonrpc: '2.0', id: 8, method: 'tools/call', params: { name: 'fs_str_replace_file', arguments: { path: 'nested/note.txt', old: 'hello native', new: 'hello replaced' } } },
     { jsonrpc: '2.0', id: 9, method: 'tools/call', params: { name: 'fs_replace_range', arguments: { path: 'nested/note.txt', start_line: 1, end_line: 1, replacement: 'range replaced' } } },
     { jsonrpc: '2.0', id: 10, method: 'tools/call', params: { name: 'fs_read_file', arguments: { path: 'nested/note.txt', offset: 1, limit: 10 } } },
+    { jsonrpc: '2.0', id: 11, method: 'tools/call', params: { name: 'fs_create_directory', arguments: { path: 'nested/dir', recursive: true } } },
+    { jsonrpc: '2.0', id: 12, method: 'tools/call', params: { name: 'fs_rename_directory', arguments: { from: 'nested/dir', to: 'nested/renamed' } } },
+    { jsonrpc: '2.0', id: 13, method: 'tools/call', params: { name: 'fs_write_file', arguments: { path: 'nested/renamed/moved.txt', content: 'move me\n' } } },
+    { jsonrpc: '2.0', id: 14, method: 'tools/call', params: { name: 'fs_move_path', arguments: { from: 'nested/renamed/moved.txt', to: 'nested/moved.txt' } } },
+    { jsonrpc: '2.0', id: 15, method: 'tools/call', params: { name: 'fs_delete_directory', arguments: { path: 'nested/renamed' } } },
+    { jsonrpc: '2.0', id: 16, method: 'tools/call', params: { name: 'fs_create_directory', arguments: { path: 'nested/nonempty', recursive: true } } },
+    { jsonrpc: '2.0', id: 17, method: 'tools/call', params: { name: 'fs_write_file', arguments: { path: 'nested/nonempty/file.txt', content: 'not empty\n' } } },
+    { jsonrpc: '2.0', id: 18, method: 'tools/call', params: { name: 'fs_delete_directory', arguments: { path: 'nested/nonempty' } } },
+    { jsonrpc: '2.0', id: 19, method: 'tools/call', params: { name: 'fs_delete_directory', arguments: { path: 'nested/nonempty', recursive: true } } },
+    { jsonrpc: '2.0', id: 20, method: 'tools/call', params: { name: 'fs_move_path', arguments: { from: 'nested/moved.txt', to: 'nested/stale.txt', expected_from_sha256: 'deadbeef' } } },
+    { jsonrpc: '2.0', id: 21, method: 'tools/call', params: { name: 'fs_move_path', arguments: { from: 'nested/moved.txt', to: '../outside.txt' } } },
+    { jsonrpc: '2.0', id: 22, method: 'tools/call', params: { name: 'fs_write_file', arguments: { path: 'nested/existing.txt', content: 'existing\n' } } },
+    { jsonrpc: '2.0', id: 23, method: 'tools/call', params: { name: 'fs_move_path', arguments: { from: 'nested/moved.txt', to: 'nested/existing.txt' } } },
   ], auditLogDir);
   const byId = new Map(responses.map((response) => [response.id, response]));
   assert.equal(byId.get(1)?.result?.serverInfo?.name, 'local-filesystem-write-native');
   assert.equal(byId.get(2)?.result?.tools?.some((tool: JsonRecord) => tool.name === 'fs_write_file'), true);
   assert.equal(byId.get(2)?.result?.tools?.some((tool: JsonRecord) => tool.name === 'fs_str_replace_file'), true);
   assert.equal(byId.get(2)?.result?.tools?.some((tool: JsonRecord) => tool.name === 'fs_replace_range'), true);
+  assert.equal(byId.get(2)?.result?.tools?.some((tool: JsonRecord) => tool.name === 'fs_move_path'), true);
+  assert.equal(byId.get(2)?.result?.tools?.some((tool: JsonRecord) => tool.name === 'fs_create_directory'), true);
+  assert.equal(byId.get(2)?.result?.tools?.some((tool: JsonRecord) => tool.name === 'fs_rename_directory'), true);
+  assert.equal(byId.get(2)?.result?.tools?.some((tool: JsonRecord) => tool.name === 'fs_delete_directory'), true);
   assert.equal(byId.get(3)?.result?.structuredContent?.effective_permissions?.can_write, true);
   assert.equal(byId.get(4)?.result?.structuredContent?.schema, 'local.filesystem.write_file.v1');
   assert.equal(byId.get(4)?.result?.structuredContent?.status, 'written');
@@ -64,6 +81,16 @@ try {
   assert.equal(byId.get(9)?.result?.structuredContent?.schema, 'local.filesystem.replace_range.v1');
   assert.equal(byId.get(9)?.result?.structuredContent?.status, 'replaced_range');
   assert.equal(byId.get(10)?.result?.structuredContent?.content, 'range replaced');
+  assert.equal(byId.get(11)?.result?.structuredContent?.status, 'created');
+  assert.equal(byId.get(12)?.result?.structuredContent?.schema, 'local.filesystem.rename_directory.v1');
+  assert.equal(byId.get(14)?.result?.structuredContent?.schema, 'local.filesystem.move_path.v1');
+  assert.equal(byId.get(15)?.result?.structuredContent?.status, 'deleted');
+  assert.equal(byId.get(18)?.error?.data?.code, 'delete_directory_not_empty');
+  assert.equal(byId.get(19)?.result?.structuredContent?.status, 'deleted');
+  assert.equal(byId.get(20)?.error?.data?.code, 'fs_move_path_expected_metadata_mismatch');
+  assert.equal(byId.get(21)?.error?.data?.code, 'path_outside_allowed_roots');
+  assert.equal(byId.get(22)?.result?.structuredContent?.status, 'written');
+  assert.equal(byId.get(23)?.error?.data?.code, 'move_destination_exists');
   assert.match(readFileSync(join(auditLogDir, 'filesystem-mcp-audit.jsonl'), 'utf8'), /"operation":"fs_write_file"/);
 
   const readResponses = await run('read', root, [

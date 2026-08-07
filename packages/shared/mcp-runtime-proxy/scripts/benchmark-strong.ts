@@ -418,7 +418,7 @@ async function runFilesystemSearchLoad(surface: FilesystemSurface): Promise<Work
 }
 
 async function runFilesystemWriteLoad(surface: FilesystemSurface): Promise<WorkloadReport> {
-  const requiredTools = ['fs_doctor', 'fs_write_file', 'fs_str_replace_file', 'fs_replace_range', 'fs_read_file', 'fs_stat'];
+  const requiredTools = ['fs_doctor', 'fs_write_file', 'fs_str_replace_file', 'fs_replace_range', 'fs_read_file', 'fs_stat', 'fs_move_path', 'fs_create_directory', 'fs_rename_directory', 'fs_delete_directory'];
   const reports: WorkloadTopology[] = [];
   for (const topology of filesystemWriteTopologies.filter((candidate) => selectedTopology(candidate.id))) {
     const unavailable = topologyAvailable(topology);
@@ -440,7 +440,8 @@ async function runFilesystemWriteLoad(surface: FilesystemSurface): Promise<Workl
           };
           const doctor = await timedCall('doctor', 'fs_doctor', {});
           assert.equal(doctor.status, 'ok', topology.id + ':doctor_not_ok');
-          const relativePath = `benchmark-write-${ordinal}.txt`;
+          const pathTag = topology.id.replace(/[^a-z0-9-]+/gi, '-');
+          const relativePath = `benchmark-write-${pathTag}-${ordinal}.txt`;
           const content = `filesystem-write-benchmark-${ordinal}\n`;
           const write = await timedCall('write', 'fs_write_file', { path: relativePath, content, create_parent_directories: true });
           assert.equal(write.status, 'written', topology.id + ':write_not_written');
@@ -452,6 +453,34 @@ async function runFilesystemWriteLoad(surface: FilesystemSurface): Promise<Workl
           assert.equal(read.content, `range-replace-${ordinal}`, topology.id + ':readback_mismatch');
           const stat = await timedCall('stat', 'fs_stat', { path: relativePath });
           assert.equal(stat.type, 'file', topology.id + ':stat_not_file');
+          const directoryPath = `benchmark-directory-${pathTag}-${ordinal}`;
+          const renamedDirectoryPath = `benchmark-renamed-directory-${pathTag}-${ordinal}`;
+          const createDirectory = await timedCall('create-directory', 'fs_create_directory', { path: `${directoryPath}/nested`, recursive: true });
+          assert.equal(createDirectory.status, 'created', topology.id + ':create_directory_not_created');
+          const renameDirectory = await timedCall('rename-directory', 'fs_rename_directory', { from: directoryPath, to: renamedDirectoryPath });
+          assert.equal(renameDirectory.status, 'moved', topology.id + ':rename_directory_not_moved');
+          const nestedPath = `${renamedDirectoryPath}/moved-source.txt`;
+          const nestedWrite = await timedCall('nested-write', 'fs_write_file', { path: nestedPath, content: `nested-${ordinal}\n`, create_parent_directories: false });
+          assert.equal(nestedWrite.status, 'written', topology.id + ':nested_write_not_written');
+          const movedPath = `benchmark-moved-${pathTag}-${ordinal}.txt`;
+          const move = await timedCall('move', 'fs_move_path', { from: nestedPath, to: movedPath });
+          assert.equal(move.status, 'moved', topology.id + ':move_not_moved');
+          const deleteNestedDirectory = await timedCall('delete-nested-directory', 'fs_delete_directory', { path: `${renamedDirectoryPath}/nested`, recursive: true });
+          assert.equal(deleteNestedDirectory.status, 'deleted', topology.id + ':delete_nested_directory_not_deleted');
+          const deleteDirectory = await timedCall('delete-directory', 'fs_delete_directory', { path: renamedDirectoryPath, recursive: true });
+          assert.equal(deleteDirectory.status, 'deleted', topology.id + ':delete_directory_not_deleted');
+          const nonemptyDirectoryPath = `benchmark-nonempty-directory-${pathTag}-${ordinal}`;
+          const createNonemptyDirectory = await timedCall('create-nonempty-directory', 'fs_create_directory', { path: nonemptyDirectoryPath, recursive: true });
+          assert.equal(createNonemptyDirectory.status, 'created', topology.id + ':create_nonempty_directory_not_created');
+          const nonemptyChildPath = `${nonemptyDirectoryPath}/child.txt`;
+          const nonemptyWrite = await timedCall('nonempty-write', 'fs_write_file', { path: nonemptyChildPath, content: `nonempty-${ordinal}\n`, create_parent_directories: false });
+          assert.equal(nonemptyWrite.status, 'written', topology.id + ':nonempty_write_not_written');
+          const nonemptyRefusalStarted = performance.now();
+          const nonemptyRefusal = await sendRequest(session.child, session.read, 'nonempty-delete-refusal-' + ordinal, 'tools/call', { name: 'fs_delete_directory', arguments: { path: nonemptyDirectoryPath } });
+          const nonemptyRefusalCallMs = performance.now() - nonemptyRefusalStarted;
+          assert.equal(nonemptyRefusal.error?.data?.code, 'delete_directory_not_empty', topology.id + ':nonempty_delete_refusal');
+          const recursiveDelete = await timedCall('recursive-delete', 'fs_delete_directory', { path: nonemptyDirectoryPath, recursive: true });
+          assert.equal(recursiveDelete.status, 'deleted', topology.id + ':recursive_delete_not_deleted');
           const refusalStarted = performance.now();
           const refusal = await sendRequest(session.child, session.read, 'write-refusal-' + ordinal, 'tools/call', { name: 'fs_write_file', arguments: { path: relativePath, content: 'unexpected\n', expected_sha256: 'deadbeef' } });
           const refusalCallMs = performance.now() - refusalStarted;
@@ -466,11 +495,20 @@ async function runFilesystemWriteLoad(surface: FilesystemSurface): Promise<Workl
             replace_range_ok: true,
             readback_ok: true,
             stat_ok: true,
+            create_directory_ok: true,
+            rename_directory_ok: true,
+            nested_write_ok: true,
+            move_ok: true,
+            delete_nested_directory_ok: true,
+            delete_directory_ok: true,
+            nonempty_delete_refusal_ok: nonemptyRefusal.error?.data?.code === 'delete_directory_not_empty',
+            recursive_delete_ok: true,
             expected_sha_refusal_ok: refusal.error?.data?.code === 'fs_write_file_expected_sha256_mismatch',
             sequential_command_count: sequentialLatencies.length,
             sequential_command_latencies_ms: sequentialLatencies,
             sequential_command_p95_ms: percentile(sequentialLatencies),
             expected_sha_refusal_call_ms: refusalCallMs,
+            nonempty_delete_refusal_call_ms: nonemptyRefusalCallMs,
           }));
           session = null;
         } finally {
@@ -487,7 +525,8 @@ async function runFilesystemWriteLoad(surface: FilesystemSurface): Promise<Workl
           sequential_command_count: samples[0]?.metrics.sequential_command_count ?? 0,
           sequential_command_p95_ms: percentile(sequentialLatencies),
           expected_sha_refusal_p95_ms: percentile(samples.map((sample) => Number(sample.metrics.expected_sha_refusal_call_ms))),
-          filesystem_write_commands_ok: samples.every((sample) => sample.metrics.write_ok && sample.metrics.str_replace_ok && sample.metrics.replace_range_ok && sample.metrics.readback_ok && sample.metrics.stat_ok && sample.metrics.expected_sha_refusal_ok),
+          nonempty_delete_refusal_p95_ms: percentile(samples.map((sample) => Number(sample.metrics.nonempty_delete_refusal_call_ms))),
+          filesystem_write_commands_ok: samples.every((sample) => sample.metrics.write_ok && sample.metrics.str_replace_ok && sample.metrics.replace_range_ok && sample.metrics.readback_ok && sample.metrics.stat_ok && sample.metrics.create_directory_ok && sample.metrics.rename_directory_ok && sample.metrics.nested_write_ok && sample.metrics.move_ok && sample.metrics.delete_nested_directory_ok && sample.metrics.delete_directory_ok && sample.metrics.nonempty_delete_refusal_ok && sample.metrics.recursive_delete_ok && sample.metrics.expected_sha_refusal_ok),
         },
       });
     } catch (error) { reports.push({ id: topology.id, status: 'failed', samples, error: 'filesystem_write_benchmark_error:' + String(error).slice(0, 2_000) }); }
@@ -499,8 +538,8 @@ async function runFilesystemWriteLoad(surface: FilesystemSurface): Promise<Workl
   });
   return {
     id: 'filesystem-write-load',
-    description: 'Filesystem mutation workload over the governed write contract: doctor, write, readback, stat, and expected-hash refusal.',
-    configuration: { samples: args.samples, fixture_root: surface.filesystem.root, operations: ['fs_doctor', 'fs_write_file', 'fs_str_replace_file', 'fs_replace_range', 'fs_read_file', 'fs_stat', 'fs_write_file(expected_sha256 refusal)'], topologies: filesystemWriteTopologies.map((topology) => topology.id) },
+    description: 'Filesystem mutation workload over the governed write contract: write, exact/range edits, readback/stat, directory lifecycle, move, recursive delete, and stale-hash/nonempty-delete refusals.',
+    configuration: { samples: args.samples, fixture_root: surface.filesystem.root, operations: ['fs_doctor', 'fs_write_file', 'fs_str_replace_file', 'fs_replace_range', 'fs_read_file', 'fs_stat', 'fs_create_directory', 'fs_rename_directory', 'fs_move_path', 'fs_delete_directory', 'fs_delete_directory(nonempty refusal)', 'fs_write_file(expected_sha256 refusal)'], topologies: filesystemWriteTopologies.map((topology) => topology.id) },
     topologies: reports,
     gates,
     verdict: workloadVerdict(reports, gates),
