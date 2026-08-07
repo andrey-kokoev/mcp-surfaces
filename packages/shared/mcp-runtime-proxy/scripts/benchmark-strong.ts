@@ -418,7 +418,7 @@ async function runFilesystemSearchLoad(surface: FilesystemSurface): Promise<Work
 }
 
 async function runFilesystemWriteLoad(surface: FilesystemSurface): Promise<WorkloadReport> {
-  const requiredTools = ['fs_doctor', 'fs_write_file', 'fs_read_file', 'fs_stat'];
+  const requiredTools = ['fs_doctor', 'fs_write_file', 'fs_str_replace_file', 'fs_replace_range', 'fs_read_file', 'fs_stat'];
   const reports: WorkloadTopology[] = [];
   for (const topology of filesystemWriteTopologies.filter((candidate) => selectedTopology(candidate.id))) {
     const unavailable = topologyAvailable(topology);
@@ -444,8 +444,12 @@ async function runFilesystemWriteLoad(surface: FilesystemSurface): Promise<Workl
           const content = `filesystem-write-benchmark-${ordinal}\n`;
           const write = await timedCall('write', 'fs_write_file', { path: relativePath, content, create_parent_directories: true });
           assert.equal(write.status, 'written', topology.id + ':write_not_written');
+          const stringReplace = await timedCall('str-replace', 'fs_str_replace_file', { path: relativePath, old: content.trimEnd(), new: `string-replace-${ordinal}` });
+          assert.equal(stringReplace.status, 'replaced', topology.id + ':str_replace_not_replaced');
+          const rangeReplace = await timedCall('replace-range', 'fs_replace_range', { path: relativePath, start_line: 1, end_line: 1, replacement: `range-replace-${ordinal}` });
+          assert.equal(rangeReplace.status, 'replaced_range', topology.id + ':replace_range_not_replaced');
           const read = await timedCall('read', 'fs_read_file', { path: relativePath, offset: 0, limit: 100 });
-          assert.equal(read.content, content.trimEnd(), topology.id + ':readback_mismatch');
+          assert.equal(read.content, `range-replace-${ordinal}`, topology.id + ':readback_mismatch');
           const stat = await timedCall('stat', 'fs_stat', { path: relativePath });
           assert.equal(stat.type, 'file', topology.id + ':stat_not_file');
           const refusalStarted = performance.now();
@@ -458,6 +462,8 @@ async function runFilesystemWriteLoad(surface: FilesystemSurface): Promise<Workl
             advertised_tool_count: session.tools.length,
             proxy_status_tool_present: session.tools.some((tool) => String(tool.name) === 'mcp_runtime_proxy_status'),
             write_ok: true,
+            str_replace_ok: true,
+            replace_range_ok: true,
             readback_ok: true,
             stat_ok: true,
             expected_sha_refusal_ok: refusal.error?.data?.code === 'fs_write_file_expected_sha256_mismatch',
@@ -481,7 +487,7 @@ async function runFilesystemWriteLoad(surface: FilesystemSurface): Promise<Workl
           sequential_command_count: samples[0]?.metrics.sequential_command_count ?? 0,
           sequential_command_p95_ms: percentile(sequentialLatencies),
           expected_sha_refusal_p95_ms: percentile(samples.map((sample) => Number(sample.metrics.expected_sha_refusal_call_ms))),
-          filesystem_write_commands_ok: samples.every((sample) => sample.metrics.write_ok && sample.metrics.readback_ok && sample.metrics.stat_ok && sample.metrics.expected_sha_refusal_ok),
+          filesystem_write_commands_ok: samples.every((sample) => sample.metrics.write_ok && sample.metrics.str_replace_ok && sample.metrics.replace_range_ok && sample.metrics.readback_ok && sample.metrics.stat_ok && sample.metrics.expected_sha_refusal_ok),
         },
       });
     } catch (error) { reports.push({ id: topology.id, status: 'failed', samples, error: 'filesystem_write_benchmark_error:' + String(error).slice(0, 2_000) }); }
@@ -494,7 +500,7 @@ async function runFilesystemWriteLoad(surface: FilesystemSurface): Promise<Workl
   return {
     id: 'filesystem-write-load',
     description: 'Filesystem mutation workload over the governed write contract: doctor, write, readback, stat, and expected-hash refusal.',
-    configuration: { samples: args.samples, fixture_root: surface.filesystem.root, operations: ['fs_doctor', 'fs_write_file', 'fs_read_file', 'fs_stat', 'fs_write_file(expected_sha256 refusal)'], topologies: filesystemWriteTopologies.map((topology) => topology.id) },
+    configuration: { samples: args.samples, fixture_root: surface.filesystem.root, operations: ['fs_doctor', 'fs_write_file', 'fs_str_replace_file', 'fs_replace_range', 'fs_read_file', 'fs_stat', 'fs_write_file(expected_sha256 refusal)'], topologies: filesystemWriteTopologies.map((topology) => topology.id) },
     topologies: reports,
     gates,
     verdict: workloadVerdict(reports, gates),
