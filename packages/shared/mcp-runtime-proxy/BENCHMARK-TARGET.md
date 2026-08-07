@@ -146,3 +146,8 @@ The filesystem-write-load workload is selected by default when requested with
 `NARADA_MCP_STRONG_WORKLOADS=filesystem-write-load` (or the equivalent CLI
 selection). It uses the write-mode contract and requires every topology to
 advertise the complete bounded mutation set before measuring it.
+
+For paired runtime comparisons, set
+`NARADA_MCP_STRONG_REVERSE_WRITE_TOPOLOGIES=1` for a second run so collection
+order is reversed; compare raw per-sample metrics rather than relying only on
+the report's aggregate p95.

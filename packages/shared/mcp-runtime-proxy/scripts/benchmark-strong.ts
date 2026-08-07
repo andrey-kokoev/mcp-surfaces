@@ -420,7 +420,11 @@ async function runFilesystemSearchLoad(surface: FilesystemSurface): Promise<Work
 async function runFilesystemWriteLoad(surface: FilesystemSurface): Promise<WorkloadReport> {
   const requiredTools = ['fs_doctor', 'fs_write_file', 'fs_str_replace_file', 'fs_replace_range', 'fs_read_file', 'fs_stat', 'fs_move_path', 'fs_create_directory', 'fs_rename_directory', 'fs_delete_directory'];
   const reports: WorkloadTopology[] = [];
-  for (const topology of filesystemWriteTopologies.filter((candidate) => selectedTopology(candidate.id))) {
+  const selectedWriteTopologies = filesystemWriteTopologies.filter((candidate) => selectedTopology(candidate.id));
+  const orderedWriteTopologies = process.env['NARADA_MCP_STRONG_REVERSE_WRITE_TOPOLOGIES'] === '1'
+    ? [...selectedWriteTopologies].reverse()
+    : selectedWriteTopologies;
+  for (const topology of orderedWriteTopologies) {
     const unavailable = topologyAvailable(topology);
     if (unavailable) { reports.push({ id: topology.id, status: 'skipped', reason: unavailable, samples: [] }); continue; }
     const samples: Sample[] = [];
