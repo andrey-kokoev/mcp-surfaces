@@ -71,7 +71,7 @@ implementations.
 
 | Area | Existing evidence | Missing evidence |
 |---|---|---|
-| Runtime proxy | Native protocol tests; minimal and strong runtime benchmarks; native startup/memory measurements | Per-surface lifecycle workload attribution |
+| Runtime proxy | Native protocol tests; minimal and strong runtime benchmarks; native startup/memory measurements; registrar unit test confirms native proxy default when available | Per-surface lifecycle workload attribution beyond the candidate matrix |
 | Local filesystem | Native read tests; native `fs_write_file` protocol test; direct write microbenchmark; `filesystem-write-load` strong workload across JavaScript and Rust-native lanes | Full write-tool parity beyond `fs_write_file`; mutation failure/cancellation breadth; integrated parity for every remaining mutation tool |
 | Structured command | JavaScript contract tests and realistic command workload; Rust policy/guidance/synchronous slice, direct protocol/timeout test, and native-child integrated benchmark lane | Background durability and confirmed UAC remain JavaScript authority; add parity evidence for the retained Rust canary |
 | Git | JavaScript contract tests and bounded Git policy | Rust read canary, direct protocol test, and `real-git` strong workload now cover policy, status, sync state, branches, dirty summary, diff, log, and show. Mutation/recovery/publication remain JavaScript authority. |
