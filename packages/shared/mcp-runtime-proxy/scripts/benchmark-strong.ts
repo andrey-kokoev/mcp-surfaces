@@ -76,7 +76,7 @@ mkdirSync(fixtureRoot, { recursive: true });
 mkdirSync(diagnosticsRoot, { recursive: true });
 const reportId = `mcp-runtime-strong-${new Date().toISOString().replace(/[-:.TZ]/g, '').slice(0, 14)}`;
 const bunProxyPath = fileURLToPath(new URL('../dist/src/main.js', import.meta.url));
-const nativeProxyPath = fileURLToPath(new URL('../dist/native/narada-mcp-runtime.exe', import.meta.url));
+const nativeProxyPath = process.env['NARADA_MCP_NATIVE_PROXY_PATH']?.trim() || fileURLToPath(new URL('../dist/native/narada-mcp-runtime.exe', import.meta.url));
 const nativeRhaiFilesystemPath = fileURLToPath(new URL('../dist/native/narada-mcp-rhai-filesystem.exe', import.meta.url));
 const dotnetFilesystemPath = join(workspaceRoot, 'packages', 'local-filesystem-mcp', 'native-dotnet', 'publish', 'narada-filesystem-dotnet.exe');
 
@@ -500,11 +500,18 @@ function writeRealSurface(): Surface {
     join(workspaceRoot, 'packages', 'shared', 'mcp-telemetry'),
   ];
   const manifestPath = join(root, 'structured-command-artifact-manifest.json');
+  const nativeManifestPath = join(root, 'native-structured-command-artifact-manifest.json');
   buildWorkspaceArtifactManifest({ workspaceRoot, packageRoots, outputPath: manifestPath });
   return {
     id: 'structured-command',
     entrypoint: join(workspaceRoot, 'packages', 'structured-command-mcp', 'dist', 'src', 'main.js'),
     manifestPath,
+    nativeVariants: {
+      rust: {
+        entrypoint: nativeProxyPath,
+        manifestPath: writeSyntheticManifest([nativeProxyPath], nativeManifestPath),
+      },
+    },
     workingDirectory: realRoot,
     childArgs: ['--allowed-root', realRoot, '--allow-command', 'node'],
   };
@@ -919,6 +926,7 @@ async function runRealSurface(surface: Surface): Promise<WorkloadReport> {
     { id: 'node-structured-node', proxy: 'javascript', proxyRuntime: 'node', childRuntime: 'node' },
     { id: 'deno-structured-node', proxy: 'javascript', proxyRuntime: 'deno', childRuntime: 'node' },
     { id: 'native-structured-node', proxy: 'native', proxyRuntime: 'native', childRuntime: 'node' },
+    { id: 'native-structured-native', proxy: 'native', proxyRuntime: 'native', childRuntime: 'native_applet', childApplet: 'structured-command', nativeVariant: 'rust' },
   ];
   const reports: WorkloadTopology[] = [];
   for (const topology of topologies.filter((candidate) => selectedTopology(candidate.id))) {
@@ -931,17 +939,21 @@ async function runRealSurface(surface: Surface): Promise<WorkloadReport> {
         try {
           session = await openSession(topology, surface, 'real-structured-command', ordinal);
           const toolNames = session.tools.map((tool) => String(tool.name));
-          assert.ok(toolNames.includes('structured_command_execution_policy_inspect'), `${topology.id}:real_surface_tool_missing`);
-          const policy = await call(session, `policy-${ordinal}`, 'structured_command_execution_policy_inspect', {});
-          const execution = await call(session, `execute-${ordinal}`, 'structured_command_execute', { command: 'node', args: ['-e', 'process.stdout.write("strong-real-surface")'], working_directory: surface.workingDirectory, timeout_ms: 5_000, wait_for_completion: true, test_scope: 'focused', expected_cost: 'low' });
+          assert.ok(toolNames.includes('structured_command_execution_policy_inspect'), topology.id + ':real_surface_tool_missing');
+          const policyStarted = performance.now();
+          const policy = await call(session, 'policy-' + ordinal, 'structured_command_execution_policy_inspect', {});
+          const policyCallMs = performance.now() - policyStarted;
+          const executionStarted = performance.now();
+          const execution = await call(session, 'execute-' + ordinal, 'structured_command_execute', { command: 'node', args: ['-e', 'process.stdout.write("strong-real-surface")'], working_directory: surface.workingDirectory, timeout_ms: 5_000, wait_for_completion: true, test_scope: 'focused', expected_cost: 'low' });
+          const executionCallMs = performance.now() - executionStarted;
           const close = await closeSession(session);
-          samples.push(makeSample(session, ordinal, close, { actual_entrypoint: surface.entrypoint, advertised_tool_count: session.tools.length, proxy_status_tool_present: session.tools.some((tool) => String(tool.name) === 'mcp_runtime_proxy_status'), policy_inspect_ok: Boolean(policy.result), safe_command_ok: Boolean(execution.result), safe_command_response: execution.result ?? null }));
+          samples.push(makeSample(session, ordinal, close, { actual_entrypoint: surface.entrypoint, advertised_tool_count: session.tools.length, proxy_status_tool_present: session.tools.some((tool) => String(tool.name) === 'mcp_runtime_proxy_status'), policy_inspect_ok: Boolean(policy.result), policy_call_ms: policyCallMs, safe_command_ok: Boolean(execution.result), execution_call_ms: executionCallMs, safe_command_response: execution.result ?? null }));
           session = null;
         } finally {
           if (session) await closeSession(session).catch(() => undefined);
         }
       }
-      reports.push({ id: topology.id, status: 'measured', samples, summary: { ...summary(samples), actual_entrypoint: surface.entrypoint, safe_command_successes: samples.filter((sample) => sample.metrics.safe_command_ok).length } });
+      reports.push({ id: topology.id, status: 'measured', samples, summary: { ...summary(samples), actual_entrypoint: surface.entrypoint, policy_call_p95_ms: percentile(samples.map((sample) => sample.metrics.policy_call_ms)), execution_call_p95_ms: percentile(samples.map((sample) => sample.metrics.execution_call_ms)), safe_command_successes: samples.filter((sample) => sample.metrics.safe_command_ok).length } });
     } catch (error) { reports.push({ id: topology.id, status: 'failed', samples, error: `${String(error)}`.slice(0, 2_000) }); }
   }
   const gates: JsonRecord[] = reports.map((report) => {
@@ -949,7 +961,7 @@ async function runRealSurface(surface: Surface): Promise<WorkloadReport> {
     if (report.status === 'skipped') return { name, status: 'not_run', reason: report.reason ?? 'unavailable' };
     return booleanGate(name, report.status === 'measured' && report.samples.every((sample) => sample.lifecycle.protocol_ok && sample.metrics.policy_inspect_ok && sample.metrics.safe_command_ok && sample.lifecycle.leaked_processes === 0));
   });
-  return { id: 'real-structured-command', description: 'Actual @narada-core/structured-command-mcp entrypoint with policy inspection and a safe allowlisted Node command.', configuration: { samples: args.samples, surface: surface.id, validation_tool: 'structured_command_execution_policy_inspect', safe_tool: 'structured_command_execute', command: ['node', '-e', 'process.stdout.write("strong-real-surface")'] }, topologies: reports, gates, verdict: workloadVerdict(reports, gates) };
+  return { id: 'real-structured-command', description: 'Structured-command policy and safe argv execution across JavaScript and Rust-native applets.', configuration: { samples: args.samples, surface: surface.id, validation_tool: 'structured_command_execution_policy_inspect', safe_tool: 'structured_command_execute', command: ['node', '-e', 'process.stdout.write("strong-real-surface")'] }, topologies: reports, gates, verdict: workloadVerdict(reports, gates) };
 }
 
 function gate(name: string, actual: number | null, baseline: number | null, limit: number, absoluteSlack = 0): JsonRecord {
