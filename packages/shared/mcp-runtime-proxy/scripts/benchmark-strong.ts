@@ -417,6 +417,90 @@ async function runFilesystemSearchLoad(surface: FilesystemSurface): Promise<Work
   };
 }
 
+async function runFilesystemWriteLoad(surface: FilesystemSurface): Promise<WorkloadReport> {
+  const requiredTools = ['fs_doctor', 'fs_write_file', 'fs_read_file', 'fs_stat'];
+  const reports: WorkloadTopology[] = [];
+  for (const topology of filesystemWriteTopologies.filter((candidate) => selectedTopology(candidate.id))) {
+    const unavailable = topologyAvailable(topology);
+    if (unavailable) { reports.push({ id: topology.id, status: 'skipped', reason: unavailable, samples: [] }); continue; }
+    const samples: Sample[] = [];
+    try {
+      for (let ordinal = 0; ordinal < args.samples; ordinal += 1) {
+        let session: Session | null = null;
+        try {
+          session = await openSession(topology, surface, 'filesystem-write-load', ordinal);
+          const toolNames = session.tools.map((tool) => String(tool.name));
+          for (const requiredTool of requiredTools) assert.ok(toolNames.includes(requiredTool), topology.id + ':missing_tool:' + requiredTool);
+          const sequentialLatencies: number[] = [];
+          const timedCall = async (name: string, tool: string, input: JsonRecord): Promise<JsonRecord> => {
+            const started = performance.now();
+            const response = await call(session!, name + '-' + ordinal, tool, input);
+            sequentialLatencies.push(performance.now() - started);
+            return filesystemStructuredContent(response, tool);
+          };
+          const doctor = await timedCall('doctor', 'fs_doctor', {});
+          assert.equal(doctor.status, 'ok', topology.id + ':doctor_not_ok');
+          const relativePath = `benchmark-write-${ordinal}.txt`;
+          const content = `filesystem-write-benchmark-${ordinal}\n`;
+          const write = await timedCall('write', 'fs_write_file', { path: relativePath, content, create_parent_directories: true });
+          assert.equal(write.status, 'written', topology.id + ':write_not_written');
+          const read = await timedCall('read', 'fs_read_file', { path: relativePath, offset: 0, limit: 100 });
+          assert.equal(read.content, content.trimEnd(), topology.id + ':readback_mismatch');
+          const stat = await timedCall('stat', 'fs_stat', { path: relativePath });
+          assert.equal(stat.type, 'file', topology.id + ':stat_not_file');
+          const refusalStarted = performance.now();
+          const refusal = await sendRequest(session.child, session.read, 'write-refusal-' + ordinal, 'tools/call', { name: 'fs_write_file', arguments: { path: relativePath, content: 'unexpected\n', expected_sha256: 'deadbeef' } });
+          const refusalCallMs = performance.now() - refusalStarted;
+          assert.equal(refusal.error?.data?.code, 'fs_write_file_expected_sha256_mismatch', topology.id + ':expected_sha_refusal');
+          const close = await closeSession(session);
+          samples.push(makeSample(session, ordinal, close, {
+            actual_entrypoint: surface.entrypoint,
+            advertised_tool_count: session.tools.length,
+            proxy_status_tool_present: session.tools.some((tool) => String(tool.name) === 'mcp_runtime_proxy_status'),
+            write_ok: true,
+            readback_ok: true,
+            stat_ok: true,
+            expected_sha_refusal_ok: refusal.error?.data?.code === 'fs_write_file_expected_sha256_mismatch',
+            sequential_command_count: sequentialLatencies.length,
+            sequential_command_latencies_ms: sequentialLatencies,
+            sequential_command_p95_ms: percentile(sequentialLatencies),
+            expected_sha_refusal_call_ms: refusalCallMs,
+          }));
+          session = null;
+        } finally {
+          if (session) await closeSession(session).catch(() => undefined);
+        }
+      }
+      const sequentialLatencies = samples.flatMap((sample) => sample.metrics.sequential_command_latencies_ms as number[]);
+      reports.push({
+        id: topology.id,
+        status: 'measured',
+        samples,
+        summary: {
+          ...summary(samples),
+          sequential_command_count: samples[0]?.metrics.sequential_command_count ?? 0,
+          sequential_command_p95_ms: percentile(sequentialLatencies),
+          expected_sha_refusal_p95_ms: percentile(samples.map((sample) => Number(sample.metrics.expected_sha_refusal_call_ms))),
+          filesystem_write_commands_ok: samples.every((sample) => sample.metrics.write_ok && sample.metrics.readback_ok && sample.metrics.stat_ok && sample.metrics.expected_sha_refusal_ok),
+        },
+      });
+    } catch (error) { reports.push({ id: topology.id, status: 'failed', samples, error: 'filesystem_write_benchmark_error:' + String(error).slice(0, 2_000) }); }
+  }
+  const gates = reports.map((report) => {
+    const name = report.id + '.filesystem_write_protocol_and_lifecycle';
+    if (report.status === 'skipped') return { name, status: 'not_run', reason: report.reason ?? 'unavailable' };
+    return booleanGate(name, report.status === 'measured' && report.summary?.filesystem_write_commands_ok === true && report.summary?.lifecycle_passed === true);
+  });
+  return {
+    id: 'filesystem-write-load',
+    description: 'Filesystem mutation workload over the governed write contract: doctor, write, readback, stat, and expected-hash refusal.',
+    configuration: { samples: args.samples, fixture_root: surface.filesystem.root, operations: ['fs_doctor', 'fs_write_file', 'fs_read_file', 'fs_stat', 'fs_write_file(expected_sha256 refusal)'], topologies: filesystemWriteTopologies.map((topology) => topology.id) },
+    topologies: reports,
+    gates,
+    verdict: workloadVerdict(reports, gates),
+  };
+}
+
 function commandSpec(command: RuntimeCommand | null): JsonRecord | null {
   return command ? { executable: command.executable, runtime_args: command.runtime_args, child_invocation: [command.executable, ...command.runtime_args, '<entrypoint>'] } : null;
 }
@@ -799,6 +883,11 @@ const filesystemTopologies: Topology[] = [
   { id: 'native-dotnet-filesystem', proxy: 'native', proxyRuntime: 'native', childRuntime: 'native_applet', childApplet: 'filesystem', nativeVariant: 'dotnet' },
 ];
 
+const filesystemWriteTopologies: Topology[] = [
+  ...proxyTopologies,
+  { id: 'native-filesystem-write', proxy: 'native', proxyRuntime: 'native', childRuntime: 'native_applet', childApplet: 'filesystem', nativeVariant: 'rust' },
+];
+
 const gitTopologies: Topology[] = [
   { id: 'bun-git-node', proxy: 'javascript', proxyRuntime: 'bun', childRuntime: 'node' },
   { id: 'node-git-node', proxy: 'javascript', proxyRuntime: 'node', childRuntime: 'node' },
@@ -1163,12 +1252,17 @@ const gitSurface = writeGitSurface();
 
 try {
   const workloadRequested = (id: string) => !args.workloads?.length || args.workloads.includes(id);
-  const filesystemSurface = workloadRequested('filesystem-search-load') ? writeFilesystemSearchFixture() : null;
+  const filesystemFixture = workloadRequested('filesystem-search-load') || workloadRequested('filesystem-write-load') ? writeFilesystemSearchFixture() : null;
+  const filesystemSurface = workloadRequested('filesystem-search-load') ? filesystemFixture : null;
+  const filesystemWriteSurface = workloadRequested('filesystem-write-load') && filesystemFixture
+    ? { ...filesystemFixture, id: 'local-filesystem-write', childArgs: ['--mode', 'write', '--allowed-root', filesystemFixture.filesystem.root] }
+    : null;
   const workloads = [
     workloadRequested('representative') ? await runRepresentative(representativeSurface) : null,
     workloadRequested('payload-load') ? await runPayloadLoad(representativeSurface) : null,
     workloadRequested('restart-soak') ? await runSoak(representativeSurface) : null,
     filesystemSurface ? await runFilesystemSearchLoad(filesystemSurface) : null,
+    filesystemWriteSurface ? await runFilesystemWriteLoad(filesystemWriteSurface) : null,
     workloadRequested('real-structured-command') ? await runRealSurface(realSurface) : null,
     workloadRequested('real-git') ? await runRealGitSurface(gitSurface) : null,
   ].filter((workload): workload is WorkloadReport => workload !== null);
@@ -1179,9 +1273,9 @@ try {
     schema: 'narada.mcp_runtime_proxy.strong_benchmark_report.v1',
     report_id: reportId,
     generated_at: new Date().toISOString(),
-    objective: 'Measure runtime behavior under representative, payload/load, restart/soak, filesystem-search, structured-command, and Git read workloads without replacing the minimal attribution benchmark.',
+    objective: 'Measure runtime behavior under representative, payload/load, restart/soak, filesystem read/write, structured-command, and Git read workloads without replacing the minimal attribution benchmark.',
     environment: { platform: process.platform, architecture: process.arch, runner: process.execPath, workspace_root: workspaceRoot, runtimes: Object.fromEntries(Object.entries(runtimeCommands).map(([name, command]) => [name, command ? commandVersion(command) : null])), runtime_commands: Object.fromEntries(Object.entries(runtimeCommands).map(([name, command]) => [name, commandSpec(command)])), native_artifact: process.platform === 'win32' && existsSync(nativeProxyPath), real_surfaces: [{ id: realSurface.id, entrypoint: realSurface.entrypoint }, { id: gitSurface.id, entrypoint: gitSurface.entrypoint }], diagnostics_root: keepArtifacts ? root : null },
-    configuration: { samples: args.samples, load_repetitions: args.loadRepetitions, soak_cycles: args.soakCycles, soak_warm_calls: args.soakWarmCalls, filesystem_files: args.filesystemFiles, filesystem_lines: Math.max(32, args.filesystemLines), filesystem_concurrent: args.filesystemConcurrent, workloads: args.workloads ?? ['representative', 'payload-load', 'restart-soak', 'filesystem-search-load', 'real-structured-command', 'real-git'], topologies: args.topologies ?? 'all', runtime_contract_version: MCP_RUNTIME_CONTRACT_VERSION },
+    configuration: { samples: args.samples, load_repetitions: args.loadRepetitions, soak_cycles: args.soakCycles, soak_warm_calls: args.soakWarmCalls, filesystem_files: args.filesystemFiles, filesystem_lines: Math.max(32, args.filesystemLines), filesystem_concurrent: args.filesystemConcurrent, workloads: args.workloads ?? ['representative', 'payload-load', 'restart-soak', 'filesystem-search-load', 'filesystem-write-load', 'real-structured-command', 'real-git'], topologies: args.topologies ?? 'all', runtime_contract_version: MCP_RUNTIME_CONTRACT_VERSION },
     workloads,
     verdict: { correctness: correctnessFailed ? 'failed' : 'passed', performance: performanceTargetNotMet ? 'performance_target_not_met' : performanceNotComparable ? 'not_comparable' : 'passed', native_default: process.platform === 'win32' && existsSync(nativeProxyPath) ? 'default_when_available' : 'bun_fallback', deno_support: 'experimental_lane_only' },
   };
