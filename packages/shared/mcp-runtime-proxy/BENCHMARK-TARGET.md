@@ -149,5 +149,7 @@ advertise the complete bounded mutation set before measuring it.
 
 For paired runtime comparisons, set
 `NARADA_MCP_STRONG_REVERSE_WRITE_TOPOLOGIES=1` for a second run so collection
-order is reversed; compare raw per-sample metrics rather than relying only on
-the report's aggregate p95.
+order is reversed. The corresponding structured-command and Git controls are
+`NARADA_MCP_STRONG_REVERSE_STRUCTURED_TOPOLOGIES=1` and
+`NARADA_MCP_STRONG_REVERSE_GIT_TOPOLOGIES=1`. Compare raw per-sample metrics
+rather than relying only on the report's aggregate p95.

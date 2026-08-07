@@ -30,9 +30,9 @@ effort; the existing implementation remains the authority.
 
 | Surface | Decision | Current evidence and next proof |
 |---|---|---|
-| `local-filesystem` | Intentionally dual | Rust read applet plus the bounded low-level mutation set (`fs_write_file`, exact string/range edits, move, create/rename directory, and delete directory) are protocol-tested and pass the realistic write workload. JavaScript remains authoritative for `fs_apply_patch`, whose parser, durable recovery, and patch-outcome semantics are still a separate authority boundary. |
-| `structured-command` | Intentionally dual | Rust policy, synchronous argv execution, timeout/cancellation, input refs, paging, output refs, and parse-check canary exist. JavaScript remains authoritative for durable background execution and confirmed Windows UAC elevation; benchmark both lanes without changing the default. |
-| `git` | Intentionally dual | Rust read-only Git subprocess canary is a coherent bounded implementation; JavaScript remains authoritative for scoped mutation, conflict recovery, and publication until those semantics justify a second authority. |
+| `local-filesystem` | Intentionally dual | Rust read applet plus the bounded low-level mutation set (`fs_write_file`, exact string/range edits, move, create/rename directory, and delete directory) are protocol-tested and pass the realistic write workload. The 100-sample order-reversed Rust/Rhai comparison shows no reliable command-latency advantage for Rhai and higher memory/refusal cost; direct Rust remains the simpler native implementation. JavaScript remains authoritative for `fs_apply_patch`, whose parser, durable recovery, and patch-outcome semantics are still a separate authority boundary. |
+| `structured-command` | Intentionally dual | Rust policy, synchronous argv execution, timeout/cancellation, input refs, paging, output refs, and parse-check canary exist. A 60-sample order-reversed Native/Native versus Native/Node comparison shows decisive native startup, memory, policy, and execute advantages, but JavaScript remains authoritative for durable background execution and confirmed Windows UAC elevation; the complete surface therefore stays JS-child by default. |
+| `git` | Intentionally dual | Rust read-only Git subprocess canary is a coherent bounded implementation. A 60-sample order-reversed Native/Native versus Native/Node comparison shows decisive native startup, memory, status, diff, log, show, and refusal advantages, but JavaScript remains authoritative for scoped mutation, conflict recovery, and publication until those semantics justify a second authority. |
 | `mcp-loader` | JavaScript-native | Child attachment is mechanical, but loader projections and live contract discovery are coupled to the JavaScript catalog; a Rust port would duplicate the descriptor authority without a demonstrated lifecycle benefit. |
 | `mcp-registrar` | JavaScript-native | The registrar composes every package descriptor and carrier schema, then projects carrier-specific configuration; moving that compiler to Rust would create a second authority. |
 | `runtime-introspection` | JavaScript-native | Trace analysis is portable, but the memory observer includes V8-attributed/residual process semantics and a Node-owned SQLite store; a Rust port would change the meaning of the evidence rather than merely change the runtime. |
@@ -67,14 +67,25 @@ The Rust proxy itself is shared infrastructure rather than a catalog surface;
 it is already Rust-native and is benchmarked independently from child-surface
 implementations.
 
+## Default and rollback controls
+
+The native proxy default is selected only when the Windows native artifact is
+available; `--runtime-proxy-implementation bun` is the documented carrier-wide
+rollback. The local-filesystem read applet is the only native child selected by
+default; `surface_implementation=js` is its explicit rollback/override. The
+structured-command and Git native children are benchmark canaries, not hidden
+defaults: their JavaScript children remain the authority until the retained
+semantics have native parity. JavaScript-native surfaces have no native
+promotion or rollback path because no Rust authority is selected for them.
+
 ## Evidence ledger
 
 | Area | Existing evidence | Missing evidence |
 |---|---|---|
 | Runtime proxy | Native protocol tests; minimal and strong runtime benchmarks; native startup/memory measurements; registrar unit test confirms native proxy default when available | Per-surface lifecycle workload attribution beyond the candidate matrix |
-| Local filesystem | Native read tests; native low-level mutation protocol test (write, string/range edits, move, directory lifecycle, delete refusal/recursion); direct write test; `filesystem-write-load` strong workload across JavaScript and Rust-native lanes | `fs_apply_patch` remains JavaScript authority for parser/durable recovery/patch outcomes; broaden failure/cancellation evidence only if that boundary is reconsidered |
-| Structured command | JavaScript contract tests and realistic command workload; Rust policy/guidance/synchronous slice, direct protocol/timeout test, and native-child integrated benchmark lane | Background durability and confirmed UAC remain JavaScript authority; add parity evidence for the retained Rust canary |
-| Git | JavaScript contract tests and bounded Git policy | Rust read canary, direct protocol test, and `real-git` strong workload now cover policy, status, sync state, branches, dirty summary, diff, log, and show. Mutation/recovery/publication remain JavaScript authority. |
+| Local filesystem | Native read tests; native low-level mutation protocol test (write, string/range edits, move, directory lifecycle, delete refusal/recursion); direct write test; `filesystem-write-load` strong workload across JavaScript, Rust, and Rust+Rhai lanes; 60-sample order-reversed Rust-versus-Node read comparison; 100-sample order-reversed Rust/Rhai write comparison | `fs_apply_patch` remains JavaScript authority for parser/durable recovery/patch outcomes; broaden failure/cancellation evidence only if that boundary is reconsidered |
+| Structured command | JavaScript contract tests and realistic command workload; Rust policy/guidance/synchronous slice, direct protocol/timeout test, native-child integrated benchmark lane, and 60-sample order-reversed statistical comparison | Background durability and confirmed UAC remain JavaScript authority; native default remains unjustified until those semantics have parity |
+| Git | JavaScript contract tests and bounded Git policy; Rust read canary, direct protocol test, `real-git` workload, and 60-sample order-reversed statistical comparison cover policy, status, sync state, branches, dirty summary, diff, log, show, and refusal behavior | Mutation/recovery/publication remain JavaScript authority; native default remains unjustified until those semantics have parity |
 | Dual infrastructure | The shared Rust proxy is already native; structured-command and Git are the only current dual surface canaries | Reopen another infrastructure port only when a concrete Rust-owned boundary and workload hypothesis exists |
 | JavaScript-native surfaces | Package contract tests and domain-specific e2e tests | No Rust comparison is required unless the fit decision changes |
 

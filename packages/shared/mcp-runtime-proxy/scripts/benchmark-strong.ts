@@ -244,7 +244,7 @@ function filesystemStructuredContent(response: JsonRecord, operation: string): J
 async function runFilesystemSearchLoad(surface: FilesystemSurface): Promise<WorkloadReport> {
   const requiredTools = ['fs_doctor', 'fs_grep_search', 'fs_glob_search', 'fs_file_metrics', 'fs_read_file_range', 'fs_stat'];
   const reports: WorkloadTopology[] = [];
-  for (const topology of filesystemTopologies.filter((candidate) => selectedTopology(candidate.id))) {
+  for (const topology of orderedSelectedTopologies(filesystemTopologies, 'NARADA_MCP_STRONG_REVERSE_SEARCH_TOPOLOGIES')) {
     const unavailable = topologyAvailable(topology);
     if (unavailable) { reports.push({ id: topology.id, status: 'skipped', reason: unavailable, samples: [] }); continue; }
     const samples: Sample[] = [];
@@ -420,11 +420,7 @@ async function runFilesystemSearchLoad(surface: FilesystemSurface): Promise<Work
 async function runFilesystemWriteLoad(surface: FilesystemSurface): Promise<WorkloadReport> {
   const requiredTools = ['fs_doctor', 'fs_write_file', 'fs_str_replace_file', 'fs_replace_range', 'fs_read_file', 'fs_stat', 'fs_move_path', 'fs_create_directory', 'fs_rename_directory', 'fs_delete_directory'];
   const reports: WorkloadTopology[] = [];
-  const selectedWriteTopologies = filesystemWriteTopologies.filter((candidate) => selectedTopology(candidate.id));
-  const orderedWriteTopologies = process.env['NARADA_MCP_STRONG_REVERSE_WRITE_TOPOLOGIES'] === '1'
-    ? [...selectedWriteTopologies].reverse()
-    : selectedWriteTopologies;
-  for (const topology of orderedWriteTopologies) {
+  for (const topology of orderedSelectedTopologies(filesystemWriteTopologies, 'NARADA_MCP_STRONG_REVERSE_WRITE_TOPOLOGIES')) {
     const unavailable = topologyAvailable(topology);
     if (unavailable) { reports.push({ id: topology.id, status: 'skipped', reason: unavailable, samples: [] }); continue; }
     const samples: Sample[] = [];
@@ -808,6 +804,13 @@ const activeChildren = new Set<ChildProcessWithoutNullStreams>();
 
 function selectedTopology(id: string): boolean { return !args.topologies?.length || args.topologies.includes(id); }
 
+function orderedSelectedTopologies(topologies: Topology[], reverseEnvironmentVariable?: string): Topology[] {
+  const selected = topologies.filter((candidate) => selectedTopology(candidate.id));
+  return reverseEnvironmentVariable && process.env[reverseEnvironmentVariable] === '1'
+    ? [...selected].reverse()
+    : selected;
+}
+
 async function closeRawChild(child: ChildProcessWithoutNullStreams): Promise<void> {
   if (child.exitCode === null && child.signalCode === null) {
     try { child.stdin.destroy(); } catch {}
@@ -1131,7 +1134,7 @@ async function runRealSurface(surface: Surface): Promise<WorkloadReport> {
     { id: 'native-structured-native', proxy: 'native', proxyRuntime: 'native', childRuntime: 'native_applet', childApplet: 'structured-command', nativeVariant: 'rust' },
   ];
   const reports: WorkloadTopology[] = [];
-  for (const topology of topologies.filter((candidate) => selectedTopology(candidate.id))) {
+  for (const topology of orderedSelectedTopologies(topologies, 'NARADA_MCP_STRONG_REVERSE_STRUCTURED_TOPOLOGIES')) {
     const unavailable = topologyAvailable(topology);
     if (unavailable) { reports.push({ id: topology.id, status: 'skipped', reason: unavailable, samples: [] }); continue; }
     const samples: Sample[] = [];
@@ -1168,7 +1171,7 @@ async function runRealSurface(surface: Surface): Promise<WorkloadReport> {
 
 async function runRealGitSurface(surface: GitSurface): Promise<WorkloadReport> {
   const reports: WorkloadTopology[] = [];
-  for (const topology of gitTopologies.filter((candidate) => selectedTopology(candidate.id))) {
+  for (const topology of orderedSelectedTopologies(gitTopologies, 'NARADA_MCP_STRONG_REVERSE_GIT_TOPOLOGIES')) {
     const unavailable = topologyAvailable(topology);
     if (unavailable) { reports.push({ id: topology.id, status: 'skipped', reason: unavailable, samples: [] }); continue; }
     const samples: Sample[] = [];
