@@ -50,6 +50,13 @@ type FilesystemSurface = Surface & {
     secondaryFileCount: number;
   };
 };
+type GitSurface = Surface & {
+  git: {
+    root: string;
+    head: string;
+    changedFile: string;
+  };
+};
 type WorkloadTopology = {
   id: string;
   status: 'measured' | 'skipped' | 'failed';
@@ -517,6 +524,54 @@ function writeRealSurface(): Surface {
   };
 }
 
+function runFixtureGit(rootPath: string, gitArgs: string[]): string {
+  const result = spawnSync('git', gitArgs, { cwd: rootPath, encoding: 'utf8', windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
+  if (result.status !== 0) throw new Error(`strong_benchmark_git_fixture_failed:${gitArgs.join(' ')}:${String(result.stderr ?? '').slice(0, 500)}`);
+  return String(result.stdout ?? '').trim();
+}
+
+function writeGitSurface(): GitSurface {
+  const repoRoot = join(root, 'git-surface-root');
+  mkdirSync(repoRoot, { recursive: true });
+  runFixtureGit(repoRoot, ['init', '-q']);
+  runFixtureGit(repoRoot, ['config', 'user.email', 'mcp-benchmark@example.invalid']);
+  runFixtureGit(repoRoot, ['config', 'user.name', 'MCP Benchmark']);
+  const changedFile = join(repoRoot, 'src', 'shard-00', 'file-000.txt');
+  for (let index = 0; index < 96; index += 1) {
+    const shard = join(repoRoot, 'src', `shard-${String(index % 8).padStart(2, '0')}`);
+    mkdirSync(shard, { recursive: true });
+    const filePath = join(shard, `file-${String(index).padStart(3, '0')}.txt`);
+    writeFileSync(filePath, Array.from({ length: 12 }, (_unused, line) => `file=${index} line=${line} benchmark-haystack\n`).join(''), 'utf8');
+  }
+  runFixtureGit(repoRoot, ['add', '.']);
+  runFixtureGit(repoRoot, ['commit', '-qm', 'benchmark baseline']);
+  writeFileSync(join(repoRoot, 'history.txt'), 'second commit\n', 'utf8');
+  runFixtureGit(repoRoot, ['add', 'history.txt']);
+  runFixtureGit(repoRoot, ['commit', '-qm', 'benchmark history']);
+  writeFileSync(changedFile, `${readFileSync(changedFile, 'utf8')}changed-line\n`, 'utf8');
+  writeFileSync(join(repoRoot, 'untracked.txt'), 'untracked benchmark file\n', 'utf8');
+  const manifestPath = join(root, 'git-artifact-manifest.json');
+  const nativeManifestPath = join(root, 'native-git-artifact-manifest.json');
+  buildWorkspaceArtifactManifest({
+    workspaceRoot,
+    packageRoots: [
+      join(workspaceRoot, 'packages', 'git-mcp'),
+      join(workspaceRoot, 'packages', 'shared', 'mcp-fabric-contracts'),
+      join(workspaceRoot, 'packages', 'shared', 'mcp-transport'),
+    ],
+    outputPath: manifestPath,
+  });
+  return {
+    id: 'git',
+    entrypoint: join(workspaceRoot, 'packages', 'git-mcp', 'dist', 'src', 'main.js'),
+    manifestPath,
+    nativeVariants: { rust: { entrypoint: nativeProxyPath, manifestPath: writeSyntheticManifest([nativeProxyPath], nativeManifestPath) } },
+    workingDirectory: repoRoot,
+    childArgs: ['--mode', 'read', '--allowed-root', repoRoot, '--output-root', repoRoot],
+    git: { root: repoRoot, head: runFixtureGit(repoRoot, ['rev-parse', 'HEAD']), changedFile },
+  };
+}
+
 function rpcReader(child: ChildProcessWithoutNullStreams): (id: string | number) => Promise<JsonRecord> {
   let buffer = '';
   let childError: Error | null = null;
@@ -744,6 +799,14 @@ const filesystemTopologies: Topology[] = [
   { id: 'native-dotnet-filesystem', proxy: 'native', proxyRuntime: 'native', childRuntime: 'native_applet', childApplet: 'filesystem', nativeVariant: 'dotnet' },
 ];
 
+const gitTopologies: Topology[] = [
+  { id: 'bun-git-node', proxy: 'javascript', proxyRuntime: 'bun', childRuntime: 'node' },
+  { id: 'node-git-node', proxy: 'javascript', proxyRuntime: 'node', childRuntime: 'node' },
+  { id: 'deno-git-node', proxy: 'javascript', proxyRuntime: 'deno', childRuntime: 'node' },
+  { id: 'native-git-node', proxy: 'native', proxyRuntime: 'native', childRuntime: 'node' },
+  { id: 'native-git-native', proxy: 'native', proxyRuntime: 'native', childRuntime: 'native_applet', childApplet: 'git', nativeVariant: 'rust' },
+];
+
 function topologyAvailable(topology: Topology): string | null {
   if (topology.childRuntime !== 'native_applet' && !runtimeCommands[topology.childRuntime]) return topology.childRuntime + '_runtime_unavailable';
   if (topology.childRuntime === 'native_applet' && topology.proxy !== 'native') return 'native_applet_requires_native_proxy';
@@ -964,6 +1027,83 @@ async function runRealSurface(surface: Surface): Promise<WorkloadReport> {
   return { id: 'real-structured-command', description: 'Structured-command policy and safe argv execution across JavaScript and Rust-native applets.', configuration: { samples: args.samples, surface: surface.id, validation_tool: 'structured_command_execution_policy_inspect', safe_tool: 'structured_command_execute', command: ['node', '-e', 'process.stdout.write("strong-real-surface")'] }, topologies: reports, gates, verdict: workloadVerdict(reports, gates) };
 }
 
+async function runRealGitSurface(surface: GitSurface): Promise<WorkloadReport> {
+  const reports: WorkloadTopology[] = [];
+  for (const topology of gitTopologies.filter((candidate) => selectedTopology(candidate.id))) {
+    const unavailable = topologyAvailable(topology);
+    if (unavailable) { reports.push({ id: topology.id, status: 'skipped', reason: unavailable, samples: [] }); continue; }
+    const samples: Sample[] = [];
+    try {
+      for (let ordinal = 0; ordinal < args.samples; ordinal += 1) {
+        let session: Session | null = null;
+        try {
+          session = await openSession(topology, surface, 'real-git', ordinal);
+          const toolNames = session.tools.map((tool) => String(tool.name));
+          assert.ok(toolNames.includes('git_policy_inspect'), topology.id + ':policy_tool_missing');
+          assert.ok(toolNames.includes('git_status'), topology.id + ':status_tool_missing');
+          const policyStarted = performance.now();
+          const policy = await call(session, 'policy-' + ordinal, 'git_policy_inspect', {});
+          const policyCallMs = performance.now() - policyStarted;
+          const statusStarted = performance.now();
+          const status = await call(session, 'status-' + ordinal, 'git_status', { working_directory: surface.git.root });
+          const statusCallMs = performance.now() - statusStarted;
+          const changedStarted = performance.now();
+          const changed = await call(session, 'changed-' + ordinal, 'git_changed_summary', { working_directory: surface.git.root });
+          const changedCallMs = performance.now() - changedStarted;
+          const diffStarted = performance.now();
+          const diff = await call(session, 'diff-' + ordinal, 'git_diff', { working_directory: surface.git.root, scope: 'working', limit: 4_000 });
+          const diffCallMs = performance.now() - diffStarted;
+          const logStarted = performance.now();
+          const log = await call(session, 'log-' + ordinal, 'git_log', { working_directory: surface.git.root, limit: 10 });
+          const logCallMs = performance.now() - logStarted;
+          const showStarted = performance.now();
+          const show = await call(session, 'show-' + ordinal, 'git_show', { working_directory: surface.git.root, commit: surface.git.head, include_patch: false });
+          const showCallMs = performance.now() - showStarted;
+          const close = await closeSession(session);
+          samples.push(makeSample(session, ordinal, close, {
+            actual_entrypoint: surface.entrypoint,
+            advertised_tool_count: session.tools.length,
+            proxy_status_tool_present: session.tools.some((tool) => String(tool.name) === 'mcp_runtime_proxy_status'),
+            policy_inspect_ok: Boolean(policy.result?.structuredContent?.schema ?? policy.result),
+            status_ok: status.result?.structuredContent?.schema === 'narada.git.status.v1',
+            changed_summary_ok: changed.result?.structuredContent?.schema === 'narada.git.changed_summary.v1',
+            diff_ok: diff.result?.structuredContent?.schema === 'narada.git.diff.v1',
+            log_ok: log.result?.structuredContent?.schema === 'narada.git.log.v1',
+            show_ok: show.result?.structuredContent?.schema === 'narada.git.show.v1',
+            policy_call_ms: policyCallMs,
+            status_call_ms: statusCallMs,
+            changed_summary_call_ms: changedCallMs,
+            diff_call_ms: diffCallMs,
+            log_call_ms: logCallMs,
+            show_call_ms: showCallMs,
+            status_response: status.result?.structuredContent ?? null,
+          }));
+          session = null;
+        } finally {
+          if (session) await closeSession(session).catch(() => undefined);
+        }
+      }
+      reports.push({ id: topology.id, status: 'measured', samples, summary: {
+        ...summary(samples),
+        actual_entrypoint: surface.entrypoint,
+        policy_call_p95_ms: percentile(samples.map((sample) => sample.metrics.policy_call_ms)),
+        status_call_p95_ms: percentile(samples.map((sample) => sample.metrics.status_call_ms)),
+        changed_summary_call_p95_ms: percentile(samples.map((sample) => sample.metrics.changed_summary_call_ms)),
+        diff_call_p95_ms: percentile(samples.map((sample) => sample.metrics.diff_call_ms)),
+        log_call_p95_ms: percentile(samples.map((sample) => sample.metrics.log_call_ms)),
+        show_call_p95_ms: percentile(samples.map((sample) => sample.metrics.show_call_ms)),
+        protocol_successes: samples.filter((sample) => sample.metrics.policy_inspect_ok && sample.metrics.status_ok && sample.metrics.changed_summary_ok && sample.metrics.diff_ok && sample.metrics.log_ok && sample.metrics.show_ok).length,
+      } });
+    } catch (error) { reports.push({ id: topology.id, status: 'failed', samples, error: `${String(error)}`.slice(0, 2_000) }); }
+  }
+  const gates: JsonRecord[] = reports.map((report) => {
+    const name = `${report.id}.real_git_protocol_and_read_calls`;
+    if (report.status === 'skipped') return { name, status: 'not_run', reason: report.reason ?? 'unavailable' };
+    return booleanGate(name, report.status === 'measured' && report.samples.every((sample) => sample.lifecycle.protocol_ok && sample.metrics.policy_inspect_ok && sample.metrics.status_ok && sample.metrics.changed_summary_ok && sample.metrics.diff_ok && sample.metrics.log_ok && sample.metrics.show_ok && sample.lifecycle.leaked_processes === 0));
+  });
+  return { id: 'real-git', description: 'Git read canary across JavaScript runtimes and the Rust-native applet: policy, status, dirty summary, diff, log, and commit metadata.', configuration: { samples: args.samples, surface: surface.id, tools: ['git_policy_inspect', 'git_status', 'git_changed_summary', 'git_diff', 'git_log', 'git_show'], repository_files: 96, mutated_file: surface.git.changedFile }, topologies: reports, gates, verdict: workloadVerdict(reports, gates) };
+}
+
 function gate(name: string, actual: number | null, baseline: number | null, limit: number, absoluteSlack = 0): JsonRecord {
   const comparable = actual !== null && baseline !== null && Number.isFinite(actual) && Number.isFinite(baseline) && baseline !== 0;
   const threshold = comparable ? Math.max(baseline! * limit, baseline! + absoluteSlack) : null;
@@ -1012,6 +1152,7 @@ function writeArtifacts(report: JsonRecord): { jsonPath: string; htmlPath: strin
 
 const representativeSurface = writeRepresentativeFixture();
 const realSurface = writeRealSurface();
+const gitSurface = writeGitSurface();
 
 try {
   const workloadRequested = (id: string) => !args.workloads?.length || args.workloads.includes(id);
@@ -1022,6 +1163,7 @@ try {
     workloadRequested('restart-soak') ? await runSoak(representativeSurface) : null,
     filesystemSurface ? await runFilesystemSearchLoad(filesystemSurface) : null,
     workloadRequested('real-structured-command') ? await runRealSurface(realSurface) : null,
+    workloadRequested('real-git') ? await runRealGitSurface(gitSurface) : null,
   ].filter((workload): workload is WorkloadReport => workload !== null);
   const correctnessFailed = workloads.some((workload) => workload.verdict.correctness === 'failed');
   const performanceTargetNotMet = workloads.some((workload) => workload.verdict.performance === 'performance_target_not_met');
@@ -1030,9 +1172,9 @@ try {
     schema: 'narada.mcp_runtime_proxy.strong_benchmark_report.v1',
     report_id: reportId,
     generated_at: new Date().toISOString(),
-    objective: 'Measure runtime behavior under representative, payload/load, restart/soak, filesystem-search, and real-surface workloads without replacing the minimal attribution benchmark.',
-    environment: { platform: process.platform, architecture: process.arch, runner: process.execPath, workspace_root: workspaceRoot, runtimes: Object.fromEntries(Object.entries(runtimeCommands).map(([name, command]) => [name, command ? commandVersion(command) : null])), runtime_commands: Object.fromEntries(Object.entries(runtimeCommands).map(([name, command]) => [name, commandSpec(command)])), native_artifact: process.platform === 'win32' && existsSync(nativeProxyPath), real_surface: { id: realSurface.id, entrypoint: realSurface.entrypoint }, diagnostics_root: keepArtifacts ? root : null },
-    configuration: { samples: args.samples, load_repetitions: args.loadRepetitions, soak_cycles: args.soakCycles, soak_warm_calls: args.soakWarmCalls, filesystem_files: args.filesystemFiles, filesystem_lines: Math.max(32, args.filesystemLines), filesystem_concurrent: args.filesystemConcurrent, workloads: args.workloads ?? ['representative', 'payload-load', 'restart-soak', 'filesystem-search-load', 'real-structured-command'], topologies: args.topologies ?? 'all', runtime_contract_version: MCP_RUNTIME_CONTRACT_VERSION },
+    objective: 'Measure runtime behavior under representative, payload/load, restart/soak, filesystem-search, structured-command, and Git read workloads without replacing the minimal attribution benchmark.',
+    environment: { platform: process.platform, architecture: process.arch, runner: process.execPath, workspace_root: workspaceRoot, runtimes: Object.fromEntries(Object.entries(runtimeCommands).map(([name, command]) => [name, command ? commandVersion(command) : null])), runtime_commands: Object.fromEntries(Object.entries(runtimeCommands).map(([name, command]) => [name, commandSpec(command)])), native_artifact: process.platform === 'win32' && existsSync(nativeProxyPath), real_surfaces: [{ id: realSurface.id, entrypoint: realSurface.entrypoint }, { id: gitSurface.id, entrypoint: gitSurface.entrypoint }], diagnostics_root: keepArtifacts ? root : null },
+    configuration: { samples: args.samples, load_repetitions: args.loadRepetitions, soak_cycles: args.soakCycles, soak_warm_calls: args.soakWarmCalls, filesystem_files: args.filesystemFiles, filesystem_lines: Math.max(32, args.filesystemLines), filesystem_concurrent: args.filesystemConcurrent, workloads: args.workloads ?? ['representative', 'payload-load', 'restart-soak', 'filesystem-search-load', 'real-structured-command', 'real-git'], topologies: args.topologies ?? 'all', runtime_contract_version: MCP_RUNTIME_CONTRACT_VERSION },
     workloads,
     verdict: { correctness: correctnessFailed ? 'failed' : 'passed', performance: performanceTargetNotMet ? 'performance_target_not_met' : performanceNotComparable ? 'not_comparable' : 'passed', native_default: process.platform === 'win32' && existsSync(nativeProxyPath) ? 'default_when_available' : 'bun_fallback', deno_support: 'experimental_lane_only' },
   };

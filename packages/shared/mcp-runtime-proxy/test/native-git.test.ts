@@ -1,0 +1,111 @@
+import assert from 'node:assert/strict';
+import { execFileSync } from 'node:child_process';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
+import { dirname, join, resolve } from 'node:path';
+import { spawn } from 'node:child_process';
+import { tmpdir } from 'node:os';
+
+type JsonRecord = Record<string, any>;
+
+const packageRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..');
+const executable = resolve(process.env.NARADA_NATIVE_GIT_TEST_EXECUTABLE ?? resolve(packageRoot, 'dist', 'native', 'narada-mcp-runtime.exe'));
+
+function git(root: string, args: string[]): string {
+  return execFileSync('git', args, { cwd: root, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true }).trim();
+}
+
+function run(root: string, requests: JsonRecord[]): Promise<JsonRecord[]> {
+  return new Promise((resolvePromise, rejectPromise) => {
+    const child = spawn(executable, ['git', '--mode', 'read', '--allowed-root', root, '--output-root', root], { stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true });
+    let stdout = '';
+    let stderr = '';
+    child.stdout.setEncoding('utf8');
+    child.stderr.setEncoding('utf8');
+    child.stdout.on('data', (chunk) => { stdout += chunk; });
+    child.stderr.on('data', (chunk) => { stderr += chunk; });
+    const timer = setTimeout(() => { child.kill(); rejectPromise(new Error(`native_git_timeout:${stderr}`)); }, 20_000);
+    child.on('error', (error) => { clearTimeout(timer); rejectPromise(error); });
+    child.on('close', (code) => {
+      clearTimeout(timer);
+      if (code !== 0) { rejectPromise(new Error(`native_git_exit:${code}:${stderr}`)); return; }
+      try { resolvePromise(stdout.trim().split(/\r?\n/).filter(Boolean).map((line) => JSON.parse(line))); }
+      catch (error) { rejectPromise(new Error(`native_git_invalid_output:${String(error)}:${stdout.slice(0, 1000)}`)); }
+    });
+    child.stdin.end(requests.map((request) => JSON.stringify(request)).join('\n') + '\n');
+  });
+}
+
+const root = mkdtempSync(join(tmpdir(), 'narada-native-git-'));
+try {
+  git(root, ['init', '-q']);
+  git(root, ['config', 'user.email', 'native-git@example.invalid']);
+  git(root, ['config', 'user.name', 'Native Git']);
+  mkdirSync(join(root, 'src'));
+  writeFileSync(join(root, 'README.md'), 'native git\n', 'utf8');
+  writeFileSync(join(root, 'src', 'main.txt'), 'one\n', 'utf8');
+  git(root, ['add', '.']);
+  git(root, ['commit', '-qm', 'initial']);
+  writeFileSync(join(root, 'src', 'main.txt'), 'one\ntwo\n', 'utf8');
+  writeFileSync(join(root, 'untracked.txt'), 'untracked\n', 'utf8');
+
+  const responses = await run(root, [
+    { jsonrpc: '2.0', id: 1, method: 'initialize', params: { protocolVersion: '2024-11-05' } },
+    { jsonrpc: '2.0', id: 2, method: 'tools/list', params: {} },
+    { jsonrpc: '2.0', id: 3, method: 'tools/call', params: { name: 'git_guidance', arguments: {} } },
+    { jsonrpc: '2.0', id: 4, method: 'tools/call', params: { name: 'git_policy_inspect', arguments: {} } },
+    { jsonrpc: '2.0', id: 5, method: 'tools/call', params: { name: 'git_status', arguments: { working_directory: root } } },
+    { jsonrpc: '2.0', id: 6, method: 'tools/call', params: { name: 'git_sync_status', arguments: { working_directory: root } } },
+    { jsonrpc: '2.0', id: 7, method: 'tools/call', params: { name: 'git_branch_list', arguments: { working_directory: root, scope: 'local' } } },
+    { jsonrpc: '2.0', id: 8, method: 'tools/call', params: { name: 'git_changed_summary', arguments: { working_directory: root } } },
+    { jsonrpc: '2.0', id: 9, method: 'tools/call', params: { name: 'git_repositories_summary', arguments: { working_directories: [root] } } },
+    { jsonrpc: '2.0', id: 10, method: 'tools/call', params: { name: 'git_diff', arguments: { working_directory: root, scope: 'working', limit: 4000 } } },
+    { jsonrpc: '2.0', id: 11, method: 'tools/call', params: { name: 'git_log', arguments: { working_directory: root, limit: 2 } } },
+  ]);
+  const byId = new Map(responses.map((response) => [response.id, response]));
+  assert.equal(byId.get(1)?.result?.serverInfo?.name, 'git-mcp');
+  assert.deepEqual(byId.get(2)?.result?.tools?.map((tool: JsonRecord) => tool.name), [
+    'git_guidance',
+    'git_policy_inspect',
+    'git_status',
+    'git_sync_status',
+    'git_branch_list',
+    'git_output_show',
+    'git_changed_summary',
+    'git_repositories_summary',
+    'git_diff',
+    'git_log',
+    'git_show',
+  ]);
+  assert.equal(byId.get(3)?.result?.structuredContent?.surface_id, 'git');
+  assert.equal(byId.get(4)?.result?.structuredContent?.schema, 'narada.git.policy.v1');
+  assert.equal(byId.get(4)?.result?.structuredContent?.mode, 'read');
+  assert.equal(byId.get(5)?.result?.structuredContent?.schema, 'narada.git.status.v1');
+  assert.equal(byId.get(5)?.result?.structuredContent?.clean, false);
+  assert.equal(byId.get(5)?.result?.structuredContent?.untracked?.includes('untracked.txt'), true);
+  assert.equal(byId.get(6)?.result?.structuredContent?.schema, 'narada.git.sync_status.v1');
+  assert.equal(byId.get(6)?.result?.structuredContent?.in_progress, false);
+  assert.equal(byId.get(7)?.result?.structuredContent?.schema, 'narada.git.branch_list.v1');
+  assert.equal(byId.get(7)?.result?.structuredContent?.returned >= 1, true);
+  assert.equal(byId.get(8)?.result?.structuredContent?.schema, 'narada.git.changed_summary.v1');
+  assert.equal(byId.get(8)?.result?.structuredContent?.relevant_changed_count, 0);
+  assert.equal(byId.get(9)?.result?.structuredContent?.repository_count, 1);
+  assert.equal(byId.get(10)?.result?.structuredContent?.schema, 'narada.git.diff.v1');
+  assert.match(String(byId.get(10)?.result?.structuredContent?.diff), /two/);
+  assert.equal(byId.get(11)?.result?.structuredContent?.schema, 'narada.git.log.v1');
+  const commit = byId.get(11)?.result?.structuredContent?.commits?.[0]?.hash;
+  assert.match(String(commit), /^[0-9a-f]{40}$/);
+
+  const showResponses = await run(root, [
+    { jsonrpc: '2.0', id: 12, method: 'tools/call', params: { name: 'git_show', arguments: { working_directory: root, commit, include_patch: false } } },
+    { jsonrpc: '2.0', id: 13, method: 'tools/call', params: { name: 'git_status', arguments: { working_directory: join(root, '..') } } },
+  ]);
+  const show = showResponses.find((response) => response.id === 12);
+  const refused = showResponses.find((response) => response.id === 13);
+  assert.equal(show?.result?.structuredContent?.schema, 'narada.git.show.v1');
+  assert.equal(show?.result?.structuredContent?.include_patch, false);
+  assert.equal(refused?.error?.data?.code, 'git_working_directory_outside_allowed_roots');
+  assert.equal(readFileSync(join(root, 'README.md'), 'utf8'), 'native git\n');
+} finally {
+  rmSync(root, { recursive: true, force: true });
+}

@@ -31,8 +31,8 @@ effort; the existing implementation remains the authority.
 | Surface | Decision | Current evidence and next proof |
 |---|---|---|
 | `local-filesystem` | Rust-native target | Rust read applet and `fs_write_file` vertical slice exist. Finish remaining mutation parity, then compare full read/write workloads. |
-| `structured-command` | Rust-native target | Rust policy/guidance/synchronous execution slice and direct protocol test now exist. Durable output, process-tree cancellation, PowerShell parsing, elevation, and full parity remain before changing defaults. |
-| `git` | Rust-native target | Bounded Git subprocess policy is generic and reusable. Start with read parity, then guarded write/recovery paths and repository workloads. |
+| `structured-command` | Intentionally dual | Rust policy, synchronous argv execution, timeout/cancellation, input refs, paging, output refs, and parse-check canary exist. JavaScript remains authoritative for durable background execution and confirmed Windows UAC elevation; benchmark both lanes without changing the default. |
+| `git` | Intentionally dual | Rust read-only Git subprocess canary is a coherent bounded implementation; JavaScript remains authoritative for scoped mutation, conflict recovery, and publication until those semantics justify a second authority. |
 | `mcp-loader` | Intentionally dual | Child attachment and lifecycle are mechanical, but loader projections and live contract discovery are tightly coupled to the JS catalog. Extract stable contracts first; benchmark attachment/restart behavior. |
 | `mcp-registrar` | Intentionally dual | Config projection is mechanical, but the registrar composes every package descriptor and carrier schema. A Rust implementation is only coherent after descriptor/compiler authority is separated. |
 | `runtime-introspection` | Intentionally dual | Read-only trace and SQLite analysis may fit Rust. Compare query/analysis workloads and memory before duplicating the current authority. |
@@ -73,18 +73,20 @@ implementations.
 |---|---|---|
 | Runtime proxy | Native protocol tests; minimal and strong runtime benchmarks; native startup/memory measurements | Per-surface lifecycle workload attribution |
 | Local filesystem | Native read tests; native write protocol test; direct write microbenchmark | Full write-tool parity; failure/cancellation workload; integrated proxy topology |
-| Structured command | JavaScript contract tests and realistic command workload; Rust policy/guidance/synchronous slice, direct protocol/timeout test, and native-child integrated benchmark lane | Durable output, process-tree cancellation, PowerShell parsing, elevation, and full equivalence |
-| Git | JavaScript contract tests and bounded Git policy | Rust implementation, read/write/recovery equivalence, repository benchmark |
+| Structured command | JavaScript contract tests and realistic command workload; Rust policy/guidance/synchronous slice, direct protocol/timeout test, and native-child integrated benchmark lane | Background durability and confirmed UAC remain JavaScript authority; add parity evidence for the retained Rust canary |
+| Git | JavaScript contract tests and bounded Git policy | Rust read canary, direct protocol test, and `real-git` strong workload now cover policy, status, sync state, branches, dirty summary, diff, log, and show. Mutation/recovery/publication remain JavaScript authority. |
 | Dual infrastructure | JavaScript contract/e2e tests | Rust canaries and evidence strong enough to justify dual maintenance |
 | JavaScript-native surfaces | Package contract tests and domain-specific e2e tests | No Rust comparison is required unless the fit decision changes |
 
 ## Work order
 
 1. Complete native filesystem mutation parity.
-2. Expand the Rust structured-command slice to full contract parity, retaining
-   the direct protocol/timeout test and adding integrated native-child
-   benchmark evidence.
-3. Add the Rust Git read applet, then guarded write/recovery operations.
+2. Keep structured-command explicitly dual: maintain the Rust synchronous
+   canary and benchmark it against the JavaScript authority for retained
+   behavior.
+3. Keep the Rust Git implementation as a read canary and benchmark it against
+   the JavaScript authority; keep guarded write/recovery operations in the
+   JavaScript authority unless evidence changes the decision.
 4. Add focused workload rows for filesystem write, structured command, and Git
    inspection/publication to the benchmark report.
 5. Revisit the four dual-runtime infrastructure surfaces only with a concrete

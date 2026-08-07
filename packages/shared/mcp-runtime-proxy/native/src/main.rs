@@ -15,6 +15,8 @@ use time::OffsetDateTime;
 #[allow(dead_code)]
 mod filesystem;
 #[allow(dead_code)]
+mod git;
+#[allow(dead_code)]
 mod structured_command;
 
 const CONTRACT_VERSION: u64 = 4;
@@ -100,6 +102,7 @@ fn main() {
     let result = match args.first().map(String::as_str) {
         Some("proxy") => run_proxy(&args[1..]),
         Some("filesystem") => filesystem::run(&args[1..]),
+        Some("git") => git::run(&args[1..]),
         Some("structured-command") => structured_command::run(&args[1..]),
         Some(other) => Err(format!("narada_mcp_runtime_unknown_applet:{other}")),
         None => Err("narada_mcp_runtime_applet_required".to_string()),
