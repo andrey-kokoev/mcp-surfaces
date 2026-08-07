@@ -44,16 +44,26 @@ try {
     { jsonrpc: '2.0', id: 5, method: 'tools/call', params: { name: 'fs_read_file', arguments: { path: 'nested/note.txt', offset: 1, limit: 10 } } },
     { jsonrpc: '2.0', id: 6, method: 'tools/call', params: { name: 'fs_write_file', arguments: { path: 'nested/note.txt', content: 'changed\n', expected_sha256: 'deadbeef' } } },
     { jsonrpc: '2.0', id: 7, method: 'tools/call', params: { name: 'fs_write_file', arguments: { path: '.ai/tmp/hook.js', content: 'console.log(1);' } } },
+    { jsonrpc: '2.0', id: 8, method: 'tools/call', params: { name: 'fs_str_replace_file', arguments: { path: 'nested/note.txt', old: 'hello native', new: 'hello replaced' } } },
+    { jsonrpc: '2.0', id: 9, method: 'tools/call', params: { name: 'fs_replace_range', arguments: { path: 'nested/note.txt', start_line: 1, end_line: 1, replacement: 'range replaced' } } },
+    { jsonrpc: '2.0', id: 10, method: 'tools/call', params: { name: 'fs_read_file', arguments: { path: 'nested/note.txt', offset: 1, limit: 10 } } },
   ], auditLogDir);
   const byId = new Map(responses.map((response) => [response.id, response]));
   assert.equal(byId.get(1)?.result?.serverInfo?.name, 'local-filesystem-write-native');
   assert.equal(byId.get(2)?.result?.tools?.some((tool: JsonRecord) => tool.name === 'fs_write_file'), true);
+  assert.equal(byId.get(2)?.result?.tools?.some((tool: JsonRecord) => tool.name === 'fs_str_replace_file'), true);
+  assert.equal(byId.get(2)?.result?.tools?.some((tool: JsonRecord) => tool.name === 'fs_replace_range'), true);
   assert.equal(byId.get(3)?.result?.structuredContent?.effective_permissions?.can_write, true);
   assert.equal(byId.get(4)?.result?.structuredContent?.schema, 'local.filesystem.write_file.v1');
   assert.equal(byId.get(4)?.result?.structuredContent?.status, 'written');
   assert.equal(byId.get(5)?.result?.structuredContent?.content, 'hello native');
   assert.equal(byId.get(6)?.error?.data?.code, 'fs_write_file_expected_sha256_mismatch');
   assert.equal(byId.get(7)?.error?.data?.code, 'transient_executable_write_disallowed');
+  assert.equal(byId.get(8)?.result?.structuredContent?.schema, 'local.filesystem.str_replace_file.v1');
+  assert.equal(byId.get(8)?.result?.structuredContent?.status, 'replaced');
+  assert.equal(byId.get(9)?.result?.structuredContent?.schema, 'local.filesystem.replace_range.v1');
+  assert.equal(byId.get(9)?.result?.structuredContent?.status, 'replaced_range');
+  assert.equal(byId.get(10)?.result?.structuredContent?.content, 'range replaced');
   assert.match(readFileSync(join(auditLogDir, 'filesystem-mcp-audit.jsonl'), 'utf8'), /"operation":"fs_write_file"/);
 
   const readResponses = await run('read', root, [

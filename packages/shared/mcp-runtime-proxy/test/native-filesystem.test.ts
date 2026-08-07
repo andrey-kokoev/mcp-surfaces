@@ -11,7 +11,7 @@ type JsonRecord = Record<string, any>;
 
 const packageRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..');
 const workspaceRoot = resolve(packageRoot, '..', '..', '..');
-const executable = resolve(packageRoot, 'dist', 'native', 'narada-mcp-runtime.exe');
+const executable = resolve(process.env.NARADA_NATIVE_FILESYSTEM_TEST_EXECUTABLE ?? resolve(packageRoot, 'dist', 'native', 'narada-mcp-runtime.exe'));
 
 function run(requests: JsonRecord[]): Promise<JsonRecord[]> {
   return new Promise((resolvePromise, rejectPromise) => {

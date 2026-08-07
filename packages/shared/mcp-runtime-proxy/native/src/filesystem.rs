@@ -237,13 +237,15 @@ fn call_tool(state: &mut State, params: &Value) -> Result<Value, FsError> {
         "fs_doctor" => Ok(doctor(state)),
         "fs_patch_outcome_show" => patch_outcome(state, args),
         "fs_write_file" => write_file(state, args),
+        "fs_str_replace_file" => str_replace_file(state, args),
+        "fs_replace_range" => replace_range(state, args),
         _ => Err(FsError::new(format!("tool_not_available_in_{}_mode", state.mode), format!("tool_not_available_in_{}_mode: {name}", state.mode), json!({"tool_name": name, "mode": state.mode}))),
     }?;
     Ok(tool_result(value))
 }
 
 fn is_write_tool(name: &str) -> bool {
-    name == "fs_write_file"
+    matches!(name, "fs_write_file" | "fs_str_replace_file" | "fs_replace_range")
 }
 
 fn tool_result(value: Value) -> Value {
@@ -296,7 +298,7 @@ fn guidance(args: &Value) -> Result<Value, FsError> {
 
 fn doctor(state: &State) -> Value {
     let read_tools = vec!["fs_guidance", "fs_read_file", "fs_read_file_range", "fs_stat", "fs_glob_search", "fs_grep_search", "fs_repository_inventory", "fs_file_metrics", "fs_doctor", "fs_patch_outcome_show"];
-    let write_tools: Vec<&str> = vec!["fs_write_file"];
+    let write_tools: Vec<&str> = vec!["fs_write_file", "fs_str_replace_file", "fs_replace_range"];
     let available_tools: Vec<String> = list_tools(&state.mode).iter().filter_map(|tool| tool.get("name").and_then(Value::as_str).map(str::to_string)).collect();
     let can_write = state.mode == "write";
     json!({
@@ -463,6 +465,61 @@ fn write_file(state: &State, args: &Value) -> Result<Value, FsError> {
         "after_sha256": after_sha256,
         "timeout_ms": timeout_ms,
     }))
+}
+
+fn str_replace_file(state: &State, args: &Value) -> Result<Value, FsError> {
+    let (path, root) = resolve_allowed(state, args.get("path").and_then(Value::as_str), "fs_str_replace_file")?;
+    assert_mutation_target_allowed(&path, &root, "fs_str_replace_file")?;
+    let old = args.get("old").and_then(Value::as_str).unwrap_or_default();
+    let new = args.get("new").and_then(Value::as_str).unwrap_or_default();
+    if old.is_empty() {
+        return Err(FsError::new("str_replace_requires_old", "str_replace_requires_old", path_details(&path, &root)));
+    }
+    let before = fs::read_to_string(&path).map_err(|error| FsError::new("fs_str_replace_file_read_failed", format!("fs_str_replace_file_read_failed: {error}"), path_details(&path, &root)))?;
+    let before_sha256 = sha256_bytes(before.as_bytes());
+    if let Some(expected) = args.get("expected_sha256").and_then(Value::as_str).filter(|value| !value.is_empty()) {
+        if expected != before_sha256 { return Err(FsError::new("fs_str_replace_file_expected_sha256_mismatch", "fs_str_replace_file_expected_sha256_mismatch", json!({"expected_sha256": expected, "actual_sha256": before_sha256, "path": path, "root": root}))); }
+    }
+    let occurrences = before.match_indices(old).count();
+    if occurrences == 0 { return Err(FsError::new("str_replace_not_found", "str_replace_not_found", json!({"path": path, "root": root, "old_length": old.len(), "recommended_tool": "fs_replace_range"}))); }
+    if occurrences > 1 { return Err(FsError::new("str_replace_ambiguous", format!("str_replace_ambiguous: {occurrences}"), json!({"path": path, "root": root, "occurrences": occurrences}))); }
+    let after = before.replacen(old, new, 1);
+    fs::write(&path, after.as_bytes()).map_err(|error| FsError::new("fs_str_replace_file_failed", format!("fs_str_replace_file_failed: {error}"), path_details(&path, &root)))?;
+    let after_sha256 = sha256_bytes(after.as_bytes());
+    append_audit(state, "fs_str_replace_file", &path, &root, json!({"old_length": old.len(), "new_length": new.len(), "before_sha256": before_sha256, "after_sha256": after_sha256}))?;
+    Ok(json!({"schema": "local.filesystem.str_replace_file.v1", "status": "replaced", "path": path, "root": root, "relative_path": relative_path(&root, &path), "occurrences": 1, "before_sha256": before_sha256, "after_sha256": after_sha256}))
+}
+
+fn replace_range(state: &State, args: &Value) -> Result<Value, FsError> {
+    let start = integer(args, "start_line").ok_or_else(|| FsError::new("start_line_must_be_positive_integer", "start_line_must_be_positive_integer", json!({})))?;
+    let end = integer(args, "end_line").ok_or_else(|| FsError::new("end_line_must_be_greater_than_or_equal_start_line", "end_line_must_be_greater_than_or_equal_start_line", json!({})))?;
+    if start < 1 { return Err(FsError::new("start_line_must_be_positive_integer", "start_line_must_be_positive_integer", json!({"start_line": start}))); }
+    if end < start { return Err(FsError::new("end_line_must_be_greater_than_or_equal_start_line", "end_line_must_be_greater_than_or_equal_start_line", json!({"start_line": start, "end_line": end}))); }
+    let (path, root) = resolve_allowed(state, args.get("path").and_then(Value::as_str), "fs_replace_range")?;
+    assert_mutation_target_allowed(&path, &root, "fs_replace_range")?;
+    let replacement = args.get("replacement").and_then(Value::as_str).unwrap_or_default();
+    let before = fs::read_to_string(&path).map_err(|error| FsError::new("fs_replace_range_read_failed", format!("fs_replace_range_read_failed: {error}"), path_details(&path, &root)))?;
+    let before_sha256 = sha256_bytes(before.as_bytes());
+    if let Some(expected) = args.get("expected_sha256").and_then(Value::as_str).filter(|value| !value.is_empty()) {
+        if expected != before_sha256 { return Err(FsError::new("fs_replace_range_expected_sha256_mismatch", "fs_replace_range_expected_sha256_mismatch", json!({"expected_sha256": expected, "actual_sha256": before_sha256, "path": path, "root": root}))); }
+    }
+    let newline = if before.contains("\r\n") { "\r\n" } else { "\n" };
+    let has_trailing_newline = before.ends_with('\n');
+    let body = before.strip_suffix('\n').unwrap_or(&before).strip_suffix('\r').unwrap_or_else(|| before.strip_suffix('\n').unwrap_or(&before));
+    let lines = if body.is_empty() { Vec::new() } else { body.split('\n').map(|line| line.strip_suffix('\r').unwrap_or(line)).collect::<Vec<_>>() };
+    if start as usize > lines.len() + 1 { return Err(FsError::new("start_line_out_of_range", format!("start_line_out_of_range: {start}"), json!({"path": path, "root": root, "start_line": start, "total_lines": lines.len()}))); }
+    if end as usize > lines.len() { return Err(FsError::new("end_line_out_of_range", format!("end_line_out_of_range: {end}"), json!({"path": path, "root": root, "end_line": end, "total_lines": lines.len()}))); }
+    let replacement_lines = if replacement.is_empty() { Vec::new() } else { replacement.split('\n').collect::<Vec<_>>() };
+    let mut after_lines = Vec::new();
+    after_lines.extend_from_slice(&lines[..(start as usize - 1)]);
+    after_lines.extend_from_slice(&replacement_lines);
+    after_lines.extend_from_slice(&lines[end as usize..]);
+    let mut after = after_lines.join(newline);
+    if has_trailing_newline { after.push_str(newline); }
+    fs::write(&path, after.as_bytes()).map_err(|error| FsError::new("fs_replace_range_failed", format!("fs_replace_range_failed: {error}"), path_details(&path, &root)))?;
+    let after_sha256 = sha256_bytes(after.as_bytes());
+    append_audit(state, "fs_replace_range", &path, &root, json!({"start_line": start, "end_line": end, "before_sha256": before_sha256, "after_sha256": after_sha256}))?;
+    Ok(json!({"schema": "local.filesystem.replace_range.v1", "status": "replaced_range", "path": path, "root": root, "relative_path": relative_path(&root, &path), "start_line": start, "end_line": end, "inserted_lines": replacement_lines.len(), "before_sha256": before_sha256, "after_sha256": after_sha256}))
 }
 
 fn assert_mutation_target_allowed(path: &Path, root: &Path, operation: &str) -> Result<(), FsError> {
@@ -812,6 +869,8 @@ fn list_tools(mode: &str) -> Vec<Value> {
     ];
     if mode == "write" {
         names.push(("fs_write_file", "Write a text file under an allowed root and append an audit record. Refuses executable scripts under .ai/tmp or .ai/temp."));
+        names.push(("fs_str_replace_file", "Replace exactly one string occurrence in a text file under an allowed root."));
+        names.push(("fs_replace_range", "Replace an inclusive line range in a text file under an allowed root."));
     }
     names.iter().map(|(name, description)| {
         let mut properties = Map::new();
@@ -834,6 +893,19 @@ fn list_tools(mode: &str) -> Vec<Value> {
                 properties.insert("timeout_ms".into(), json!({"type":"integer","default":WRITE_TIMEOUT_MS}));
                 properties.insert("expected_sha256".into(), json!({"type":"string"}));
             }
+            "fs_str_replace_file" => {
+                properties.insert("path".into(), json!({"type":"string"}));
+                properties.insert("old".into(), json!({"type":"string"}));
+                properties.insert("new".into(), json!({"type":"string"}));
+                properties.insert("expected_sha256".into(), json!({"type":"string"}));
+            }
+            "fs_replace_range" => {
+                properties.insert("path".into(), json!({"type":"string"}));
+                properties.insert("start_line".into(), json!({"type":"integer"}));
+                properties.insert("end_line".into(), json!({"type":"integer"}));
+                properties.insert("replacement".into(), json!({"type":"string"}));
+                properties.insert("expected_sha256".into(), json!({"type":"string"}));
+            }
             _ => {}
         }
         let required: Vec<&str> = match *name {
@@ -843,6 +915,8 @@ fn list_tools(mode: &str) -> Vec<Value> {
             "fs_grep_search" => vec!["pattern"],
             "fs_glob_search" => vec!["pattern"],
             "fs_patch_outcome_show" => vec!["operation_id"],
+            "fs_str_replace_file" => vec!["path", "old", "new"],
+            "fs_replace_range" => vec!["path", "start_line", "end_line", "replacement"],
             _ => Vec::new()
         };
         let write_tool = is_write_tool(name);

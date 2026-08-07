@@ -30,7 +30,7 @@ effort; the existing implementation remains the authority.
 
 | Surface | Decision | Current evidence and next proof |
 |---|---|---|
-| `local-filesystem` | Intentionally dual | Rust read applet and `fs_write_file` vertical slice are tested and benchmarked. JavaScript remains authoritative for string/range edit, patch, move, directory, and delete tools until a full mutation-parity slice earns a default change. |
+| `local-filesystem` | Intentionally dual | Rust read applet plus `fs_write_file`, exact string replacement, and line-range replacement are tested and benchmarked. JavaScript remains authoritative for patch, move, directory, and delete tools until a full mutation-parity slice earns a default change. |
 | `structured-command` | Intentionally dual | Rust policy, synchronous argv execution, timeout/cancellation, input refs, paging, output refs, and parse-check canary exist. JavaScript remains authoritative for durable background execution and confirmed Windows UAC elevation; benchmark both lanes without changing the default. |
 | `git` | Intentionally dual | Rust read-only Git subprocess canary is a coherent bounded implementation; JavaScript remains authoritative for scoped mutation, conflict recovery, and publication until those semantics justify a second authority. |
 | `mcp-loader` | JavaScript-native | Child attachment is mechanical, but loader projections and live contract discovery are coupled to the JavaScript catalog; a Rust port would duplicate the descriptor authority without a demonstrated lifecycle benefit. |
@@ -72,7 +72,7 @@ implementations.
 | Area | Existing evidence | Missing evidence |
 |---|---|---|
 | Runtime proxy | Native protocol tests; minimal and strong runtime benchmarks; native startup/memory measurements; registrar unit test confirms native proxy default when available | Per-surface lifecycle workload attribution beyond the candidate matrix |
-| Local filesystem | Native read tests; native `fs_write_file` protocol test; direct write microbenchmark; `filesystem-write-load` strong workload across JavaScript and Rust-native lanes | Full write-tool parity beyond `fs_write_file`; mutation failure/cancellation breadth; integrated parity for every remaining mutation tool |
+| Local filesystem | Native read tests; native `fs_write_file`/string/range mutation protocol test; direct write microbenchmark; `filesystem-write-load` strong workload across JavaScript and Rust-native lanes | Full write-tool parity for patch, move, directory, and delete; mutation failure/cancellation breadth; integrated parity for every remaining mutation tool |
 | Structured command | JavaScript contract tests and realistic command workload; Rust policy/guidance/synchronous slice, direct protocol/timeout test, and native-child integrated benchmark lane | Background durability and confirmed UAC remain JavaScript authority; add parity evidence for the retained Rust canary |
 | Git | JavaScript contract tests and bounded Git policy | Rust read canary, direct protocol test, and `real-git` strong workload now cover policy, status, sync state, branches, dirty summary, diff, log, and show. Mutation/recovery/publication remain JavaScript authority. |
 | Dual infrastructure | The shared Rust proxy is already native; structured-command and Git are the only current dual surface canaries | Reopen another infrastructure port only when a concrete Rust-owned boundary and workload hypothesis exists |
