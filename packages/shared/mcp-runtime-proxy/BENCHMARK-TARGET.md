@@ -108,6 +108,7 @@ The repository-level strong profile is the heavier acceptance-oriented scenario.
 | `restart-soak` | Repeated replacement does not leak processes or fail to complete warm work. | 200 cold restarts; 2,000 warm calls |
 | `real-structured-command` | The benchmark reaches a real surface and performs policy inspection plus a safe command. | 8 samples; Bun, Node, Deno when available, and native Node proxy lanes |
 | `filesystem-search-load` | The benchmark reaches the real local-filesystem MCP surface and exercises search/read work over a large deterministic haystack. | 8 samples; 2,048 files (~54 MB), eight sequential filesystem commands, and eight concurrent searches per sample across the fixed matrix plus Rust, Rust + Rhai, and .NET native applet lanes |
+| `filesystem-write-load` | The benchmark exercises governed low-level filesystem mutation, readback, directory lifecycle, moves, and refusal paths under the same write contract. | 8 samples; write, exact/range edits, directory create/rename/delete, move, stale-hash refusal, and nonempty-delete refusal across the fixed matrix plus Rust and Rust + Rhai native applet lanes |
 
 The .NET lane uses the same `native_applet` invocation contract and is
 reported as skipped when the .NET SDK or published executable is unavailable.
@@ -117,7 +118,9 @@ script receives no raw filesystem, process, or network capability; it can only
 route to the existing Rust filesystem host operations.
 
 The filesystem workload's topology list includes `native-filesystem` and
-`native-rhai-filesystem` and `native-dotnet-filesystem`. Each launches the
+`native-rhai-filesystem` and `native-dotnet-filesystem`. The write workload
+also includes `native-filesystem-write` and `native-rhai-filesystem-write`.
+Each launches the
 Rust proxy with `--child-invocation-kind native_applet`; the child applet
 argument selects the implementation and each lane has an artifact manifest
 covering the native binary.
@@ -138,3 +141,8 @@ the deterministic haystack and concurrent search pressure. The workload uses
 read-only fs_grep_search (files, counts, and content), fs_glob_search,
 fs_file_metrics, fs_read_file_range, and fs_stat; every response and process
 lifecycle must remain valid.
+
+The filesystem-write-load workload is selected by default when requested with
+`NARADA_MCP_STRONG_WORKLOADS=filesystem-write-load` (or the equivalent CLI
+selection). It uses the write-mode contract and requires every topology to
+advertise the complete bounded mutation set before measuring it.

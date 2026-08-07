@@ -129,12 +129,16 @@ pub(crate) fn parse_state_for_rhai(args: &[String]) -> Result<State, String> {
     parse_state(args)
 }
 
-pub(crate) fn initialize_for_rhai(request: &Value) -> Value {
-    initialize(request, "read")
+pub(crate) fn mode_for_rhai(state: &State) -> &str {
+    &state.mode
 }
 
-pub(crate) fn tools_list_for_rhai() -> Value {
-    json!({"tools": list_tools("read")})
+pub(crate) fn initialize_for_rhai(request: &Value, mode: &str) -> Value {
+    initialize(request, mode)
+}
+
+pub(crate) fn tools_list_for_rhai(mode: &str) -> Value {
+    json!({"tools": list_tools(mode)})
 }
 
 pub(crate) fn tool_call_for_rhai(state: &mut State, params: &Value) -> Value {

@@ -9,10 +9,16 @@ type JsonRecord = Record<string, any>;
 
 const packageRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..');
 const executable = resolve(process.env.NARADA_NATIVE_FILESYSTEM_TEST_EXECUTABLE ?? resolve(packageRoot, 'dist', 'native', 'narada-mcp-runtime.exe'));
+const expectedServerName = process.env.NARADA_NATIVE_FILESYSTEM_TEST_VARIANT === 'rhai'
+  ? 'local-filesystem-write-rhai'
+  : 'local-filesystem-write-native';
+const appletArgument = process.env.NARADA_NATIVE_FILESYSTEM_TEST_VARIANT === 'rhai'
+  ? 'rhai-filesystem'
+  : 'filesystem';
 
 function run(mode: 'read' | 'write', root: string, requests: JsonRecord[], auditLogDir?: string): Promise<JsonRecord[]> {
   return new Promise((resolvePromise, rejectPromise) => {
-    const args = ['filesystem', '--mode', mode, '--allowed-root', root];
+    const args = [appletArgument, '--mode', mode, '--allowed-root', root];
     if (auditLogDir) args.push('--audit-log-dir', auditLogDir);
     const child = spawn(executable, args, { stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true });
     let stdout = '';
@@ -62,7 +68,7 @@ try {
     { jsonrpc: '2.0', id: 23, method: 'tools/call', params: { name: 'fs_move_path', arguments: { from: 'nested/moved.txt', to: 'nested/existing.txt' } } },
   ], auditLogDir);
   const byId = new Map(responses.map((response) => [response.id, response]));
-  assert.equal(byId.get(1)?.result?.serverInfo?.name, 'local-filesystem-write-native');
+  assert.equal(byId.get(1)?.result?.serverInfo?.name, expectedServerName);
   assert.equal(byId.get(2)?.result?.tools?.some((tool: JsonRecord) => tool.name === 'fs_write_file'), true);
   assert.equal(byId.get(2)?.result?.tools?.some((tool: JsonRecord) => tool.name === 'fs_str_replace_file'), true);
   assert.equal(byId.get(2)?.result?.tools?.some((tool: JsonRecord) => tool.name === 'fs_replace_range'), true);

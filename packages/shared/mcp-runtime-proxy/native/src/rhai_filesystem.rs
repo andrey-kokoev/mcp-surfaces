@@ -20,6 +20,7 @@ fn route(method, tool, args_json) {
 
 pub fn run(args: &[String]) -> Result<(), String> {
     let state = filesystem::parse_state_for_rhai(args)?;
+    let mode = filesystem::mode_for_rhai(&state).to_string();
     let shared_state = Arc::new(Mutex::new(state));
     let mut engine = Engine::new();
     let host_state = Arc::clone(&shared_state);
@@ -59,7 +60,7 @@ pub fn run(args: &[String]) -> Result<(), String> {
         if request.get("id").is_none() {
             continue;
         }
-        let response = dispatch(&engine, &mut scope, &ast, &request)?;
+        let response = dispatch(&engine, &mut scope, &ast, &request, &mode)?;
         filesystem::write_message(&mut writer, &response, framed)
             .map_err(|error| error.to_string())?;
         writer.flush().map_err(|error| error.to_string())?;
@@ -72,6 +73,7 @@ fn dispatch(
     scope: &mut Scope<'static>,
     ast: &rhai::AST,
     request: &Value,
+    mode: &str,
 ) -> Result<Value, String> {
     let id = request.get("id").cloned().unwrap_or(Value::Null);
     let method = request
@@ -103,17 +105,20 @@ fn dispatch(
 
     let result = match routed.as_str() {
         "__initialize__" => {
-            let mut initialize = filesystem::initialize_for_rhai(request);
+            let mut initialize = filesystem::initialize_for_rhai(request, mode);
             if let Some(server_info) = initialize
                 .get_mut("serverInfo")
                 .and_then(Value::as_object_mut)
             {
-                server_info.insert("name".to_string(), json!("local-filesystem-read-rhai"));
+                server_info.insert(
+                    "name".to_string(),
+                    json!(format!("local-filesystem-{mode}-rhai")),
+                );
             }
             json!({"jsonrpc": "2.0", "id": id, "result": initialize})
         }
         "__tools_list__" => {
-            json!({"jsonrpc": "2.0", "id": id, "result": filesystem::tools_list_for_rhai()})
+            json!({"jsonrpc": "2.0", "id": id, "result": filesystem::tools_list_for_rhai(mode)})
         }
         "__resources_list__" => json!({"jsonrpc": "2.0", "id": id, "result": {"resources": []}}),
         "__resources_read__" => json!({

@@ -120,8 +120,9 @@ Native launches declare an explicit child invocation kind and applet so
 entrypoint paths are not overloaded with applet semantics.
 
 The Rust + Rhai filesystem executable keeps filesystem operations in the Rust
-host and uses a fixed, capability-limited Rhai dispatch script. It is a
-benchmark lane, not the production default.
+host and uses a fixed, capability-limited Rhai dispatch script. It supports
+the same read and governed low-level write modes for benchmark comparison; it
+is a benchmark lane, not the production default.
 
 The selected implementation, executable path, and executable fingerprint are
 recorded in the carrier sidecar and checked before child launch. Rust sources,

@@ -84,7 +84,7 @@ mkdirSync(diagnosticsRoot, { recursive: true });
 const reportId = `mcp-runtime-strong-${new Date().toISOString().replace(/[-:.TZ]/g, '').slice(0, 14)}`;
 const bunProxyPath = fileURLToPath(new URL('../dist/src/main.js', import.meta.url));
 const nativeProxyPath = process.env['NARADA_MCP_NATIVE_PROXY_PATH']?.trim() || fileURLToPath(new URL('../dist/native/narada-mcp-runtime.exe', import.meta.url));
-const nativeRhaiFilesystemPath = fileURLToPath(new URL('../dist/native/narada-mcp-rhai-filesystem.exe', import.meta.url));
+const nativeRhaiFilesystemPath = process.env['NARADA_MCP_NATIVE_RHAI_FILESYSTEM_PATH']?.trim() || fileURLToPath(new URL('../dist/native/narada-mcp-rhai-filesystem.exe', import.meta.url));
 const dotnetFilesystemPath = join(workspaceRoot, 'packages', 'local-filesystem-mcp', 'native-dotnet', 'publish', 'narada-filesystem-dotnet.exe');
 
 function selectionValues(value: string | undefined): string[] | undefined {
@@ -931,6 +931,7 @@ const filesystemTopologies: Topology[] = [
 const filesystemWriteTopologies: Topology[] = [
   ...proxyTopologies,
   { id: 'native-filesystem-write', proxy: 'native', proxyRuntime: 'native', childRuntime: 'native_applet', childApplet: 'filesystem', nativeVariant: 'rust' },
+  { id: 'native-rhai-filesystem-write', proxy: 'native', proxyRuntime: 'native', childRuntime: 'native_applet', childApplet: 'rhai-filesystem', nativeVariant: 'rhai' },
 ];
 
 const gitTopologies: Topology[] = [
