@@ -16,6 +16,10 @@ export interface SiteFabricClientOptions {
   env?: NodeJS.ProcessEnv;
 }
 
+function isToolResultEnvelope(value: JsonRecord): boolean {
+  return value.isError === true || isRecord(value.structuredContent) || Array.isArray(value.content);
+}
+
 export interface SiteFabricToolCallOptions {
   runtimeKind?: string;
   timeoutMs?: number;
@@ -170,18 +174,21 @@ export class SiteFabricClient {
     context: string,
   ): Promise<JsonRecord> {
     let value = unwrapChildToolResult(childResult, context);
-    for (let depth = 0; isMaterializedOutputPage(value); depth += 1) {
+    for (let depth = 0; ; depth += 1) {
+      if (!isMaterializedOutputPage(value)) return value;
       if (depth >= MAX_MATERIALIZED_RESULT_DEPTH) {
         throw new Error(`mcp_runtime_materialized_result_depth_exceeded:${context}`);
       }
-      value = await this.#readMaterializedRecord(
+      const loaded = await this.#readMaterializedRecord(
         connection,
         requiredString(value.output_ref ?? value.ref, 'mcp_runtime_materialized_output_ref_missing'),
         deadlineAt,
         context,
       );
+      // A materialized page can contain another loader/tool envelope. Normalize
+      // every loaded hop before deciding whether another page must be read.
+      value = isToolResultEnvelope(loaded) ? unwrapChildToolResult(loaded, context) : loaded;
     }
-    return value;
   }
 
   async #readMaterializedRecord(

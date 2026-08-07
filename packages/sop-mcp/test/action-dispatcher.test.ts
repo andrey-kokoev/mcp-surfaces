@@ -22,6 +22,7 @@ type Call = { surface: string; tool: string; args: JsonRecord };
 
 class ActionFabric implements SopActionFabricCaller {
   calls: Call[] = [];
+  action: JsonRecord = action;
   domainResult: JsonRecord = {
     schema: 'narada.domain_operation.v1',
     operation_ref: 'mailbox-sync:1',
@@ -33,8 +34,8 @@ class ActionFabric implements SopActionFabricCaller {
   async call(surface: string, tool: string, args: JsonRecord = {}): Promise<JsonRecord> {
     this.calls.push({ surface, tool, args });
     if (tool === 'sop_action_list') return { items: [{ action_id: 'action-1' }], count: 1 };
-    if (tool === 'sop_action_show') return action;
-    if (surface === 'mailbox' && tool === 'mailbox_sync_generation') return this.domainResult;
+    if (tool === 'sop_action_show') return this.action;
+    if (surface === this.action.surface_id && tool === this.action.tool_name) return this.domainResult;
     if (tool === 'sop_action_resolve') {
       if (this.failResolution) throw new Error('lost_after_domain_commit');
       return { schema: 'narada.sop.action.v1', status: 'completed' };
@@ -97,4 +98,83 @@ test('records a typed terminal domain failure as the SOP action outcome', async 
   const resolve = fabric.calls.find((call) => call.tool === 'sop_action_resolve')!;
   assert.equal(resolve.args.outcome, 'failed');
   assert.equal(resolve.args.error_message, 'mailbox_generation_rejected');
+});
+
+test('fails closed when a completed domain operation omits its result', async () => {
+  const fabric = new ActionFabric();
+  fabric.domainResult = {
+    schema: 'narada.domain_operation.v1',
+    operation_ref: 'mailbox-sync:missing-result',
+    outcome: 'completed',
+  };
+  const report = await runSopActionDispatcher(options, fabric);
+  assert.equal(report.status, 'completed_with_errors');
+  assert.match(String(report.errors[0]?.error), /domain_operation_result_missing/);
+  assert.equal(fabric.calls.some((call) => call.tool === 'sop_action_resolve'), false);
+});
+
+test('fails closed when a completed domain operation exceeds the inline result bound without a reference', async () => {
+  const fabric = new ActionFabric();
+  fabric.domainResult = {
+    schema: 'narada.domain_operation.v1',
+    operation_ref: 'mailbox-sync:oversized-without-ref',
+    outcome: 'completed',
+    result: { generation_id: 'generation-1', observed_message_refs: ['x'.repeat(17_000)] },
+  };
+  const report = await runSopActionDispatcher(options, fabric);
+  assert.equal(report.status, 'completed_with_errors');
+  assert.match(String(report.errors[0]?.error), /domain_operation_result_too_large_without_ref/);
+  assert.equal(fabric.calls.some((call) => call.tool === 'sop_action_resolve'), false);
+});
+
+test('preserves a bounded result, domain operation_ref, and immutable result_ref', async () => {
+  const fabric = new ActionFabric();
+  const resultRef = {
+    ref: 'mailbox-generation-receipt:generation-1',
+    sha256: 'a'.repeat(64),
+    byte_length: 90_081,
+    media_type: 'application/json',
+  };
+  fabric.domainResult = {
+    schema: 'narada.domain_operation.v1',
+    operation_ref: 'mailbox-sync:generation-1',
+    outcome: 'completed',
+    result: {
+      schema: 'narada.mailbox.sync_generation_receipt.v1',
+      generation_id: 'generation-1',
+      status: 'no_change',
+      observed_message_refs_omitted: true,
+    },
+    result_ref: resultRef,
+  };
+  const report = await runSopActionDispatcher(options, fabric);
+  assert.equal(report.status, 'completed');
+  const resolve = fabric.calls.find((call) => call.tool === 'sop_action_resolve')!;
+  assert.equal(resolve.args.completion_key, 'mailbox-sync:generation-1');
+  assert.equal(resolve.args.operation_ref, 'mailbox-sync:generation-1');
+  assert.deepEqual(resolve.args.result_ref, resultRef);
+  assert.deepEqual(resolve.args.result, fabric.domainResult.result);
+});
+
+test('fails closed when a Graph draft receipt is incomplete', async () => {
+  const fabric = new ActionFabric();
+  fabric.action = {
+    ...action,
+    surface_id: 'graph-mail',
+    tool_name: 'graph_mail_ticket_draft_upsert',
+  };
+  fabric.domainResult = {
+    schema: 'narada.domain_operation.v1',
+    operation_ref: 'graph-mail-ticket-draft:incomplete',
+    outcome: 'completed',
+    result: {
+      schema: 'narada.graph_mail.ticket_draft_receipt.v1',
+      receipt_id: 'receipt-1',
+      draft_ref: { draft_id: 'draft-1' },
+    },
+  };
+  const report = await runSopActionDispatcher(options, fabric);
+  assert.equal(report.status, 'completed_with_errors');
+  assert.match(String(report.errors[0]?.error), /domain_operation_draft_id_missing/);
+  assert.equal(fabric.calls.some((call) => call.tool === 'sop_action_resolve'), false);
 });

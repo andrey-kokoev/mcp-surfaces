@@ -618,7 +618,7 @@ export class MailboxDomainService {
       ? config.scopes.find((candidate) => candidate.scope_id === requestedScope)
       : config.scopes.length === 1 ? config.scopes[0] : undefined;
     if (!scope) throw new Error(requestedScope ? `mailbox_scope_not_found:${requestedScope}` : 'mailbox_scope_id_required');
-    const rootDir = resolve(scope.root_dir);
+    const rootDir = resolve(this.siteRoot, scope.root_dir);
     assertInside(this.siteRoot, rootDir, 'mailbox_scope_root_outside_site');
     return { scope: { ...scope, root_dir: rootDir }, configPath };
   }
@@ -824,12 +824,46 @@ function generationReady(records: GenerationRecordRow[]): boolean {
 }
 
 function generationOperation(generation: SyncGenerationRow, replayed: boolean): JsonRecord {
-  const receipt = generation.receipt ?? {};
+  const receipt = generation.receipt;
+  if (!receipt) throw new Error(`mailbox_sync_receipt_missing:${generation.generation_id}`);
+  const serializedReceipt = canonicalJson(receipt);
   return {
     schema: DOMAIN_SCHEMA,
     operation_ref: `mailbox-sync:${generation.generation_id}`,
     outcome: 'completed',
-    result: { ...receipt, idempotency_replayed: replayed },
+    result: generationReceiptSummary(receipt, replayed),
+    result_ref: {
+      ref: `mailbox-generation-receipt:${generation.generation_id}`,
+      sha256: sha256(serializedReceipt),
+      byte_length: Buffer.byteLength(serializedReceipt, 'utf8'),
+      media_type: 'application/json',
+    },
+  };
+}
+
+function generationReceiptSummary(receipt: JsonRecord, replayed: boolean): JsonRecord {
+  const observedRefs = Array.isArray(receipt.observed_message_refs)
+    ? receipt.observed_message_refs
+    : [];
+  return {
+    schema: typeof receipt.schema === 'string'
+      ? receipt.schema
+      : 'narada.mailbox.sync_generation_receipt.v1',
+    generation_id: receipt.generation_id,
+    scope_id: receipt.scope_id,
+    status: receipt.status,
+    config_fingerprint: receipt.config_fingerprint,
+    parent_cursor_sha256: receipt.parent_cursor_sha256 ?? null,
+    next_cursor_sha256: receipt.next_cursor_sha256 ?? null,
+    record_count: receipt.record_count,
+    observed_message_count: receipt.observed_message_count,
+    first_observation_count: receipt.first_observation_count,
+    tombstone_count: receipt.tombstone_count,
+    observed_message_refs_available_count: observedRefs.length,
+    observed_message_refs_omitted: true,
+    observed_message_refs_truncated: receipt.observed_message_refs_truncated === true,
+    completed_at: receipt.completed_at,
+    idempotency_replayed: replayed,
   };
 }
 

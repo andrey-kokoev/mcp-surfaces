@@ -43,6 +43,14 @@ try {
   assert.equal(nestedMaterialized.kind, 'nested-materialized');
   assert.equal(String(nestedMaterialized.payload).length, 24_000);
 
+  const nestedEnvelope = await client.call('alpha', 'nested-envelope');
+  assert.deepEqual(nestedEnvelope, {
+    schema: 'narada.domain_operation.v1',
+    operation_ref: 'nested-domain:1',
+    outcome: 'completed',
+    result: { receipt_id: 'nested-receipt-1' },
+  });
+
   const doubleMaterialized = await client.call('alpha', 'materialized');
   assert.equal(doubleMaterialized.schema, 'fake.materialized.v1');
   assert.equal(doubleMaterialized.kind, 'double');

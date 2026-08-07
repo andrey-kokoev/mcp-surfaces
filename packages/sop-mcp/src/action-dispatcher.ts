@@ -6,6 +6,11 @@ import {
   type JsonRecord,
   type SiteFabricToolCallOptions,
 } from '@narada-core/mcp-runtime-client';
+import {
+  MAX_INLINE_VALUE_BYTES,
+  jsonByteLength,
+  normalizeValueRef,
+} from './procedure-contract.js';
 
 export interface SopActionFabricCaller {
   call(
@@ -70,7 +75,7 @@ export async function runSopActionDispatcher(
           action.arguments,
           { timeoutMs: options.requestTimeoutMs },
         );
-        const operation = parseDomainOperation(domainResult);
+        const operation = parseDomainOperation(domainResult, action.tool_name);
         await fabric.call(options.sopSurfaceId, 'sop_action_resolve', {
           action_id: action.action_id,
           completion_key: operation.operation_ref,
@@ -122,6 +127,19 @@ function parsePendingAction(value: JsonRecord): PendingAction {
   };
 }
 
+function validateCompletedResult(toolName: string, result: JsonRecord): void {
+  if (toolName !== 'graph_mail_ticket_draft_upsert') return;
+  if (result.schema !== 'narada.graph_mail.ticket_draft_receipt.v1') {
+    throw new Error(`domain_operation_draft_receipt_schema_invalid:${String(result.schema ?? 'missing')}`);
+  }
+  requiredString(result.receipt_id, 'domain_operation_draft_receipt_id_missing');
+  const draftId = requiredString(result.draft_id, 'domain_operation_draft_id_missing');
+  const draftRef = requireRecord(result.draft_ref, 'domain_operation_draft_ref_missing');
+  if (requiredString(draftRef.draft_id, 'domain_operation_draft_ref_id_missing') !== draftId) {
+    throw new Error('domain_operation_draft_ref_id_mismatch');
+  }
+}
+
 interface DomainOperation {
   operation_ref: string;
   outcome: 'completed' | 'failed';
@@ -130,23 +148,40 @@ interface DomainOperation {
   error_message: string | null;
 }
 
-function parseDomainOperation(value: JsonRecord): DomainOperation {
+function parseDomainOperation(value: JsonRecord, toolName: string): DomainOperation {
   if (value.schema !== 'narada.domain_operation.v1') {
     throw new Error(`domain_operation_schema_invalid:${String(value.schema ?? 'missing')}`);
   }
+  const operationRef = requiredString(value.operation_ref, 'domain_operation_ref_missing');
   const outcome = requiredString(value.outcome, 'domain_operation_outcome_missing');
   if (outcome !== 'completed' && outcome !== 'failed') {
     throw new Error(`domain_operation_outcome_invalid:${outcome}`);
   }
   const errorMessage = optionalString(value.error_message);
   if (outcome === 'failed' && !errorMessage) throw new Error('domain_operation_failed_without_error_message');
+  let result: JsonRecord;
+  if (value.result === undefined) {
+    if (outcome === 'completed') throw new Error('domain_operation_result_missing');
+    result = {};
+  } else {
+    result = requireRecord(value.result, 'domain_operation_result_invalid');
+  }
+  if (outcome === 'completed') {
+    if (Object.keys(result).length === 0) throw new Error('domain_operation_result_empty');
+    validateCompletedResult(toolName, result);
+  }
+  const resultRef = normalizeValueRef(value.result_ref, 'domain_operation_result_ref');
+  const resultByteLength = jsonByteLength(result);
+  if (resultByteLength > MAX_INLINE_VALUE_BYTES) {
+    throw new Error(resultRef
+      ? `domain_operation_result_too_large_with_ref:${resultByteLength}`
+      : `domain_operation_result_too_large_without_ref:${resultByteLength}`);
+  }
   return {
-    operation_ref: requiredString(value.operation_ref, 'domain_operation_ref_missing'),
+    operation_ref: operationRef,
     outcome,
-    result: value.result === undefined ? {} : requireRecord(value.result, 'domain_operation_result_invalid'),
-    result_ref: value.result_ref === undefined || value.result_ref === null
-      ? null
-      : requireRecord(value.result_ref, 'domain_operation_result_ref_invalid'),
+    result,
+    result_ref: resultRef,
     error_message: errorMessage,
   };
 }

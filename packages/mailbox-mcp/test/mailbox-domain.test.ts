@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { createHash } from 'node:crypto';
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
@@ -21,10 +22,10 @@ const configDir = join(root, 'config');
 mkdirSync(configDir, { recursive: true });
 writeFileSync(join(root, 'package.json'), JSON.stringify({ name: 'mailbox-domain-fixture', private: true }));
 writeFileSync(join(configDir, 'config.json'), JSON.stringify({
-  root_dir: projectionRoot,
+  root_dir: '.narada/runtime/mailboxes/support',
   scopes: [{
     scope_id: 'support',
-    root_dir: projectionRoot,
+    root_dir: '.narada/runtime/mailboxes/support',
     sources: [{ type: 'graph' }],
     graph: { user_id: 'support@example.test', prefer_immutable_ids: true },
     scope: { included_container_refs: ['inbox'], included_item_kinds: ['message'] },
@@ -75,8 +76,8 @@ const source: Source = {
 };
 
 try {
-  const naradaSonarRoot = resolve(import.meta.dirname, '..', '..', '..', '..', '..', 'narada.sonar');
-  const naradaRoot = resolve(import.meta.dirname, '..', '..', '..', '..', '..', 'narada');
+  const naradaSonarRoot = resolve(import.meta.dirname, '..', '..', '..', '..', 'narada.sonar');
+  const naradaRoot = resolve(import.meta.dirname, '..', '..', '..', '..', 'narada');
   const explicitRuntime = await loadControlPlaneRuntime(root, naradaRoot);
   assert.equal(typeof explicitRuntime.loadConfig, 'function');
   const runtime = await loadControlPlaneRuntime(naradaSonarRoot);
@@ -87,7 +88,22 @@ try {
   assert.equal(first.outcome, 'completed');
   assert.equal(record(first.result).status, 'synced');
   assert.equal(record(first.result).first_observation_count, 2);
-  assert.equal(first.result_ref, undefined, 'SOP result_ref is reserved for immutable value refs');
+  assert.equal(record(first.result).observed_message_refs_omitted, true);
+  assert.equal(record(first.result).observed_message_refs, undefined);
+  assert.equal(record(first.result).observed_message_refs_available_count, 2);
+  const firstResultRef = record(first.result_ref);
+  assert.equal(firstResultRef.ref, `mailbox-generation-receipt:${record(first.result).generation_id}`);
+  assert.equal(firstResultRef.media_type, 'application/json');
+  assert.ok(Number.isSafeInteger(firstResultRef.byte_length));
+  assert.ok(Number(firstResultRef.byte_length) > 0);
+  assert.match(String(firstResultRef.sha256), /^[a-f0-9]{64}$/);
+  const firstGenerationView = record(service.generationShow({
+    generation_id: String(record(first.result).generation_id),
+  }));
+  const firstFullReceipt = record(record(firstGenerationView.generation).receipt);
+  const canonicalFirstReceipt = canonicalJson(firstFullReceipt);
+  assert.equal(firstResultRef.byte_length, Buffer.byteLength(canonicalFirstReceipt, 'utf8'));
+  assert.equal(firstResultRef.sha256, createHash('sha256').update(canonicalFirstReceipt).digest('hex'));
   assert.equal(sourceCalls, 1);
 
   const foundFact = service.messageFactFind({ scope_id: 'support', message_id: 'message-allowed' });
@@ -359,4 +375,11 @@ function record(value: unknown): RecordValue {
 function arrayOfRecords(value: unknown): RecordValue[] {
   assert.ok(Array.isArray(value));
   return value.map(record);
+}
+
+function canonicalJson(value: unknown): string {
+  if (value === null || typeof value !== 'object') return JSON.stringify(value);
+  if (Array.isArray(value)) return `[${value.map(canonicalJson).join(',')}]`;
+  const object = record(value);
+  return `{${Object.keys(object).sort().filter((key) => object[key] !== undefined).map((key) => `${JSON.stringify(key)}:${canonicalJson(object[key])}`).join(',')}}`;
 }

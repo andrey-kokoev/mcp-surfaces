@@ -108,6 +108,23 @@ for await (const line of lines) {
     }));
     continue;
   }
+  if (childTool === 'nested-envelope') {
+    const domainRef = materialize({
+      schema: 'narada.domain_operation.v1',
+      operation_ref: 'nested-domain:1',
+      outcome: 'completed',
+      result: { receipt_id: 'nested-receipt-1' },
+    });
+    const innerPageRef = materialize(toolResult(outputPage(domainRef)));
+    const outerPageRef = materialize(toolResult(outputPage(innerPageRef)));
+    respond(request.id, toolResult({
+      schema: 'narada.mcp_loader.tool_result.v1',
+      result_bounded: true,
+      details_ref: outerPageRef,
+      result: outputPage(outerPageRef, 'mcp_loader_read_result'),
+    }));
+    continue;
+  }
   if (childTool === 'nested-materialized' || childTool === 'too-large') {
     const domainRef = materialize({
       schema: 'fake.materialized.v1',
