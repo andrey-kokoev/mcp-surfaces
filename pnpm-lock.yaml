@@ -81,6 +81,14 @@ importers:
         specifier: ^5.8.3
         version: 5.9.3
 
+  ../narada/packages/nars-intelligence-kernel-contract: {}
+
+  ../narada/packages/operator-surface-runtime-contract:
+    dependencies:
+      '@narada-core/nars-intelligence-kernel-contract':
+        specifier: workspace:*
+        version: link:../nars-intelligence-kernel-contract
+
   ../narada/packages/process-launch-posture: {}
 
   ../narada/packages/site-operating-loop:
@@ -425,6 +433,9 @@ importers:
       '@narada-core/operator-routing-mcp':
         specifier: workspace:*
         version: link:../operator-routing-mcp
+      '@narada-core/operator-surface-runtime-contract':
+        specifier: workspace:*
+        version: link:../../../narada/packages/operator-surface-runtime-contract
       '@narada-core/project-state-mcp':
         specifier: workspace:*
         version: link:../project-state-mcp
