@@ -19,7 +19,7 @@ export type MaterializationGeneration = {
   artifact_manifest_fingerprint: string | null;
   registrar_entrypoint: string;
   registrar_fingerprint: string | null;
-  proxy_implementation: 'bun' | 'native';
+  proxy_implementation: 'bun' | 'node' | 'native';
   proxy_entrypoint: string;
   proxy_fingerprint: string | null;
   server_count: number;
@@ -187,7 +187,7 @@ export function validateMaterializedConfiguration(input: {
     } else if (!existsSync(childEntrypoint)) {
       errors.push({ code: 'materialized_config_child_entrypoint_missing', server_key: serverKey, detail: { path: childEntrypoint } });
     }
-    if (childInvocationKind !== 'entrypoint' && childInvocationKind !== 'native_applet') {
+    if (childInvocationKind !== 'entrypoint' && childInvocationKind !== 'native_applet' && childInvocationKind !== 'native_entrypoint') {
       errors.push({ code: 'materialized_config_child_invocation_kind_invalid', server_key: serverKey, detail: { child_invocation_kind: childInvocationKind } });
     }
     if (childInvocationKind === 'native_applet' && !childApplet) {
@@ -222,7 +222,7 @@ export function buildMaterializationGeneration(input: {
   artifactManifestPath: string;
   artifactManifestFingerprint: string | null;
   registrarEntrypoint: string;
-  proxyImplementation: 'bun' | 'native';
+  proxyImplementation: 'bun' | 'node' | 'native';
   proxyEntrypoint: string;
   serverCount: number;
   proxyCount: number;
@@ -291,7 +291,7 @@ export function preflightMaterializationGeneration(input: {
     (generation.artifact_manifest_fingerprint !== null && typeof generation.artifact_manifest_fingerprint !== 'string') ||
     typeof generation.registrar_entrypoint !== 'string' ||
     (generation.registrar_fingerprint !== null && typeof generation.registrar_fingerprint !== 'string') ||
-    (generation.proxy_implementation !== 'bun' && generation.proxy_implementation !== 'native') ||
+    (generation.proxy_implementation !== 'bun' && generation.proxy_implementation !== 'node' && generation.proxy_implementation !== 'native') ||
     typeof generation.proxy_entrypoint !== 'string' ||
     (generation.proxy_fingerprint !== null && typeof generation.proxy_fingerprint !== 'string') ||
     typeof generation.server_count !== 'number' ||

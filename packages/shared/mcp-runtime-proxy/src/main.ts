@@ -60,7 +60,7 @@ type PendingRequest = {
 type ProxyOptions = {
   childCommand: string;
   entrypoint: string;
-  childInvocationKind: 'entrypoint' | 'native_applet';
+  childInvocationKind: 'entrypoint' | 'native_applet' | 'native_entrypoint';
   childApplet: string | null;
   childPrefixArgs: string[];
   childArgs: string[];
@@ -104,7 +104,7 @@ const STARTUP_TRACE_SCHEMA = 'narada.mcp_runtime_proxy.startup_trace.v1';
 function parseArgs(argv: string[]): ProxyOptions {
   let childCommand = '';
   let entrypoint = '';
-  let childInvocationKind: 'entrypoint' | 'native_applet' = 'entrypoint';
+  let childInvocationKind: 'entrypoint' | 'native_applet' | 'native_entrypoint' = 'entrypoint';
   let childApplet: string | null = null;
   let childPrefixArgs: string[] = [];
   let carrierId: string | null = null;
@@ -129,7 +129,7 @@ function parseArgs(argv: string[]): ProxyOptions {
     else if (arg === '--entrypoint' && prelude[index + 1]) entrypoint = prelude[++index];
     else if (arg === '--child-invocation-kind' && prelude[index + 1]) {
       const value = prelude[++index];
-      if (value !== 'entrypoint' && value !== 'native_applet') throw new Error('mcp_runtime_proxy_invalid_child_invocation_kind');
+      if (value !== 'entrypoint' && value !== 'native_applet' && value !== 'native_entrypoint') throw new Error('mcp_runtime_proxy_invalid_child_invocation_kind');
       childInvocationKind = value;
     }
     else if (arg === '--child-applet' && prelude[index + 1]) childApplet = prelude[++index];
@@ -1250,7 +1250,7 @@ function spawnProxyChild(options: ProxyOptions, supervisorPath: string | null): 
         '--',
         options.childCommand,
         ...options.childPrefixArgs,
-        options.childInvocationKind === 'native_applet' ? options.childApplet! : options.entrypoint,
+        ...(options.childInvocationKind === 'native_entrypoint' ? [] : [options.childInvocationKind === 'native_applet' ? options.childApplet! : options.entrypoint]),
         ...options.childArgs,
       ], spawnOptions) as ChildProcessWithoutNullStreams,
       supervisorPath,
@@ -1260,7 +1260,7 @@ function spawnProxyChild(options: ProxyOptions, supervisorPath: string | null): 
   return {
     child: spawn(options.childCommand, [
       ...options.childPrefixArgs,
-      options.childInvocationKind === 'native_applet' ? options.childApplet! : options.entrypoint,
+      ...(options.childInvocationKind === 'native_entrypoint' ? [] : [options.childInvocationKind === 'native_applet' ? options.childApplet! : options.entrypoint]),
       ...options.childArgs,
     ], spawnOptions) as ChildProcessWithoutNullStreams,
     supervisorPath: null,

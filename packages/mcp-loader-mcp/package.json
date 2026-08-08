@@ -38,6 +38,11 @@
     "@types/node": "^22.15.3",
     "typescript": "^5.8.3"
   },
+  "naradaRuntimeArtifacts": {
+    "win32": ["./dist/native/narada-mcp-loader.exe"],
+    "linux": ["./dist/native/narada-mcp-loader"],
+    "darwin": ["./dist/native/narada-mcp-loader"]
+  },
   "files": [
     "dist/"
   ]

@@ -146,7 +146,7 @@ fn parse_options(args: &[String]) -> Result<Options, String> {
         .get("--child-invocation-kind")
         .cloned()
         .unwrap_or_else(|| "entrypoint".to_string());
-    if child_invocation_kind != "entrypoint" && child_invocation_kind != "native_applet" {
+    if child_invocation_kind != "entrypoint" && child_invocation_kind != "native_applet" && child_invocation_kind != "native_entrypoint" {
         return Err("mcp_runtime_proxy_invalid_child_invocation_kind".to_string());
     }
     let child_applet = values.get("--child-applet").cloned();
@@ -286,16 +286,18 @@ fn run_proxy(args: &[String]) -> Result<(), String> {
     }), false);
     let mut command = Command::new(&options.child_command);
     let child_entry = if options.child_invocation_kind == "native_applet" {
-        Path::new(options.child_applet.as_deref().unwrap_or_default())
+        Some(Path::new(options.child_applet.as_deref().unwrap_or_default()))
+    } else if options.child_invocation_kind == "native_entrypoint" {
+        None
     } else {
-        options.entrypoint.as_path()
+        Some(options.entrypoint.as_path())
     };
+    command.args(&options.child_prefix_args);
+    if let Some(child_entry) = child_entry {
+        command.arg(child_entry);
+    }
+    command.args(&options.child_args);
     command
-        .args(
-            options.child_prefix_args.iter().map(AsRef::as_ref)
-                .chain(std::iter::once(child_entry.as_os_str()))
-                .chain(options.child_args.iter().map(AsRef::as_ref)),
-        )
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
