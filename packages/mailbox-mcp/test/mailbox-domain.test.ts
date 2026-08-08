@@ -1,8 +1,8 @@
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join, resolve } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import { DatabaseSync } from '@narada-core/sqlite';
 import {
   loadControlPlaneRuntime,
@@ -15,6 +15,18 @@ import {
 import { MailboxDomainService } from '../src/mailbox-domain.js';
 
 type RecordValue = Record<string, unknown>;
+
+function siblingRepository(name: string): string {
+  let cursor = resolve(import.meta.dirname);
+  for (let depth = 0; depth < 10; depth += 1) {
+    const candidate = join(cursor, name);
+    if (existsSync(join(candidate, 'package.json'))) return candidate;
+    const parent = dirname(cursor);
+    if (parent === cursor) break;
+    cursor = parent;
+  }
+  throw new Error(`mailbox_test_sibling_repository_missing:${name}`);
+}
 
 const root = mkdtempSync(join(tmpdir(), 'mailbox-domain-'));
 const projectionRoot = join(root, '.narada', 'runtime', 'mailboxes', 'support');
@@ -76,8 +88,8 @@ const source: Source = {
 };
 
 try {
-  const naradaSonarRoot = resolve(import.meta.dirname, '..', '..', '..', '..', 'narada.sonar');
-  const naradaRoot = resolve(import.meta.dirname, '..', '..', '..', '..', 'narada');
+  const naradaSonarRoot = siblingRepository('narada.sonar');
+  const naradaRoot = siblingRepository('narada');
   const explicitRuntime = await loadControlPlaneRuntime(root, naradaRoot);
   assert.equal(typeof explicitRuntime.loadConfig, 'function');
   const runtime = await loadControlPlaneRuntime(naradaSonarRoot);

@@ -425,6 +425,9 @@ importers:
       '@narada-core/operator-routing-mcp':
         specifier: workspace:*
         version: link:../operator-routing-mcp
+      '@narada-core/project-state-mcp':
+        specifier: workspace:*
+        version: link:../project-state-mcp
       '@narada-core/quota-meter-mcp':
         specifier: workspace:*
         version: link:../quota-meter-mcp
@@ -534,6 +537,19 @@ importers:
       '@narada-core/mcp-e2e-harness':
         specifier: workspace:*
         version: link:../shared/mcp-e2e-harness
+      '@types/node':
+        specifier: ^22.15.3
+        version: 22.19.19
+      typescript:
+        specifier: ^5.8.3
+        version: 5.9.3
+
+  packages/project-state-mcp:
+    dependencies:
+      '@narada-core/mcp-fabric-contracts':
+        specifier: workspace:*
+        version: link:../shared/mcp-fabric-contracts
+    devDependencies:
       '@types/node':
         specifier: ^22.15.3
         version: 22.19.19

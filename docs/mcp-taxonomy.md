@@ -42,6 +42,7 @@ The V2 runtime observation and reconciliation contracts are also transport-neutr
 - `@narada-core/site-coherence-mcp`
 - `@narada-core/site-lifecycle-mcp`
 - `@narada-core/site-registry-mcp`
+- `@narada-core/project-state-mcp`
 - `@narada-core/operator-routing-mcp`
 - `@narada-core/artifacts-mcp`
 - `@narada-core/nars-session-mcp`

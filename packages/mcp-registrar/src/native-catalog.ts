@@ -30,6 +30,7 @@ import { surfaceDefinition as cloudflareCarrier } from '@narada-core/cloudflare-
 import { surfaceDefinition as siteCoherence } from '@narada-core/site-coherence-mcp/surface-definition';
 import { surfaceDefinition as catalogObservation } from '@narada-core/catalog-observation-mcp/surface-definition';
 import { surfaceDefinition as runtimeIntrospection } from '@narada-core/runtime-introspection-mcp/surface-definition';
+import { surfaceDefinition as projectState } from '@narada-core/project-state-mcp/surface-definition';
 
 export const NATIVE_SURFACE_DEFINITIONS: Readonly<Record<string, DefinedSurface>> = Object.freeze({
   'local-filesystem': localFilesystem(),
@@ -63,4 +64,5 @@ export const NATIVE_SURFACE_DEFINITIONS: Readonly<Record<string, DefinedSurface>
   'site-coherence': siteCoherence(),
   'catalog-observation': catalogObservation(),
   'runtime-introspection': runtimeIntrospection(),
+  'project-state': projectState(),
 });

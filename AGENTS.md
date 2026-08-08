@@ -43,6 +43,7 @@ Current packages:
 - `@narada-core/site-coherence-mcp`: Site-level continuity coherence readback MCP surface for detecting posture mismatches between local and Cloudflare embodiments.
 - `@narada-core/site-lifecycle-mcp`: governed MCP surface aligned with `narada sites ...` CLI commands for Site creation planning, lifecycle inspection, relations, and gated configuration mutations.
 - `@narada-core/site-registry-mcp`: User Site MCP surface for canonical cross-site registry inspection and reconciliation planning.
+- `@narada-core/project-state-mcp`: read-only Local Site MCP projection for a virtual project-state registry owned by a Narada project.
 - `@narada-core/operator-routing-mcp`: User Site operator routing surface for transcript-to-target decisions and inbox fallback packaging.
 - `@narada-core/artifacts-mcp`: NARS session artifact registration and renderable artifact reference MCP surface.
 - `@narada-core/nars-session-mcp`: governed input and bounded readback for existing NARS sessions.
@@ -171,6 +172,7 @@ pnpm test:calendar
 pnpm test:task-lifecycle
 pnpm test:site-loop
 pnpm test:site-registry
+pnpm test:project-state
 pnpm test:site-lifecycle
 pnpm test:agent-context
 pnpm test:delegated-task
@@ -241,6 +243,7 @@ Do all of the following in the same change:
 - `mcp-registrar` owns the surface-to-site-to-carrier weave; it edits config files (JSON/TOML) but does not start or stop servers or mutate the surfaces themselves.
 - Registrar catalog entries may expose explicit projections over one package entrypoint. Projection scope and `runtime_requirements` select availability; they never replace surface policy. Multi-projection bindings must provide an explicit `projection_id` or a runtime kind that selects exactly one projection. Do not infer projection from server names, current directories, or entrypoint paths.
 - `site-registry-mcp` owns User Site access to the canonical cross-site registry. It is read-only, exposes reconciliation planning rather than apply, and must not acquire Local Site lifecycle responsibilities.
+- `project-state-mcp` owns only the read-only Local Site projection of a site's virtual project-state CLI. It must not own the site's SQL authority, mutate generated outputs, or imply fabrication, metrology, external evidence, qualification, or flight credit.
 - `mcp-loader-mcp` owns runtime attachment/proxying for allowed MCP surfaces; it does not own the surfaces it attaches to and must not become a general orchestration layer. It honors explicit `surface_projection.runtime_requirements`: omitted runtime context selects only neutral projections, and runtime-affined projections require a matching `runtime_kind`.
 - `mcp-transport` owns reusable payload/output reference mechanics.
 - `mcp-telemetry` owns optional site-policy-gated telemetry helpers; it must not replace mandatory audit logs or persist raw args/results by default.

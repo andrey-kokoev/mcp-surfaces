@@ -104,6 +104,9 @@
       "path": "./packages/site-registry-mcp"
     },
     {
+      "path": "./packages/project-state-mcp"
+    },
+    {
       "path": "./packages/surface-feedback-mcp"
     },
     {

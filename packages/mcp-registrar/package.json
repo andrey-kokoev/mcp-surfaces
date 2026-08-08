@@ -59,6 +59,7 @@
     "@narada-core/nars-session-mcp": "workspace:*",
     "@narada-core/quota-meter-mcp": "workspace:*",
     "@narada-core/runtime-introspection-mcp": "workspace:*",
+    "@narada-core/project-state-mcp": "workspace:*",
     "@narada-core/operator-console-overlay-mcp": "workspace:*",
     "@narada-core/browser-control-mcp": "workspace:*",
     "@narada-core/cloudflare-carrier-mcp": "workspace:*",
