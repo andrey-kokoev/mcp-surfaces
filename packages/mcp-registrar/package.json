@@ -65,6 +65,7 @@
     "@narada-core/site-coherence-mcp": "workspace:*",
     "@narada-core/catalog-observation-mcp": "workspace:*",
     "@narada-core/mcp-fabric-compiler": "workspace:*",
+    "@narada-core/operator-surface-runtime-contract": "workspace:*",
     "@narada-core/mcp-fabric-contracts": "workspace:*",
     "@narada-core/mcp-transport": "workspace:*",
     "@narada-core/mcp-runtime-proxy": "workspace:*"

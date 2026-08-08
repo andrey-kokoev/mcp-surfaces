@@ -17,6 +17,8 @@ import {
   writeMaterializationGeneration,
 } from '@narada-core/mcp-runtime-proxy/materialization-contract';
 import { NATIVE_SURFACE_DEFINITIONS } from './native-catalog.js';
+import { isNativeArtifactEntrypoint, resolveNativeArtifact } from '@narada-core/mcp-runtime-proxy/native-artifact';
+import { resolveRuntimeMaterializationPlan, runtimeMaterializationPlanEntry } from '@narada-core/operator-surface-runtime-contract/runtime-materialization-plan';
 
 const SERVER_NAME = 'mcp-registrar';
 const SERVER_VERSION = '0.1.0';
@@ -190,8 +192,14 @@ const configuredSourceRoot = process.env.NARADA_SRC_ROOT?.trim();
 const MCP_WORKSPACE_PARENT = resolve(configuredSourceRoot || resolve(MCP_WORKSPACE_ROOT, '..'));
 const MCP_SURFACES_ROOT = portablePathLiteral(process.env.NARADA_MCP_SURFACES_ROOT ?? join(MCP_WORKSPACE_ROOT, 'packages'));
 const MCP_RUNTIME_PROXY_ENTRYPOINT = `${MCP_SURFACES_ROOT}/shared/mcp-runtime-proxy/dist/src/main.js`;
-const MCP_NATIVE_RUNTIME_PROXY_ENTRYPOINT = `${MCP_SURFACES_ROOT}/shared/mcp-runtime-proxy/dist/native/narada-mcp-runtime${process.platform === 'win32' ? '.exe' : ''}`;
+const MCP_RUNTIME_PROXY_PACKAGE_ROOT = resolve(MCP_SURFACES_ROOT, 'shared', 'mcp-runtime-proxy');
+const MCP_NATIVE_RUNTIME_PROXY_LEGACY_ENTRYPOINT = `${MCP_SURFACES_ROOT}/shared/mcp-runtime-proxy/dist/native/narada-mcp-runtime${process.platform === 'win32' ? '.exe' : ''}`;
+function nativeRuntimeProxyEntrypoint(): string {
+  return portablePath(resolveNativeArtifact(MCP_RUNTIME_PROXY_PACKAGE_ROOT, 'narada-mcp-runtime.exe') ?? MCP_NATIVE_RUNTIME_PROXY_LEGACY_ENTRYPOINT);
+}
 const MCP_REGISTRAR_RUNTIME_ENTRYPOINT = `${MCP_SURFACES_ROOT}/mcp-registrar/dist/src/main.js`;
+const MCP_MCP_LOADER_PACKAGE_ROOT = resolve(MCP_SURFACES_ROOT, 'mcp-loader-mcp');
+const MCP_NATIVE_MCP_LOADER_ENTRYPOINT = portablePathLiteral(join(MCP_MCP_LOADER_PACKAGE_ROOT, 'dist', 'native', `narada-mcp-loader${process.platform === 'win32' ? '.exe' : ''}`));
 const PROCESS_REGISTRAR_ENTRYPOINT_FINGERPRINT = existsSync(MCP_REGISTRAR_RUNTIME_ENTRYPOINT)
   ? createHash('sha256').update(readFileSync(MCP_REGISTRAR_RUNTIME_ENTRYPOINT)).digest('hex')
   : null;
@@ -199,10 +207,84 @@ const MCP_WORKSPACE_ARTIFACT_MANIFEST = portablePathLiteral(join(MCP_WORKSPACE_R
 const MCP_REGISTRAR_ENTRYPOINT = '{mcp_surfaces_root}/mcp-registrar/dist/src/main.js';
 const SPEECH_PROVIDER_REGISTRY_PATH = `${MCP_SURFACES_ROOT}/speech-mcp/config/provider-registry.v2.json`;
 
-type RuntimeProxyImplementation = 'bun' | 'native';
+type RuntimeProxyImplementation = 'bun' | 'node' | 'native';
+type RuntimeProfileKind = 'native' | 'bun' | 'node-compat';
+type RuntimeEngineKind = 'node' | 'bun' | 'rust';
+
+type RuntimeMaterializationPlan = JsonRecord;
+
+function acceptedRuntimeMaterializationPlan(value: unknown): RuntimeMaterializationPlan {
+  const plan = resolveRuntimeMaterializationPlan(value ?? 'native') as RuntimeMaterializationPlan;
+  if (plan.status !== 'accepted') {
+    throw diagnosticError('registrar_runtime_profile_refused', `registrar_runtime_profile_refused:${String(plan.candidate_runtime_profile ?? value ?? '')}`, { plan });
+  }
+  return plan;
+}
+
+let runtimeMaterializationPlan: RuntimeMaterializationPlan = acceptedRuntimeMaterializationPlan(process.env.NARADA_RUNTIME_PROFILE?.trim() || 'native');
+let runtimeProfileKind: RuntimeProfileKind = String(runtimeMaterializationPlan.runtime_profile_kind) as RuntimeProfileKind;
+
+function setRuntimeMaterializationProfile(value: unknown): void {
+  runtimeMaterializationPlan = acceptedRuntimeMaterializationPlan(value ?? 'native');
+  runtimeProfileKind = String(runtimeMaterializationPlan.runtime_profile_kind) as RuntimeProfileKind;
+  runtimeProxyImplementation = runtimeProxyImplementationForPlan();
+}
+
+function matrixPlanEntry(componentKind: string): JsonRecord {
+  const entry = runtimeMaterializationPlanEntry(runtimeMaterializationPlan, componentKind) as JsonRecord | null;
+  if (!entry || entry.implementation_status !== 'admitted') {
+    throw diagnosticError('registrar_runtime_implementation_unavailable', `registrar_runtime_implementation_unavailable:${componentKind}`, {
+      component_kind: componentKind,
+      runtime_profile_kind: runtimeProfileKind,
+      entry: entry ?? null,
+    });
+  }
+  return entry;
+}
+
+function componentKindForSurface(surfaceId: string): string {
+  if (surfaceId === 'mcp-loader' || surfaceId === 'mcp-loader-mcp.local') return 'mcp-loader-mcp';
+  if (surfaceId === 'local-filesystem' || surfaceId === 'local-filesystem-mcp.local') return 'filesystem-mcp';
+  if (surfaceId === 'agent-context' || surfaceId === 'agent-context-mcp.local') return 'agent-context-mcp';
+  if (surfaceId === 'mcp-registrar' || surfaceId === 'mcp-registrar-mcp.local') return 'mcp-registrar';
+  return 'mcp-javascript-surface';
+}
+
+function selectedSurfaceRuntimeEngine(surfaceId: string, explicitImplementation?: 'js' | 'native'): RuntimeEngineKind {
+  const componentKind = componentKindForSurface(surfaceId);
+  if (explicitImplementation === 'native') {
+    const entry = matrixPlanEntry(componentKind);
+    if (entry.runtime_engine_kind !== 'rust') {
+      throw diagnosticError('registrar_native_surface_not_admitted', `registrar_native_surface_not_admitted:${componentKind}`, {
+        component_kind: componentKind,
+        runtime_profile_kind: runtimeProfileKind,
+        runtime_engine_kind: entry.runtime_engine_kind,
+      });
+    }
+    return 'rust';
+  }
+  if (explicitImplementation === 'js') return String(matrixPlanEntry('mcp-javascript-surface').runtime_engine_kind) as RuntimeEngineKind;
+  return String(matrixPlanEntry(componentKind).runtime_engine_kind) as RuntimeEngineKind;
+}
+
+
+function javascriptRuntimeCommand(engine: RuntimeEngineKind): string {
+  if (engine === 'bun') return 'bun';
+  if (engine === 'node') return 'node';
+  throw diagnosticError('registrar_native_surface_command_required', `registrar_native_surface_command_required:${engine}`);
+}
+
+function runtimeProxyImplementationForPlan(): RuntimeProxyImplementation {
+  const engine = String(matrixPlanEntry('mcp-runtime-proxy').runtime_engine_kind) as RuntimeEngineKind;
+  return engine === 'rust' ? 'native' : engine;
+}
+
+function runtimeMaterializationPlanPath(configPath: string): string {
+  return `${resolve(configPath)}.narada-runtime-plan.json`;
+}
 
 function nativeRuntimeProxyAvailable(): boolean {
-  return process.platform === 'win32' && existsSync(MCP_NATIVE_RUNTIME_PROXY_ENTRYPOINT);
+  return process.platform === 'win32' && existsSync(nativeRuntimeProxyEntrypoint());
 }
 
 export function defaultRuntimeProxyImplementation(
@@ -223,11 +305,11 @@ export function defaultSurfaceImplementation(
   return mode === 'read' && nativeAvailable ? 'native' : 'js';
 }
 
-let runtimeProxyImplementation: RuntimeProxyImplementation = defaultRuntimeProxyImplementation();
+let runtimeProxyImplementation: RuntimeProxyImplementation = runtimeProxyImplementationForPlan();
 
 function selectedRuntimeProxyEntrypoint(): string {
   return runtimeProxyImplementation === 'native'
-    ? MCP_NATIVE_RUNTIME_PROXY_ENTRYPOINT
+    ? nativeRuntimeProxyEntrypoint()
     : MCP_RUNTIME_PROXY_ENTRYPOINT;
 }
 
@@ -1706,10 +1788,13 @@ type CarrierLaunchCommand = {
   uses_runtime_proxy: boolean;
   runtime_proxy_entrypoint?: string;
   runtime_proxy_implementation?: RuntimeProxyImplementation;
+  runtime_profile_kind?: RuntimeProfileKind;
+  runtime_engine_kind?: RuntimeEngineKind;
+  component_kind?: string;
   artifact_manifest_path?: string;
   runtime_contract_version?: number;
   materialization_sidecar_path?: string;
-  child_invocation_kind?: 'entrypoint' | 'native_applet';
+  child_invocation_kind?: 'entrypoint' | 'native_applet' | 'native_entrypoint';
   child_applet?: string;
   child_entrypoint: string;
   child_args: string[];
@@ -1732,12 +1817,12 @@ function carrierLaunchCommand(
   if (useNativeFilesystemApplet && !nativeRuntimeProxyAvailable()) {
     throw diagnosticError(
       'registrar_native_filesystem_applet_missing',
-      `Native filesystem applet is unavailable: ${MCP_NATIVE_RUNTIME_PROXY_ENTRYPOINT}`,
-      { entrypoint: MCP_NATIVE_RUNTIME_PROXY_ENTRYPOINT, surface_id: surfaceId },
+      `Native filesystem applet is unavailable: ${nativeRuntimeProxyEntrypoint()}`,
+      { entrypoint: nativeRuntimeProxyEntrypoint(), surface_id: surfaceId },
     );
   }
-  const effectiveChildCommand = useNativeFilesystemApplet ? MCP_NATIVE_RUNTIME_PROXY_ENTRYPOINT : runtimeCommand;
-  const effectiveChildEntrypoint = useNativeFilesystemApplet ? MCP_NATIVE_RUNTIME_PROXY_ENTRYPOINT : childEntrypoint;
+  const effectiveChildCommand = useNativeFilesystemApplet ? nativeRuntimeProxyEntrypoint() : runtimeCommand;
+  const effectiveChildEntrypoint = useNativeFilesystemApplet ? nativeRuntimeProxyEntrypoint() : childEntrypoint;
   const sidecarPath = configPath ? materializationSidecarPath(configPath) : null;
   if (server.kind === 'local') {
     return {
@@ -3344,7 +3429,7 @@ type SiteMcpFabricServer = {
   entrypoint: string;
   launch_entrypoint: string;
   uses_runtime_proxy: boolean;
-  child_invocation_kind?: 'entrypoint' | 'native_applet';
+  child_invocation_kind?: 'entrypoint' | 'native_applet' | 'native_entrypoint';
   child_applet?: string;
   surface_id?: string;
   projection_id?: string;
@@ -3355,10 +3440,10 @@ type SiteMcpFabricServer = {
   projection_kind: 'site_fabric' | 'carrier_projection';
 };
 
-function unwrapRuntimeProxyLaunch(entrypoint: string, args: string[]): { entrypoint: string; args: string[]; usesRuntimeProxy: boolean; launchEntrypoint: string; childInvocationKind?: 'entrypoint' | 'native_applet'; childApplet?: string } {
+function unwrapRuntimeProxyLaunch(entrypoint: string, args: string[]): { entrypoint: string; args: string[]; usesRuntimeProxy: boolean; launchEntrypoint: string; childInvocationKind?: 'entrypoint' | 'native_applet' | 'native_entrypoint'; childApplet?: string } {
   const launchEntrypoint = entrypoint;
   if (portablePath(entrypoint) !== portablePath(MCP_RUNTIME_PROXY_ENTRYPOINT)
-    && portablePath(entrypoint) !== portablePath(MCP_NATIVE_RUNTIME_PROXY_ENTRYPOINT)) {
+    && !isNativeArtifactEntrypoint(MCP_RUNTIME_PROXY_PACKAGE_ROOT, 'narada-mcp-runtime.exe', entrypoint)) {
     return { entrypoint, args, usesRuntimeProxy: false, launchEntrypoint };
   }
   const entrypointIndex = args.indexOf('--entrypoint');
@@ -3367,7 +3452,8 @@ function unwrapRuntimeProxyLaunch(entrypoint: string, args: string[]): { entrypo
   const childArgs = separatorIndex >= 0 ? args.slice(separatorIndex + 1) : [];
   const invocationIndex = args.indexOf('--child-invocation-kind');
   const appletIndex = args.indexOf('--child-applet');
-  const childInvocationKind = invocationIndex >= 0 && args[invocationIndex + 1] === 'native_applet' ? 'native_applet' : 'entrypoint';
+  const childInvocationValue = invocationIndex >= 0 ? args[invocationIndex + 1] : undefined;
+  const childInvocationKind = childInvocationValue === 'native_applet' || childInvocationValue === 'native_entrypoint' ? childInvocationValue : 'entrypoint';
   const childApplet = appletIndex >= 0 ? args[appletIndex + 1] : undefined;
   return { entrypoint: childEntrypoint, args: childArgs, usesRuntimeProxy: true, launchEntrypoint, childInvocationKind, ...(childApplet ? { childApplet } : {}) };
 }
@@ -3567,7 +3653,9 @@ function runtimeBindingForFabricServer(site: SiteDef, server: SiteMcpFabricServe
       server.entrypoint,
       ...(server.child_invocation_kind === 'native_applet'
         ? ['--child-invocation-kind', 'native_applet', '--child-applet', server.child_applet ?? 'filesystem']
-        : []),
+         : server.child_invocation_kind === 'native_entrypoint'
+           ? ['--child-invocation-kind', 'native_entrypoint']
+           : []),
       '--',
       ...server.args,
     ]
@@ -3580,7 +3668,7 @@ function runtimeBindingForFabricServer(site: SiteDef, server: SiteMcpFabricServe
     transport: {
       type: 'stdio',
       command: server.uses_runtime_proxy && runtimeProxyImplementation === 'native'
-        ? MCP_NATIVE_RUNTIME_PROXY_ENTRYPOINT
+        ? nativeRuntimeProxyEntrypoint()
         : server.command,
       args: transportArgs,
     },
@@ -4295,7 +4383,7 @@ async function runDirectMaterialization(options: Extract<RegistrarCliOptions, { 
   runtimeProxyImplementation = options.runtimeProxyImplementation;
   if (runtimeProxyImplementation === 'native' && !nativeRuntimeProxyAvailable()) {
     throw new Error(process.platform === 'win32'
-      ? `registrar_native_runtime_proxy_missing:${MCP_NATIVE_RUNTIME_PROXY_ENTRYPOINT}`
+      ? `registrar_native_runtime_proxy_missing:${nativeRuntimeProxyEntrypoint()}`
       : `registrar_native_runtime_proxy_unsupported_platform:${process.platform}`);
   }
   const result = options.mode === 'materialize-all'
