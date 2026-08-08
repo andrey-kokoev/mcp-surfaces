@@ -49,13 +49,17 @@ Surface requests resolve by exact declared `surface_id` metadata or exact fabric
 
 The payload's declared creator and id namespace are lineage hints and accidental-misrouting guards, not cryptographic provenance or policy authority.
 
-## Native loader slice (experimental)
+## Native loader (Rust)
 
-`pnpm build:native` builds an opt-in Rust child-session kernel at `dist/native/narada-mcp-loader.exe` on Windows. It preserves MCP initialize, tools/list, tools/call, bounded child timeouts, JSONL/Content-Length input, attach, detach, and replayable child restart for one explicitly configured stdio child.
+pnpm run build:native builds the full contract-compatible Rust loader at dist/native/narada-mcp-loader.exe on Windows. The native path covers the public MCP surface, Site-fabric resolution and policy checks, child supervision, initialization and tool routing, bounded timeouts, lifecycle diagnostics, freshness, stable logical handles across replayable child restart, inventory, observation, and bounded output references.
 
-This slice deliberately does not own Site-fabric resolution, surface admission policy, multi-connection inventory, runtime observation, stable handles, or output-reference materialization. The Bun loader remains the production implementation and the runtime matrix is not changed until those boundaries have parity evidence.
+The Rust implementation is admitted for the Narada native runtime profile. The TypeScript loader remains the explicit fallback and rollback path; select the native implementation for parity testing with MCP_LOADER_NATIVE=1. The existing Node/Bun behavior suite is parameterized to exercise both implementations.
 
-Run `pnpm test:native` for the native smoke test; run the existing `test:bun` and `test:node` suites for loader parity.
+Run pnpm run test:node and pnpm run test:bun for the TypeScript contract paths, pnpm run test:native for the focused Rust lifecycle test, and from this package run the full native suite with:
+
+    $env:MCP_LOADER_NATIVE='1'; node dist/test/protocol-smoke.test.js; node dist/test/mcp-loader-mcp.test.js
+
+The bounded loader benchmark is pnpm run benchmark:loader. It measures Node/Node, Bun/Bun, and Rust/Node over the same initialize, tools/list, explicit stdio attach, repeated tools/call, and detach workload. Override NARADA_LOADER_BENCHMARK_SAMPLES and NARADA_LOADER_BENCHMARK_WARM_CALLS for a finite sample size.
 
 ## Boundary
 

@@ -197,7 +197,11 @@ for (const [legacyRoot, site_id] of [[legacyAndreyRoot, 'narada-andrey'], [legac
 
 const serverPath = fileURLToPath(new URL('../src/main.js', import.meta.url));
 const processScope = createTestProcessScope({ label: 'mcp-loader-test' });
-const child = processScope.spawn(process.execPath, [serverPath, '--allowed-site-root', root, '--allowed-site-root', aggregateRoot, '--allowed-site-root', fragmentedRoot, '--allowed-site-root', duplicateRoot, '--allowed-site-root', retiredStubRoot, '--allowed-site-root', legacyAndreyRoot, '--allowed-site-root', legacyUserSiteRoot, '--allowed-entrypoint-prefix', root, '--allowed-entrypoint-prefix', aggregateRoot, '--allowed-entrypoint-prefix', join(dirname(serverPath), 'echo-server.mjs'), '--allowed-entrypoint-prefix', resolve(dirname(serverPath), '..', '..', '..'), '--tool-call-timeout-ms', '1000'], { stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true, env: { ...process.env, NARADA_AGENT_ID: 'test.agent', NARADA_CARRIER_SESSION_ID: 'carrier-test', NARADA_SITE_ID: 'test-site' } });
+const nativeLoader = process.env.MCP_LOADER_NATIVE === '1';
+const nativeExecutable = resolve(dirname(serverPath), '..', 'native', process.platform === 'win32' ? 'narada-mcp-loader.exe' : 'narada-mcp-loader');
+const loaderCommand = nativeLoader ? nativeExecutable : process.execPath;
+const loaderArgs = nativeLoader ? [] : [serverPath];
+const child = processScope.spawn(loaderCommand, [...loaderArgs, '--allowed-site-root', root, '--allowed-site-root', aggregateRoot, '--allowed-site-root', fragmentedRoot, '--allowed-site-root', duplicateRoot, '--allowed-site-root', retiredStubRoot, '--allowed-site-root', legacyAndreyRoot, '--allowed-site-root', legacyUserSiteRoot, '--allowed-entrypoint-prefix', root, '--allowed-entrypoint-prefix', aggregateRoot, '--allowed-entrypoint-prefix', join(dirname(serverPath), 'echo-server.mjs'), '--allowed-entrypoint-prefix', resolve(dirname(serverPath), '..', '..', '..'), '--tool-call-timeout-ms', '1000'], { stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true, env: { ...process.env, NARADA_AGENT_ID: 'test.agent', NARADA_CARRIER_SESSION_ID: 'carrier-test', NARADA_SITE_ID: 'test-site' } });
 
 let stdout = '';
 let stderr = '';

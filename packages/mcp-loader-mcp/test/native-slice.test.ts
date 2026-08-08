@@ -57,7 +57,7 @@ process.stdin.on('data', (chunk) => {
   });
   try {
     const initialized = await call('initialize', { protocolVersion: '2024-11-05' }, 1);
-    assert.equal(initialized.result.serverInfo.name, 'mcp-loader-native');
+    assert.equal(initialized.result.serverInfo.name, 'mcp-loader-mcp');
     const listed = await call('tools/list', {}, 2);
     assert.ok(listed.result.tools.some((tool: any) => tool.name === 'mcp_loader_attach_surface'));
     const attached = await call('tools/call', { name: 'mcp_loader_attach_surface', arguments: { entrypoint: child, surface_id: 'echo' } }, 3);
