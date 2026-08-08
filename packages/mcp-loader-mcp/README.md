@@ -59,7 +59,7 @@ Run pnpm run test:node and pnpm run test:bun for the TypeScript contract paths, 
 
     $env:MCP_LOADER_NATIVE='1'; node dist/test/protocol-smoke.test.js; node dist/test/mcp-loader-mcp.test.js
 
-The bounded loader benchmark is pnpm run benchmark:loader. It measures Node/Node, Bun/Bun, and Rust/Node over the same initialize, tools/list, explicit stdio attach, repeated tools/call, and detach workload. Override NARADA_LOADER_BENCHMARK_SAMPLES and NARADA_LOADER_BENCHMARK_WARM_CALLS for a finite sample size.
+The bounded loader benchmark is pnpm run benchmark:loader. It measures Node/Node, Bun/Bun, and Rust/Node over the same initialize, tools/list, explicit stdio attach, repeated tools/call, and detach workload. It also reports peak loader memory, attached-child memory, and their combined peak; on Windows these are private bytes, while Unix uses RSS. Override NARADA_LOADER_BENCHMARK_SAMPLES and NARADA_LOADER_BENCHMARK_WARM_CALLS for a finite sample size.
 
 ## Boundary
 
