@@ -9,6 +9,7 @@ import {
   MCP_RUNTIME_CONTRACT_VERSION,
   preflightMaterializationGeneration,
 } from '@narada-core/mcp-runtime-proxy/materialization-contract';
+import { resolveNativeArtifact } from '@narada-core/mcp-runtime-proxy/native-artifact';
 
 type JsonRecord = Record<string, any>;
 
@@ -18,7 +19,7 @@ const registrarEntrypoint = join(packageRoot, 'dist', 'src', 'main.js');
 const artifactManifestPath = join(workspaceRoot, '.ai', 'runtime', 'workspace-artifact-manifest.json');
 const surfacesRoot = join(workspaceRoot, 'packages');
 const nativeRuntimeArtifactAvailable = process.platform === 'win32'
-  && existsSync(join(surfacesRoot, 'shared', 'mcp-runtime-proxy', 'dist', 'native', 'narada-mcp-runtime.exe'));
+  && resolveNativeArtifact(join(surfacesRoot, 'shared', 'mcp-runtime-proxy'), 'narada-mcp-runtime.exe') !== null;
 
 type RpcRun = {
   exitCode: number | null;
@@ -130,6 +131,7 @@ test('fresh registrar materializes, validates, and launches a carrier generation
   assert.equal(existsSync(registrarEntrypoint), true, registrarEntrypoint);
   assert.equal(existsSync(artifactManifestPath), true, artifactManifestPath);
   const root = mkdtempSync(join(tmpdir(), 'mcp-registrar-materialization-e2e-'));
+   const materializationProfile = nativeRuntimeArtifactAvailable ? 'native' : 'bun';
   const configPath = join(root, 'config.toml');
   const sidecarPath = `${resolve(configPath)}.narada-generation.json`;
   try {
@@ -162,6 +164,8 @@ test('fresh registrar materializes, validates, and launches a carrier generation
       '--materialize-all',
       '--output-dir',
       root,
+      '--runtime-profile',
+      materializationProfile,
     ]);
     assert.equal(directMaterialize.exitCode, 0, directMaterialize.stderr);
     const directResult = JSON.parse(directMaterialize.stdout) as JsonRecord;
@@ -169,9 +173,14 @@ test('fresh registrar materializes, validates, and launches a carrier generation
     assert.equal(directResult.carrier_count, 3);
     const directCodex = (directResult.carriers as JsonRecord[]).find((carrier) => carrier.carrier_id === 'codex-andrey')!;
     assert.equal(directCodex.materialization_validation.ok, true, JSON.stringify(directCodex));
-    assert.equal(directCodex.materialization_generation.proxy_implementation, nativeRuntimeArtifactAvailable ? 'native' : 'bun');
+    assert.equal(directCodex.materialization_generation.proxy_implementation, materializationProfile === 'native' ? 'native' : 'bun');
     assert.equal(existsSync(configPath), true);
     assert.equal(existsSync(sidecarPath), true);
+    const planPath = `${resolve(configPath)}.narada-runtime-plan.json`;
+    assert.equal(existsSync(planPath), true);
+    const directPlan = JSON.parse(readFileSync(planPath, 'utf8')) as JsonRecord;
+    assert.equal(directPlan.schema, 'narada.runtime_materialization_plan.v1');
+    assert.equal(directPlan.runtime_profile_kind, materializationProfile);
     assert.equal(existsSync(join(root, 'mcp.json')), true);
     assert.equal(existsSync(join(root, 'opencode.jsonc')), true);
     const directConfig = readFileSync(join(root, 'config.toml'), 'utf8');
@@ -190,6 +199,8 @@ test('fresh registrar materializes, validates, and launches a carrier generation
       '--output-dir',
       nativeRoot,
       '--runtime-proxy-implementation',
+      'native',
+      '--runtime-profile',
       'native',
     ]);
     assert.equal(nativeMaterialize.exitCode, 0, nativeMaterialize.stderr);
@@ -215,6 +226,18 @@ test('fresh registrar materializes, validates, and launches a carrier generation
     assert.equal(nativeProxyRun.exitCode, 0, nativeProxyRun.stderr);
     assert.equal(nativeProxyRun.responses[0]?.error, undefined, JSON.stringify(nativeProxyRun.responses[0]));
     assert.equal(nativeProxyRun.responses[0]?.result?.serverInfo?.name, 'mcp-registrar');
+
+     const nativePlan = JSON.parse(readFileSync(join(nativeRoot, 'config.toml.narada-runtime-plan.json'), 'utf8')) as JsonRecord;
+     const nativeLoaderRow = (nativePlan.servers as JsonRecord[]).find((row) => row.surface_id === 'mcp-loader')!;
+     const nativeLoaderRun = await runRpc(nativeLoaderRow.launch.command, nativeLoaderRow.launch.args, {
+       jsonrpc: '2.0',
+       id: 'native-loader-initialize',
+       method: 'initialize',
+       params: { protocolVersion: '2024-11-05', capabilities: {}, clientInfo: { name: 'native-loader-materialization-e2e', version: '1.0.0' } },
+     });
+     assert.equal(nativeLoaderRun.exitCode, 0, nativeLoaderRun.stderr);
+     assert.equal(nativeLoaderRun.responses[0]?.error, undefined, JSON.stringify(nativeLoaderRun.responses[0]));
+     assert.equal(nativeLoaderRun.responses[0]?.result?.serverInfo?.name, 'mcp-loader-mcp');
     writeFileSync(join(nativeRoot, 'config.toml'), nativeConfig + '# native stale generation test\n', 'utf8');
     const nativeStaleRun = await runRpc(nativeLaunch.command, nativeLaunch.args, {
       jsonrpc: '2.0',
@@ -368,6 +391,38 @@ test('fresh registrar materializes, validates, and launches a carrier generation
     assert.equal(workspaceRecovery?.steps?.[0]?.command?.display, 'pnpm build');
     assert.equal(workspaceRecovery?.steps?.[1]?.available, true);
     assert.equal(workspaceRecovery?.restart_required, true);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('runtime profiles compile carrier plans with matrix-selected engines', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'mcp-registrar-runtime-profiles-e2e-'));
+  const nativeLoaderAvailable = process.platform === 'win32'
+    && existsSync(join(surfacesRoot, 'mcp-loader-mcp', 'dist', 'native', 'narada-mcp-loader.exe'));
+  const profiles = nativeRuntimeArtifactAvailable && nativeLoaderAvailable
+    ? ['native', 'bun', 'node-compat']
+    : ['bun', 'node-compat'];
+  const expected: Record<string, Record<string, string>> = {
+    native: { 'mcp-loader': 'rust', 'local-filesystem': 'rust', 'agent-context': 'bun', 'mcp-registrar': 'bun' },
+    bun: { 'mcp-loader': 'bun', 'local-filesystem': 'bun', 'agent-context': 'bun', 'mcp-registrar': 'bun' },
+    'node-compat': { 'mcp-loader': 'node', 'local-filesystem': 'node', 'agent-context': 'node', 'mcp-registrar': 'node' },
+  };
+  try {
+    for (const profile of profiles) {
+      const outputDir = join(root, profile);
+      const result = await runCli([registrarEntrypoint, '--materialize-all', '--output-dir', outputDir, '--runtime-profile', profile]);
+      assert.equal(result.exitCode, 0, `${profile}:${result.stderr}`);
+      const planPath = join(outputDir, 'config.toml.narada-runtime-plan.json');
+      const plan = JSON.parse(readFileSync(planPath, 'utf8')) as JsonRecord;
+      assert.equal(plan.schema, 'narada.runtime_materialization_plan.v1');
+      assert.equal(plan.runtime_profile_kind, profile);
+      for (const [surfaceId, runtimeEngineKind] of Object.entries(expected[profile]!)) {
+        const row = (plan.servers as JsonRecord[]).find((candidate) => candidate.surface_id === surfaceId);
+        assert.ok(row, `${profile}:${surfaceId}:missing`);
+        assert.equal(row.runtime_engine_kind, runtimeEngineKind, `${profile}:${surfaceId}:engine`);
+      }
+    }
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

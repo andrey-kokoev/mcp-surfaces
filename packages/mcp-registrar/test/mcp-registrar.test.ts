@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { DatabaseSync } from '@narada-core/sqlite';
+import { resolveNativeArtifact } from '@narada-core/mcp-runtime-proxy/native-artifact';
 import { payloadCreate } from '@narada-core/mcp-transport';
 import { buildGuidanceResult } from '../src/guidance.js';
 import { appendLoaderAllowedSiteRoots, buildSiteBindConfig, buildSiteSurfaceRegistry, checkOutputReaderClosureForRegistry, checkSiteRegistryConformance, checkSiteRegistryConformanceFromObservation, compareCarrierProjection, createServerState, defaultRuntimeProxyImplementation, defaultSurfaceImplementation, handleRequest, parseArgs, readCodexPluginOverrides, readSiteSurfaceOverrides, sharedSurfaceIdsForBinding, siteBindSidecarRefusal, siteSurfaceServerKey, validateSiteMcpFabric, validateSiteToolInventoryObservation } from '../src/main.js';
@@ -19,7 +20,7 @@ const expectedUserSiteRoot = resolve(
     || join(workspaceRoot, '.narada', 'user-site'),
 ).replace(/\\/g, '/');
 const nativeRuntimeArtifactAvailable = process.platform === 'win32'
-  && existsSync(join(workspaceRoot, 'packages', 'shared', 'mcp-runtime-proxy', 'dist', 'native', 'narada-mcp-runtime.exe'));
+  && resolveNativeArtifact(join(workspaceRoot, 'packages', 'shared', 'mcp-runtime-proxy'), 'narada-mcp-runtime.exe') !== null;
 assert.equal(
   defaultRuntimeProxyImplementation(process.platform, nativeRuntimeArtifactAvailable),
   nativeRuntimeArtifactAvailable ? 'native' : 'bun',
@@ -149,14 +150,14 @@ try {
   function view(res: Record<string, any>): Record<string, any> {
     return res.result.structuredContent as Record<string, any>;
   }
-  function assertRuntimeProxy(server: Record<string, any>, childEntrypoint: string, runtime = 'node'): void {
+  function assertRuntimeProxy(server: Record<string, any>, childEntrypoint: string, runtime = 'bun', proxyImplementation = nativeRuntimeArtifactAvailable ? 'native' : 'bun'): void {
     const args: any = server.args as string[];
-    if (nativeRuntimeArtifactAvailable) {
-      assert.match(String(server.command).replace(/\\/g, '/'), /packages\/shared\/mcp-runtime-proxy\/dist\/native\/narada-mcp-runtime\.exe$/i);
+    if (proxyImplementation === 'native') {
+      assert.match(String(server.command).replace(/\\/g, '/'), /packages\/shared\/mcp-runtime-proxy\/dist\/native\/(?:versions\/[^/]+\/)?narada-mcp-runtime\.exe$/i);
       assert.equal(args[0], 'proxy');
       assert.equal(args[args.indexOf('--child-command') + 1], runtime);
     } else {
-      assert.equal(server.command, runtime);
+      assert.equal(server.command, proxyImplementation);
       assert.match(args[0].replace(/\\/g, '/'), /packages\/shared\/mcp-runtime-proxy\/dist\/src\/main\.js$/);
     }
     assert.equal(args[args.indexOf('--entrypoint') + 1].replace(/\\/g, '/'), childEntrypoint.replace(/\\/g, '/'));
@@ -909,7 +910,7 @@ try {
     /registrar_progressive_binding_requires_explicit_bootstrap/,
   );
 
-  const materialize: any = await call('registrar_materialize_all', { output_dir: root });
+  const materialize: any = await call('registrar_materialize_all', { output_dir: root, runtime_profile: 'bun' });
   const matData: any = view(materialize);
   assert.equal(matData.status, 'materialized_all');
   assert.equal(matData.carrier_count, 3);
@@ -926,9 +927,9 @@ try {
   assert.equal((matData.carriers as Array<Record<string, any>>).some((carrier) => carrier.output_path === materializedPath), true);
   const materializedConfig: any = JSON.parse(readFileSync(materializedPath, 'utf8')) as Record<string, any>;
   const materializedFilesystem: any = materializedConfig.mcpServers['narada-site-andrey-user-local-filesystem'];
-  assertRuntimeProxy(materializedFilesystem, workspacePath('packages', 'local-filesystem-mcp', 'dist', 'src', 'main.js'));
+   assertRuntimeProxy(materializedFilesystem, workspacePath('packages', 'local-filesystem-mcp', 'dist', 'src', 'main.js'), 'bun', 'bun');
   const materializedAgentContext: any = materializedConfig.mcpServers['narada-site-andrey-user-agent-context'];
-  assertRuntimeProxy(materializedAgentContext, workspacePath('packages', 'agent-context-mcp', 'dist', 'src', 'main.js'), 'bun');
+   assertRuntimeProxy(materializedAgentContext, workspacePath('packages', 'agent-context-mcp', 'dist', 'src', 'main.js'), 'bun', 'bun');
   assert.ok(materializedConfig.mcpServers['narada-site-andrey-user-mcp-loader']);
   assert.ok(materializedConfig.mcpServers['narada-site-andrey-user-mcp-registrar']);
   assert.equal(materializedConfig.mcpServers['narada-site-andrey-user-site-loop'], undefined);
