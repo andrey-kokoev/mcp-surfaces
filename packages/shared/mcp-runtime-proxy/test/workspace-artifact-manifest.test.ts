@@ -99,3 +99,29 @@ test('workspace artifact manifest refuses missing, stale, and missing export art
     rmSync(root, { recursive: true, force: true });
   }
 });
+
+
+test('versioned native artifacts remain admitted after rotation', () => {
+  const root = mkdtempSync(join(tmpdir(), 'workspace-native-artifacts-'));
+  try {
+    const packageRoot = join(root, 'package');
+    const versionOne = join(packageRoot, 'dist', 'native', 'versions', 'one', 'narada-mcp-runtime.exe');
+    const versionTwo = join(packageRoot, 'dist', 'native', 'versions', 'two', 'narada-mcp-runtime.exe');
+    mkdirSync(join(packageRoot, 'dist', 'native', 'versions', 'one'), { recursive: true });
+    mkdirSync(join(packageRoot, 'dist', 'native', 'versions', 'two'), { recursive: true });
+    writeFileSync(join(packageRoot, 'package.json'), JSON.stringify({
+      name: '@test/versioned-native-package',
+      version: '1.0.0',
+      type: 'module',
+      naradaRuntimeArtifacts: { [process.platform]: ['./dist/native/versions/*'] },
+    }), 'utf8');
+    writeFileSync(versionOne, 'generation-one', 'utf8');
+    writeFileSync(versionTwo, 'generation-two', 'utf8');
+    const manifestPath = join(root, 'manifest.json');
+    buildWorkspaceArtifactManifest({ workspaceRoot: root, packageRoots: [packageRoot], outputPath: manifestPath });
+    assert.equal(preflightWorkspaceArtifacts({ surfaceId: 'native-one', entrypoint: versionOne, artifactManifestPath: manifestPath }).status, 'ok');
+    assert.equal(preflightWorkspaceArtifacts({ surfaceId: 'native-two', entrypoint: versionTwo, artifactManifestPath: manifestPath }).status, 'ok');
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});

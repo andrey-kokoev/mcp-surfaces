@@ -3,7 +3,8 @@ import { createHash } from 'node:crypto';
 import { spawn } from 'node:child_process';
 import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
+import { resolveNativeArtifact } from '../src/native-artifact.js';
 import { fileURLToPath } from 'node:url';
 import { MCP_RUNTIME_CONTRACT_VERSION } from '../src/materialization-contract.js';
 import { fingerprintWorkspaceArtifactManifest } from '../src/workspace-artifact-manifest.js';
@@ -14,7 +15,8 @@ const root = mkdtempSync(join(tmpdir(), 'mcp-native-proxy-'));
 const childPath = join(root, 'child.mjs');
 const manifestPath = join(root, 'workspace-artifact-manifest.json');
 const bunProxyPath = fileURLToPath(new URL('../src/main.js', import.meta.url));
-const nativeProxyPath = fileURLToPath(new URL('../native/narada-mcp-runtime.exe', import.meta.url));
+const packageRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..');
+const nativeProxyPath = resolveNativeArtifact(packageRoot, 'narada-mcp-runtime.exe') ?? fileURLToPath(new URL('../native/narada-mcp-runtime.exe', import.meta.url));
 
 function artifact(path: string) {
   const bytes = readFileSync(path);

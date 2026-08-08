@@ -1,6 +1,7 @@
 import { spawnSync } from 'node:child_process';
-import { copyFileSync, existsSync, mkdirSync, renameSync, rmSync } from 'node:fs';
+import { existsSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
+import { nativeArtifactRoot, preserveLegacyNativeArtifact, publishImmutableNativeArtifacts, resolveNativeArtifact } from '../src/native-artifact.js';
 import { fileURLToPath } from 'node:url';
 
 const packageRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
@@ -15,15 +16,16 @@ if (process.platform !== 'win32') {
   process.exit(0);
 }
 const nativeRoot = join(packageRoot, 'native');
+const outputRoot = nativeArtifactRoot(packageRoot);
 const executableNames = ['narada-mcp-runtime.exe', 'narada-mcp-rhai-filesystem.exe'];
 const artifacts = executableNames.map((name) => ({
+  name,
   source: join(nativeRoot, 'target', 'release', name),
-  destination: join(packageRoot, 'dist', 'native', name),
 }));
 const boaManifest = join(nativeRoot, 'boa-fixture', 'Cargo.toml');
 const boaArtifact = {
+  name: 'narada-mcp-boa-fixture.exe',
   source: join(nativeRoot, 'boa-fixture', 'target', 'release', 'narada-mcp-boa-fixture.exe'),
-  destination: join(packageRoot, 'dist', 'native', 'narada-mcp-boa-fixture.exe'),
 };
 
 const result = spawnSync('cargo', [
@@ -38,24 +40,13 @@ const result = spawnSync('cargo', [
   windowsHide: true,
 });
 if (result.error) throw result.error;
-if (result.status !== 0) throw new Error(`mcp_runtime_proxy_native_build_failed:${result.status ?? 'signal'}`);
+if (result.status !== 0) throw new Error('mcp_runtime_proxy_native_build_failed:' + (result.status ?? 'signal'));
 for (const artifact of artifacts) {
-  if (!existsSync(artifact.source)) throw new Error(`mcp_runtime_proxy_native_artifact_missing:${artifact.source}`);
-}
-
-mkdirSync(dirname(artifacts[0].destination), { recursive: true });
-for (const artifact of artifacts) {
-  const temporary = `${artifact.destination}.tmp-${process.pid}`;
-  copyFileSync(artifact.source, temporary);
-  try {
-    if (existsSync(artifact.destination)) rmSync(artifact.destination, { force: true });
-    renameSync(temporary, artifact.destination);
-  } finally {
-    if (existsSync(temporary)) rmSync(temporary, { force: true });
-  }
+  if (!existsSync(artifact.source)) throw new Error('mcp_runtime_proxy_native_artifact_missing:' + artifact.source);
 }
 
 let boaBuild: { status: 'built' | 'skipped'; reason?: string } = { status: 'skipped', reason: 'windows_only' };
+const publishArtifacts = [...artifacts];
 if (process.platform === 'win32') {
   const boaResult = spawnSync('cargo', [
     'build',
@@ -69,26 +60,38 @@ if (process.platform === 'win32') {
     windowsHide: true,
   });
   if (!boaResult.error && boaResult.status === 0 && existsSync(boaArtifact.source)) {
-    const temporary = `${boaArtifact.destination}.tmp-${process.pid}`;
-    copyFileSync(boaArtifact.source, temporary);
-    try {
-      if (existsSync(boaArtifact.destination)) rmSync(boaArtifact.destination, { force: true });
-      renameSync(temporary, boaArtifact.destination);
-    } finally {
-      if (existsSync(temporary)) rmSync(temporary, { force: true });
-    }
+    publishArtifacts.push(boaArtifact);
     boaBuild = { status: 'built' };
   } else {
-    if (existsSync(boaArtifact.destination)) rmSync(boaArtifact.destination, { force: true });
     boaBuild = { status: 'skipped', reason: boaResult.error?.code === 'ENOENT' ? 'cargo_unavailable' : 'boa_build_failed' };
   }
 }
 
-process.stdout.write(`${JSON.stringify({
+const pointer = publishImmutableNativeArtifacts({ packageRoot, artifacts: publishArtifacts });
+for (const artifact of artifacts) {
+  preserveLegacyNativeArtifact(artifact.source, join(outputRoot, artifact.name));
+}
+if (boaBuild.status === 'built') {
+  preserveLegacyNativeArtifact(boaArtifact.source, join(outputRoot, boaArtifact.name));
+}
+const currentExecutable = resolveNativeArtifact(packageRoot, 'narada-mcp-runtime.exe');
+if (!currentExecutable) throw new Error('mcp_runtime_proxy_native_artifact_publication_missing');
+const currentExecutables = executableNames
+  .map((name) => resolveNativeArtifact(packageRoot, name))
+  .filter((value): value is string => value !== null);
+const currentBoaExecutable = boaBuild.status === 'built'
+  ? resolveNativeArtifact(packageRoot, boaArtifact.name)
+  : null;
+
+process.stdout.write(JSON.stringify({
   schema: 'narada.mcp_runtime_proxy.native_build.v1',
-  executable: artifacts[0].destination,
-  executables: artifacts.map((artifact) => artifact.destination),
-  boa_fixture: { ...boaBuild, executable: boaBuild.status === 'built' ? boaArtifact.destination : null },
+  executable: currentExecutable,
+  executables: currentExecutables,
+  legacy_executables: executableNames.map((name) => join(outputRoot, name)),
+  pointer_path: join(outputRoot, 'current.json'),
+  build_fingerprint: pointer.build_fingerprint,
+  versioned_directory: join(outputRoot, 'versions', pointer.build_fingerprint),
+  boa_fixture: { ...boaBuild, executable: currentBoaExecutable },
   platform: process.platform,
   architecture: process.arch,
-})}\n`);
+}) + '\n');

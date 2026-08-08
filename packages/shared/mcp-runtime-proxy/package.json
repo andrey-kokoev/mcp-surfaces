@@ -13,14 +13,15 @@
     "benchmark:native": "pnpm run benchmark:runtime",
     "typecheck": "tsc -b --pretty false",
     "test": "pnpm run test:bun",
-    "test:bun": "pnpm --filter @narada-core/mcp-e2e-harness build && pnpm build && bun dist/test/mcp-runtime-proxy.test.js && bun dist/test/native-proxy.test.js && bun dist/test/boa-fixture.test.js && bun dist/test/native-filesystem.test.js && bun dist/test/native-filesystem-write.test.js && bun dist/test/native-structured-command.test.js && bun dist/test/native-git.test.js && bun test dist/test/generation-manager.test.js && bun test dist/test/runtime-observation.test.js && bun test dist/test/workspace-artifact-manifest.test.js && bun test dist/test/materialization-contract.test.js",
-    "test:node": "pnpm --filter @narada-core/mcp-e2e-harness build && pnpm build && node dist/test/mcp-runtime-proxy.test.js && node dist/test/native-proxy.test.js && node dist/test/boa-fixture.test.js && node dist/test/native-filesystem.test.js && node dist/test/native-filesystem-write.test.js && node dist/test/native-structured-command.test.js && node dist/test/native-git.test.js && node dist/test/generation-manager.test.js && node --test dist/test/runtime-observation.test.js && node --test dist/test/workspace-artifact-manifest.test.js && node --test dist/test/materialization-contract.test.js"
+    "test:bun": "pnpm --filter @narada-core/mcp-e2e-harness build && pnpm build && bun dist/test/mcp-runtime-proxy.test.js && bun dist/test/native-proxy.test.js && bun test dist/test/native-artifact.test.js && bun test dist/test/native-artifact-build-e2e.test.js && bun dist/test/boa-fixture.test.js && bun dist/test/native-filesystem.test.js && bun dist/test/native-filesystem-write.test.js && bun dist/test/native-structured-command.test.js && bun dist/test/native-git.test.js && bun test dist/test/generation-manager.test.js && bun test dist/test/runtime-observation.test.js && bun test dist/test/workspace-artifact-manifest.test.js && bun test dist/test/materialization-contract.test.js",
+    "test:node": "pnpm --filter @narada-core/mcp-e2e-harness build && pnpm build && node dist/test/mcp-runtime-proxy.test.js && node dist/test/native-proxy.test.js && node --test dist/test/native-artifact.test.js && node --test dist/test/native-artifact-build-e2e.test.js && node dist/test/boa-fixture.test.js && node dist/test/native-filesystem.test.js && node dist/test/native-filesystem-write.test.js && node dist/test/native-structured-command.test.js && node dist/test/native-git.test.js && node dist/test/generation-manager.test.js && node --test dist/test/runtime-observation.test.js && node --test dist/test/workspace-artifact-manifest.test.js && node --test dist/test/materialization-contract.test.js"
   },
   "types": "./dist/src/main.d.ts",
   "naradaRuntimeArtifacts": {
     "win32": [
       "./dist/native/narada-mcp-runtime.exe",
-      "./dist/native/narada-mcp-rhai-filesystem.exe"
+      "./dist/native/narada-mcp-rhai-filesystem.exe",
+      "./dist/native/versions/*"
     ]
   },
   "exports": {
@@ -43,6 +44,10 @@
     "./materialization-contract": {
       "types": "./dist/src/materialization-contract.d.ts",
       "default": "./dist/src/materialization-contract.js"
+    },
+    "./native-artifact": {
+      "types": "./dist/src/native-artifact.d.ts",
+      "default": "./dist/src/native-artifact.js"
     }
   },
   "dependencies": {

@@ -79,10 +79,16 @@ in a new or restarted session.
 
 ## Native Windows proxy
 
-The package builds `dist/native/narada-mcp-runtime.exe`, a Rust multicall
-executable whose first applet is `proxy`, plus the benchmark-only
-`dist/native/narada-mcp-rhai-filesystem.exe` applet. In native mode this
-process performs
+The package builds a Rust multicall executable whose first applet is `proxy`,
+plus the benchmark-only `narada-mcp-rhai-filesystem.exe` applet. Each native
+build is published under `dist/native/versions/<build-fingerprint>/` and an
+atomic `dist/native/current.json` pointer selects the current generation for
+new materializations. The registrar resolves that pointer dynamically; an
+already-materialized carrier keeps its concrete old path until it drains. The
+legacy `dist/native/narada-mcp-runtime.exe` and
+`dist/native/narada-mcp-rhai-filesystem.exe` paths are compatibility artifacts
+and are created once but never overwritten, so live Windows processes cannot
+block a later build. In native mode this process performs
 preflight, stdio framing, timeout/cancellation, diagnostics, and process-tree
 ownership itself. It creates the MCP server suspended, assigns it to a
 kill-on-close Windows Job Object, and only then resumes its main thread. This
@@ -218,7 +224,7 @@ Operators can list all recorded instances without starting a child:
 
 ```powershell
 node dist/src/main.js --list-runtime-instances --diagnostics-dir <dir>
-dist/native/narada-mcp-runtime.exe proxy --list-runtime-instances --diagnostics-dir <dir>
+dist/native/versions/<build-fingerprint>/narada-mcp-runtime.exe proxy --list-runtime-instances --diagnostics-dir <dir>
 ```
 
 The listing classifies each record from PID liveness and lease expiry, so stale
