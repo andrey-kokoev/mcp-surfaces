@@ -8,7 +8,11 @@ import { runMcpProtocolSmoke, spawnJsonlMcpServer } from '@narada-core/mcp-e2e-h
 
 const root = mkdtempSync(join(tmpdir(), 'mcp-loader-mcp-protocol-'));
 const serverPath = fileURLToPath(new URL('../src/main.js', import.meta.url));
-const server = spawnJsonlMcpServer(process.execPath, [serverPath, '--allowed-site-root', root], { label: 'mcp-loader-mcp protocol smoke' });
+const nativeLoader = process.env.MCP_LOADER_NATIVE === '1';
+const nativeExecutable = resolve(dirname(serverPath), '..', 'native', process.platform === 'win32' ? 'narada-mcp-loader.exe' : 'narada-mcp-loader');
+const loaderCommand = nativeLoader ? nativeExecutable : process.execPath;
+const loaderArgs = nativeLoader ? [] : [serverPath];
+const server = spawnJsonlMcpServer(loaderCommand, [...loaderArgs, '--allowed-site-root', root], { label: nativeLoader ? 'mcp-loader-mcp native protocol smoke' : 'mcp-loader-mcp protocol smoke' });
 
 try {
   const defaultState = createServerState();
