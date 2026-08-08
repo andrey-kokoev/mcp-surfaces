@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { createHash } from 'node:crypto';
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -12,16 +13,39 @@ import {
   writeMaterializationGeneration,
 } from '../src/materialization-contract.js';
 
+function sha256(value: string | Buffer): string {
+  return createHash('sha256').update(value).digest('hex');
+}
+
+function writePlan(root: string, configPath: string, matrixPath: string): { path: string; fingerprint: string } {
+  const matrixFingerprint = sha256(readFileSync(matrixPath));
+  const path = `${configPath}.narada-runtime-plan.json`;
+  const unsigned = {
+    schema: 'narada.runtime_materialization_plan.v1',
+    status: 'accepted',
+    runtime_profile_kind: 'bun',
+    runtime_engine_kind: 'bun',
+    source: { matrix_fingerprint: matrixFingerprint },
+    servers: [],
+  };
+  const fingerprint = sha256(JSON.stringify(unsigned));
+  writeFileSync(path, JSON.stringify({ ...unsigned, plan_fingerprint: fingerprint }) + '\n', 'utf8');
+  return { path, fingerprint };
+}
+
 function fixture() {
   const root = mkdtempSync(join(tmpdir(), 'mcp-materialization-contract-'));
   const proxyPath = join(root, 'mcp-runtime-proxy.js');
   const childPath = join(root, 'child.js');
   const manifestPath = join(root, 'workspace-artifact-manifest.json');
   const registrarPath = join(root, 'registrar.js');
+  const matrixPath = join(root, 'runtime-implementation-matrix.json');
   const configPath = join(root, 'carrier.json');
   const sidecarPath = materializationSidecarPath(configPath);
   mkdirSync(root, { recursive: true });
   for (const path of [proxyPath, childPath, manifestPath, registrarPath]) writeFileSync(path, 'fixture\n', 'utf8');
+  writeFileSync(matrixPath, '{"schema":"fixture.matrix"}\n', 'utf8');
+  const plan = writePlan(root, configPath, matrixPath);
   const args = [
     proxyPath,
     '--surface-id', 'fixture',
@@ -35,7 +59,7 @@ function fixture() {
     '--',
   ];
   const structured = { mcpServers: { fixture: { command: 'node', args } } };
-  return { root, proxyPath, childPath, manifestPath, registrarPath, configPath, sidecarPath, args, structured };
+  return { root, proxyPath, childPath, manifestPath, registrarPath, matrixPath, configPath, sidecarPath, planPath: plan.path, planFingerprint: plan.fingerprint, args, structured };
 }
 
 test('materialized configuration validates the runtime contract and generation preflight', () => {
@@ -61,6 +85,11 @@ test('materialized configuration validates the runtime contract and generation p
       content,
       artifactManifestPath: f.manifestPath,
       artifactManifestFingerprint: 'fixture-manifest-fingerprint',
+      runtimeProfileKind: 'bun',
+      runtimeMaterializationPlanPath: f.planPath,
+      runtimeMaterializationPlanFingerprint: f.planFingerprint,
+      runtimeImplementationMatrixPath: f.matrixPath,
+      runtimeImplementationMatrixFingerprint: sha256(readFileSync(f.matrixPath)),
       registrarEntrypoint: f.registrarPath,
       proxyImplementation: 'bun',
       proxyEntrypoint: f.proxyPath,
@@ -77,6 +106,22 @@ test('materialized configuration validates the runtime contract and generation p
       }),
       { ok: true, generation_fingerprint: generation.generation_fingerprint },
     );
+
+    writeFileSync(f.planPath, JSON.stringify({ schema: 'narada.runtime_materialization_plan.v1', status: 'accepted', runtime_profile_kind: 'bun', plan_fingerprint: f.planFingerprint }) + '\n', 'utf8');
+    assert.equal(preflightMaterializationGeneration({
+      sidecarPath: f.sidecarPath,
+      manifestPath: f.manifestPath,
+      manifestFingerprint: 'fixture-manifest-fingerprint',
+    }).code, 'materialization_generation_stale');
+    writePlan(f.root, f.configPath, f.matrixPath);
+    writeFileSync(f.matrixPath, '{"schema":"fixture.matrix.changed"}\n', 'utf8');
+    assert.equal(preflightMaterializationGeneration({
+      sidecarPath: f.sidecarPath,
+      manifestPath: f.manifestPath,
+      manifestFingerprint: 'fixture-manifest-fingerprint',
+    }).code, 'materialization_generation_stale');
+    writeFileSync(f.matrixPath, '{"schema":"fixture.matrix"}\n', 'utf8');
+    writePlan(f.root, f.configPath, f.matrixPath);
 
     writeFileSync(f.sidecarPath, JSON.stringify({ ...generation, config_sha256: 'tampered' }) + '\n', 'utf8');
     assert.equal(preflightMaterializationGeneration({
@@ -148,6 +193,7 @@ test('Codex project trust updates do not invalidate the managed MCP projection',
   const configPath = join(f.root, 'carrier.toml');
   const sidecarPath = materializationSidecarPath(configPath);
   const args = f.args.map((arg) => arg === f.sidecarPath ? sidecarPath : arg);
+  const plan = writePlan(f.root, configPath, f.matrixPath);
   const content = [
     "[projects.'C:/workspace']",
     'trust_level = "trusted"',
@@ -174,6 +220,11 @@ test('Codex project trust updates do not invalidate the managed MCP projection',
       content,
       artifactManifestPath: f.manifestPath,
       artifactManifestFingerprint: 'fixture-manifest-fingerprint',
+      runtimeProfileKind: 'bun',
+      runtimeMaterializationPlanPath: plan.path,
+      runtimeMaterializationPlanFingerprint: plan.fingerprint,
+      runtimeImplementationMatrixPath: f.matrixPath,
+      runtimeImplementationMatrixFingerprint: sha256(readFileSync(f.matrixPath)),
       registrarEntrypoint: f.registrarPath,
       proxyImplementation: 'bun',
       proxyEntrypoint: f.proxyPath,

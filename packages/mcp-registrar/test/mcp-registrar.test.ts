@@ -30,9 +30,21 @@ assert.equal(defaultMaterializationArgs.mode, 'materialize-all');
 if (defaultMaterializationArgs.mode === 'materialize-all') {
   assert.equal(defaultMaterializationArgs.runtimeProxyImplementation, nativeRuntimeArtifactAvailable ? 'native' : 'bun');
 }
-const explicitBunArgs = parseArgs(['--materialize-all', '--runtime-proxy-implementation', 'bun']);
+const explicitBunArgs = parseArgs(['--materialize-all', '--runtime-profile', 'bun', '--runtime-proxy-implementation', 'bun']);
 assert.equal(explicitBunArgs.mode, 'materialize-all');
 if (explicitBunArgs.mode === 'materialize-all') assert.equal(explicitBunArgs.runtimeProxyImplementation, 'bun');
+const mismatchedProxyImplementation = nativeRuntimeArtifactAvailable ? 'bun' : 'native';
+assert.throws(
+  () => parseArgs(['--materialize-all', '--runtime-proxy-implementation', mismatchedProxyImplementation]),
+  /registrar_runtime_proxy_override_requires_recovery_escape_hatch/,
+);
+const recoveryProxyArgs = parseArgs([
+  '--materialize-carrier', 'codex-andrey', '--allow-single-carrier',
+  '--runtime-proxy-implementation', mismatchedProxyImplementation,
+  '--recovery-escape-hatch',
+]);
+assert.equal(recoveryProxyArgs.mode, 'materialize-carrier');
+if (recoveryProxyArgs.mode === 'materialize-carrier') assert.equal(recoveryProxyArgs.recoveryEscapeHatch, true);
 assert.equal(defaultSurfaceImplementation('local-filesystem', ['--mode', 'read'], true), 'native');
 assert.equal(defaultSurfaceImplementation('local-filesystem', ['--mode', 'write'], true), 'js');
 assert.equal(defaultSurfaceImplementation('local-filesystem', ['--mode', 'read'], false), 'js');

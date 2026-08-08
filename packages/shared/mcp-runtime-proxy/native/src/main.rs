@@ -19,7 +19,7 @@ mod git;
 #[allow(dead_code)]
 mod structured_command;
 
-const CONTRACT_VERSION: u64 = 4;
+const CONTRACT_VERSION: u64 = 5;
 const DEFAULT_REQUEST_TIMEOUT_MS: u64 = 240_000;
 const DEFAULT_TOOL_TIMEOUT_GRACE_MS: u64 = 15_000;
 const MAX_TRANSPORT_TIMEOUT_MS: u64 = 900_000;
@@ -1143,6 +1143,11 @@ fn preflight_materialization(
         "config_sha256",
         "artifact_manifest_path",
         "artifact_manifest_fingerprint",
+        "runtime_profile_kind",
+        "runtime_materialization_plan_path",
+        "runtime_materialization_plan_fingerprint",
+        "runtime_implementation_matrix_path",
+        "runtime_implementation_matrix_fingerprint",
         "registrar_entrypoint",
         "registrar_fingerprint",
         "proxy_implementation",
@@ -1254,6 +1259,62 @@ fn preflight_materialization(
         return Err(refusal(
             "materialization_generation_stale",
             "The materialization generation sidecar is not paired with its carrier configuration.",
+            generation_context(&generation),
+        ));
+    }
+    let plan_path = generation
+        .get("runtime_materialization_plan_path")
+        .and_then(Value::as_str)
+        .ok_or_else(|| refusal("materialization_generation_stale", "The materialization generation sidecar is structurally incomplete.", generation_context(&generation)))?;
+    let expected_plan = format!("{expected_config}.narada-runtime-plan.json");
+    if !same_path(plan_path, &expected_plan) {
+        return Err(refusal(
+            "materialization_generation_stale",
+            "The materialization generation sidecar is not paired with its runtime materialization plan.",
+            generation_context(&generation),
+        ));
+    }
+    let plan = read_json(Path::new(plan_path)).map_err(|error| {
+        refusal(
+            "materialization_generation_stale",
+            "The runtime materialization plan is missing or unreadable.",
+            json!({ "error": error, "runtime_materialization_plan_path": plan_path }),
+        )
+    })?;
+    let expected_plan_fingerprint = generation
+        .get("runtime_materialization_plan_fingerprint")
+        .and_then(Value::as_str)
+        .ok_or_else(|| refusal("materialization_generation_stale", "The materialization generation sidecar is structurally incomplete.", generation_context(&generation)))?;
+    if plan.get("schema").and_then(Value::as_str) != Some("narada.runtime_materialization_plan.v1")
+        || plan.get("status").and_then(Value::as_str) != Some("accepted")
+        || plan.get("runtime_profile_kind").and_then(Value::as_str) != generation.get("runtime_profile_kind").and_then(Value::as_str)
+        || plan.get("plan_fingerprint").and_then(Value::as_str) != Some(expected_plan_fingerprint)
+        || runtime_plan_fingerprint(&plan).as_deref() != Some(expected_plan_fingerprint)
+    {
+        return Err(refusal(
+            "materialization_generation_stale",
+            "The runtime materialization plan changed after generation.",
+            generation_context(&generation),
+        ));
+    }
+    let expected_matrix_fingerprint = generation
+        .get("runtime_implementation_matrix_fingerprint")
+        .and_then(Value::as_str)
+        .ok_or_else(|| refusal("materialization_generation_stale", "The materialization generation sidecar is structurally incomplete.", generation_context(&generation)))?;
+    let matrix_path = generation
+        .get("runtime_implementation_matrix_path")
+        .and_then(Value::as_str)
+        .ok_or_else(|| refusal("materialization_generation_stale", "The materialization generation sidecar is structurally incomplete.", generation_context(&generation)))?;
+    let plan_matrix_fingerprint = plan
+        .get("source")
+        .and_then(|source| source.get("matrix_fingerprint"))
+        .and_then(Value::as_str);
+    if plan_matrix_fingerprint != Some(expected_matrix_fingerprint)
+        || sha256_file(Path::new(matrix_path)).as_deref() != Some(expected_matrix_fingerprint)
+    {
+        return Err(refusal(
+            "materialization_generation_stale",
+            "The runtime implementation matrix changed after generation.",
             generation_context(&generation),
         ));
     }
@@ -1572,6 +1633,11 @@ fn generation_context(generation: &Value) -> Value {
         "proxy_implementation": generation.get("proxy_implementation"),
         "proxy_entrypoint": generation.get("proxy_entrypoint"),
         "proxy_fingerprint": generation.get("proxy_fingerprint"),
+        "runtime_profile_kind": generation.get("runtime_profile_kind"),
+        "runtime_materialization_plan_path": generation.get("runtime_materialization_plan_path"),
+        "runtime_materialization_plan_fingerprint": generation.get("runtime_materialization_plan_fingerprint"),
+        "runtime_implementation_matrix_path": generation.get("runtime_implementation_matrix_path"),
+        "runtime_implementation_matrix_fingerprint": generation.get("runtime_implementation_matrix_fingerprint"),
         "materialization_generated_at": generation.get("generated_at")
     })
 }
@@ -1771,6 +1837,13 @@ fn strip_volatile_manifest_metadata(value: &Value) -> Value {
 
 fn sha256_file(path: &Path) -> Option<String> {
     fs::read(path).ok().map(|bytes| sha256_bytes(&bytes))
+}
+fn runtime_plan_fingerprint(plan: &Value) -> Option<String> {
+    let mut unsigned = plan.as_object()?.clone();
+    unsigned.remove("plan_fingerprint");
+    serde_json::to_vec(&Value::Object(unsigned))
+        .ok()
+        .map(|bytes| sha256_bytes(&bytes))
 }
 fn sha256_bytes(bytes: &[u8]) -> String {
     hex::encode(Sha256::digest(bytes))

@@ -18,7 +18,7 @@ import {
 } from '@narada-core/mcp-runtime-proxy/materialization-contract';
 import { NATIVE_SURFACE_DEFINITIONS } from './native-catalog.js';
 import { isNativeArtifactEntrypoint, resolveNativeArtifact } from '@narada-core/mcp-runtime-proxy/native-artifact';
-import { resolveRuntimeMaterializationPlan, runtimeMaterializationPlanEntry } from '@narada-core/operator-surface-runtime-contract/runtime-materialization-plan';
+import { resolveRuntimeMaterializationPlan, runtimeImplementationMatrixContractPath, runtimeImplementationMatrixFingerprint, runtimeMaterializationPlanFingerprint, runtimeMaterializationPlanEntry } from '@narada-core/operator-surface-runtime-contract/runtime-materialization-plan';
 
 const SERVER_NAME = 'mcp-registrar';
 const SERVER_VERSION = '0.1.0';
@@ -198,6 +198,7 @@ function nativeRuntimeProxyEntrypoint(): string {
   return portablePath(resolveNativeArtifact(MCP_RUNTIME_PROXY_PACKAGE_ROOT, 'narada-mcp-runtime.exe') ?? MCP_NATIVE_RUNTIME_PROXY_LEGACY_ENTRYPOINT);
 }
 const MCP_REGISTRAR_RUNTIME_ENTRYPOINT = `${MCP_SURFACES_ROOT}/mcp-registrar/dist/src/main.js`;
+const MCP_RUNTIME_IMPLEMENTATION_MATRIX_PATH = resolve(runtimeImplementationMatrixContractPath());
 const MCP_MCP_LOADER_PACKAGE_ROOT = resolve(MCP_SURFACES_ROOT, 'mcp-loader-mcp');
 const MCP_NATIVE_MCP_LOADER_ENTRYPOINT = portablePathLiteral(join(MCP_MCP_LOADER_PACKAGE_ROOT, 'dist', 'native', `narada-mcp-loader${process.platform === 'win32' ? '.exe' : ''}`));
 const PROCESS_REGISTRAR_ENTRYPOINT_FINGERPRINT = existsSync(MCP_REGISTRAR_RUNTIME_ENTRYPOINT)
@@ -221,6 +222,33 @@ function acceptedRuntimeMaterializationPlan(value: unknown): RuntimeMaterializat
   return plan;
 }
 
+function runtimePlanMatrixFingerprint(plan: RuntimeMaterializationPlan): string {
+  const source = asRecord(plan.source);
+  const fingerprint = source.matrix_fingerprint;
+  if (typeof fingerprint !== 'string' || !fingerprint) {
+    throw diagnosticError('registrar_runtime_implementation_matrix_fingerprint_missing', 'The resolved runtime materialization plan has no matrix fingerprint.', { runtime_profile_kind: plan.runtime_profile_kind });
+  }
+  return fingerprint;
+}
+
+function currentRuntimeImplementationMatrixFingerprint(): string {
+  return runtimeImplementationMatrixFingerprint(MCP_RUNTIME_IMPLEMENTATION_MATRIX_PATH);
+}
+
+function assertRuntimeMaterializationPlanCurrent(plan: RuntimeMaterializationPlan = runtimeMaterializationPlan): void {
+  const expected = runtimePlanMatrixFingerprint(plan);
+  const actual = currentRuntimeImplementationMatrixFingerprint();
+  if (expected !== actual) {
+    throw diagnosticError('registrar_runtime_implementation_matrix_stale', 'The runtime implementation matrix changed after the registrar resolved its materialization plan.', {
+      runtime_profile_kind: plan.runtime_profile_kind,
+      runtime_implementation_matrix_path: MCP_RUNTIME_IMPLEMENTATION_MATRIX_PATH,
+      expected_matrix_fingerprint: expected,
+      actual_matrix_fingerprint: actual,
+      remediation: 'Restart the registrar process or retry materialization so the current Narada matrix is resolved.',
+    });
+  }
+}
+
 let runtimeMaterializationPlan: RuntimeMaterializationPlan = acceptedRuntimeMaterializationPlan(process.env.NARADA_RUNTIME_PROFILE?.trim() || 'native');
 let runtimeProfileKind: RuntimeProfileKind = String(runtimeMaterializationPlan.runtime_profile_kind) as RuntimeProfileKind;
 
@@ -234,7 +262,7 @@ async function withRuntimeMaterializationProfile<T>(value: unknown, callback: ()
   const previousPlan = runtimeMaterializationPlan;
   const previousProfileKind = runtimeProfileKind;
   const previousProxyImplementation = runtimeProxyImplementation;
-  if (value !== null && value !== undefined && String(value).trim()) setRuntimeMaterializationProfile(value);
+  setRuntimeMaterializationProfile(value !== null && value !== undefined && String(value).trim() ? value : runtimeProfileKind);
   try {
     return await callback();
   } finally {
@@ -245,8 +273,8 @@ async function withRuntimeMaterializationProfile<T>(value: unknown, callback: ()
 }
 
 
-function matrixPlanEntry(componentKind: string): JsonRecord {
-  const entry = runtimeMaterializationPlanEntry(runtimeMaterializationPlan, componentKind) as JsonRecord | null;
+function matrixPlanEntry(componentKind: string, plan: RuntimeMaterializationPlan = runtimeMaterializationPlan): JsonRecord {
+  const entry = runtimeMaterializationPlanEntry(plan, componentKind) as JsonRecord | null;
   if (!entry || entry.implementation_status !== 'admitted') {
     throw diagnosticError('registrar_runtime_implementation_unavailable', `registrar_runtime_implementation_unavailable:${componentKind}`, {
       component_kind: componentKind,
@@ -265,10 +293,10 @@ function componentKindForSurface(surfaceId: string): string {
   return 'mcp-javascript-surface';
 }
 
-function selectedSurfaceRuntimeEngine(surfaceId: string, explicitImplementation?: 'js' | 'native'): RuntimeEngineKind {
+function selectedSurfaceRuntimeEngine(surfaceId: string, explicitImplementation?: 'js' | 'native', plan: RuntimeMaterializationPlan = runtimeMaterializationPlan): RuntimeEngineKind {
   const componentKind = componentKindForSurface(surfaceId);
   if (explicitImplementation === 'native') {
-    const entry = matrixPlanEntry(componentKind);
+    const entry = matrixPlanEntry(componentKind, plan);
     if (entry.runtime_engine_kind !== 'rust') {
       throw diagnosticError('registrar_native_surface_not_admitted', `registrar_native_surface_not_admitted:${componentKind}`, {
         component_kind: componentKind,
@@ -278,8 +306,8 @@ function selectedSurfaceRuntimeEngine(surfaceId: string, explicitImplementation?
     }
     return 'rust';
   }
-  if (explicitImplementation === 'js') return String(matrixPlanEntry('mcp-javascript-surface').runtime_engine_kind) as RuntimeEngineKind;
-  return String(matrixPlanEntry(componentKind).runtime_engine_kind) as RuntimeEngineKind;
+  if (explicitImplementation === 'js') return String(matrixPlanEntry('mcp-javascript-surface', plan).runtime_engine_kind) as RuntimeEngineKind;
+  return String(matrixPlanEntry(componentKind, plan).runtime_engine_kind) as RuntimeEngineKind;
 }
 
 
@@ -327,8 +355,8 @@ export function defaultSurfaceImplementation(
 
 let runtimeProxyImplementation: RuntimeProxyImplementation = runtimeProxyImplementationForPlan();
 
-function selectedRuntimeProxyEntrypoint(): string {
-  return runtimeProxyImplementation === 'native'
+function selectedRuntimeProxyEntrypoint(implementation: RuntimeProxyImplementation = runtimeProxyImplementation): string {
+  return implementation === 'native'
     ? nativeRuntimeProxyEntrypoint()
     : MCP_RUNTIME_PROXY_ENTRYPOINT;
 }
@@ -1827,11 +1855,15 @@ function carrierLaunchCommand(
   surfaceId: string,
   configPath?: string,
   carrier?: Pick<CarrierDef, 'carrier_id' | 'kind'>,
+  plan: RuntimeMaterializationPlan = runtimeMaterializationPlan,
+  proxyImplementationOverride?: RuntimeProxyImplementation,
 ): CarrierLaunchCommand {
+  assertRuntimeMaterializationPlanCurrent(plan);
+  const profile = String(plan.runtime_profile_kind) as RuntimeProfileKind;
   const childEntrypoint = server.entrypoint;
   const childArgs = server.args;
   const componentKind = componentKindForSurface(surfaceId);
-  const selectedEngine = selectedSurfaceRuntimeEngine(surfaceId, server.surface_implementation);
+  const selectedEngine = selectedSurfaceRuntimeEngine(surfaceId, server.surface_implementation, plan);
   const runtimeCommand = selectedEngine === 'rust'
     ? (server.command ?? server.projection?.command ?? 'node')
     : javascriptRuntimeCommand(selectedEngine);
@@ -1862,16 +1894,17 @@ function carrierLaunchCommand(
       command: runtimeCommand,
       args: [childEntrypoint, ...childArgs],
       uses_runtime_proxy: false,
-      runtime_profile_kind: runtimeProfileKind,
+      runtime_profile_kind: profile,
       runtime_engine_kind: selectedEngine,
       component_kind: componentKind,
       child_entrypoint: childEntrypoint,
       child_args: childArgs,
     };
   }
-  const proxyEntrypoint = selectedRuntimeProxyEntrypoint();
-  const nativeProxy = runtimeProxyImplementation === 'native';
-  const registrarEngine = selectedSurfaceRuntimeEngine('mcp-registrar');
+  const proxyImplementation = proxyImplementationOverride ?? runtimeProxyImplementationForResolvedPlan(plan);
+  const proxyEntrypoint = selectedRuntimeProxyEntrypoint(proxyImplementation);
+  const nativeProxy = proxyImplementation === 'native';
+  const registrarEngine = selectedSurfaceRuntimeEngine('mcp-registrar', undefined, plan);
   return {
     command: nativeProxy ? proxyEntrypoint : runtimeCommand,
     args: [
@@ -1903,8 +1936,8 @@ function carrierLaunchCommand(
     ],
     uses_runtime_proxy: true,
     runtime_proxy_entrypoint: proxyEntrypoint,
-    runtime_proxy_implementation: runtimeProxyImplementation,
-    runtime_profile_kind: runtimeProfileKind,
+    runtime_proxy_implementation: proxyImplementation,
+    runtime_profile_kind: profile,
     runtime_engine_kind: selectedEngine,
     component_kind: componentKind,
     artifact_manifest_path: MCP_WORKSPACE_ARTIFACT_MANIFEST,
@@ -1928,41 +1961,122 @@ type RuntimeMaterializationPlanServer = {
   launch: { command: string; args: string[] };
 };
 
-function buildCarrierRuntimeMaterializationPlan(carrier: CarrierDef, outputPath: string): JsonRecord {
+type CarrierRuntimeMaterializationCompilation = {
+  plan: JsonRecord;
+  launches: Map<string, CarrierLaunchCommand>;
+  runtimeProxyImplementation: RuntimeProxyImplementation;
+  recoveryEscapeHatch: boolean;
+};
+
+function compileCarrierRuntimeMaterializationPlan(
+  carrier: CarrierDef,
+  outputPath: string,
+  proxyImplementationOverride?: RuntimeProxyImplementation,
+  recoveryEscapeHatch = false,
+): CarrierRuntimeMaterializationCompilation {
+  const resolvedPlan = runtimeMaterializationPlan;
+  assertRuntimeMaterializationPlanCurrent(resolvedPlan);
+  const matrixProxyImplementation = runtimeProxyImplementationForResolvedPlan(resolvedPlan);
+  const proxyImplementation = proxyImplementationOverride ?? matrixProxyImplementation;
+  if (proxyImplementation !== matrixProxyImplementation && !recoveryEscapeHatch) {
+    throw diagnosticError(
+      'registrar_runtime_proxy_override_requires_recovery_escape_hatch',
+      'A runtime proxy override is admitted only for an explicitly marked recovery materialization.',
+      { matrix_proxy_implementation: matrixProxyImplementation, requested_proxy_implementation: proxyImplementation },
+    );
+  }
+  const launches = new Map<string, CarrierLaunchCommand>();
   const servers: RuntimeMaterializationPlanServer[] = Object.entries(collectCarrierServers(carrier)).map(([serverKey, server]) => {
     const surfaceId = server.kind === 'local'
       ? (server.local as SiteLocalSurface).surface_id
       : (server.surface as RegistrarSurfaceRecord).id;
     const overridden = applySurfaceOverrides(carrier, server, surfaceId);
-    const launch = carrierLaunchCommand(overridden, surfaceId, outputPath, carrier);
+    const launch = carrierLaunchCommand(overridden, surfaceId, outputPath, carrier, resolvedPlan, proxyImplementation);
+    launches.set(serverKey, launch);
     return {
       server_key: serverKey,
       surface_id: surfaceId,
       component_kind: launch.component_kind ?? componentKindForSurface(surfaceId),
-      runtime_profile_kind: launch.runtime_profile_kind ?? runtimeProfileKind,
-      runtime_engine_kind: launch.runtime_engine_kind ?? selectedSurfaceRuntimeEngine(surfaceId, overridden.surface_implementation),
+      runtime_profile_kind: launch.runtime_profile_kind ?? String(resolvedPlan.runtime_profile_kind) as RuntimeProfileKind,
+      runtime_engine_kind: launch.runtime_engine_kind ?? selectedSurfaceRuntimeEngine(surfaceId, overridden.surface_implementation, resolvedPlan),
       uses_runtime_proxy: launch.uses_runtime_proxy,
       ...(launch.runtime_proxy_implementation ? { runtime_proxy_implementation: launch.runtime_proxy_implementation } : {}),
       ...(launch.child_invocation_kind ? { child_invocation_kind: launch.child_invocation_kind } : {}),
       launch: { command: launch.command, args: [...launch.args] },
     };
   });
-  return {
+  const profilePlanFingerprint = resolvedPlan.plan_fingerprint;
+  if (typeof profilePlanFingerprint !== 'string') {
+    throw diagnosticError('registrar_runtime_materialization_plan_fingerprint_missing', 'The resolved runtime materialization plan has no fingerprint.', { runtime_profile_kind: resolvedPlan.runtime_profile_kind });
+  }
+  const unsignedPlan: JsonRecord = {
     schema: 'narada.runtime_materialization_plan.v1',
     status: 'accepted',
-    runtime_profile_kind: runtimeProfileKind,
-    runtime_engine_kind: runtimeMaterializationPlan.runtime_engine_kind,
-    source: runtimeMaterializationPlan.source,
-    matrix_entries: runtimeMaterializationPlan.entries,
+    runtime_profile_kind: resolvedPlan.runtime_profile_kind,
+    runtime_engine_kind: resolvedPlan.runtime_engine_kind,
+    source: resolvedPlan.source,
+    profile_plan_fingerprint: profilePlanFingerprint,
+    matrix_entries: resolvedPlan.entries,
     carrier: {
       carrier_id: carrier.carrier_id,
       carrier_kind: carrier.kind,
       config_path: resolve(outputPath),
     },
     servers,
+    runtime_proxy_implementation: proxyImplementation,
+    ...(recoveryEscapeHatch ? { recovery_escape_hatch: true } : {}),
+    ...(proxyImplementation !== matrixProxyImplementation ? { runtime_proxy_implementation_override: true } : {}),
+  };
+  return {
+    launches,
+    runtimeProxyImplementation: proxyImplementation,
+    recoveryEscapeHatch,
+    plan: {
+      ...unsignedPlan,
+      plan_fingerprint: runtimeMaterializationPlanFingerprint(unsignedPlan),
+    },
   };
 }
-
+function buildRecoveryCarrierRuntimeMaterializationPlan(
+  carrier: CarrierDef,
+  configPath: string,
+  operation: 'bind' | 'unbind',
+  surfaceId: string,
+  runtimePlan: RuntimeMaterializationPlan = runtimeMaterializationPlan,
+  proxyImplementation: RuntimeProxyImplementation = runtimeProxyImplementationForResolvedPlan(runtimePlan),
+): JsonRecord {
+  assertRuntimeMaterializationPlanCurrent(runtimePlan);
+  const profilePlanFingerprint = runtimePlan.plan_fingerprint;
+  if (typeof profilePlanFingerprint !== 'string') {
+    throw diagnosticError(
+      'registrar_runtime_materialization_plan_fingerprint_missing',
+      'The resolved runtime materialization plan has no fingerprint.',
+      { runtime_profile_kind: runtimePlan.runtime_profile_kind },
+    );
+  }
+  const unsignedPlan: JsonRecord = {
+    schema: 'narada.runtime_materialization_plan.v1',
+    status: 'accepted',
+    runtime_profile_kind: runtimePlan.runtime_profile_kind,
+    runtime_engine_kind: runtimePlan.runtime_engine_kind,
+    source: runtimePlan.source,
+    profile_plan_fingerprint: profilePlanFingerprint,
+    matrix_entries: runtimePlan.entries,
+    carrier: {
+      carrier_id: carrier.carrier_id,
+      carrier_kind: carrier.kind,
+      config_path: resolve(configPath),
+    },
+    recovery_escape_hatch: true,
+    recovery_scope: { operation, surface_id: surfaceId },
+    runtime_proxy_implementation: proxyImplementation,
+    servers: [],
+  };
+  return {
+    ...unsignedPlan,
+    plan_fingerprint: runtimeMaterializationPlanFingerprint(unsignedPlan),
+  };
+}
 function writeRuntimeMaterializationPlan(path: string, plan: JsonRecord): void {
   writeFileAtomic(path, JSON.stringify(plan, null, 2) + '\n');
 }
@@ -2102,13 +2216,13 @@ function addRuntimePreflightFindings(
   }
 }
 
-function emitOpencodeConfig(carrier: CarrierDef, configPath?: string): { content: string; structured: JsonRecord } {
+function emitOpencodeConfig(carrier: CarrierDef, configPath?: string, compilation?: CarrierRuntimeMaterializationCompilation): { content: string; structured: JsonRecord } {
   const rawServers = collectCarrierServers(carrier);
   const mcp: JsonRecord = {};
   for (const [key, server] of Object.entries(rawServers)) {
     const surfaceId = server.kind === 'local' ? (server.local as SiteLocalSurface).surface_id : (server.surface as RegistrarSurfaceRecord).id;
     const overridden = applySurfaceOverrides(carrier, server, surfaceId);
-    const launch = carrierLaunchCommand(overridden, surfaceId, configPath, carrier);
+    const launch = compilation?.launches.get(key) ?? carrierLaunchCommand(overridden, surfaceId, configPath, carrier);
     mcp[key] = {
       type: 'local',
       command: [launch.command, ...launch.args],
@@ -2120,14 +2234,14 @@ function emitOpencodeConfig(carrier: CarrierDef, configPath?: string): { content
   return { content: header + JSON.stringify(structured, null, 2) + '\n', structured };
 }
 
-function emitKimiConfig(carrier: CarrierDef, configPath?: string): { content: string; structured: JsonRecord } {
+function emitKimiConfig(carrier: CarrierDef, configPath?: string, compilation?: CarrierRuntimeMaterializationCompilation): { content: string; structured: JsonRecord } {
   const rawServers = collectCarrierServers(carrier);
   const mcpServers: JsonRecord = {};
   for (const [key, server] of Object.entries(rawServers)) {
     const surfaceId = server.kind === 'local' ? (server.local as SiteLocalSurface).surface_id : (server.surface as RegistrarSurfaceRecord).id;
     const overridden = applySurfaceOverrides(carrier, server, surfaceId);
     const approval = carrier.surface_overrides?.[surfaceId]?.approval_mode;
-    const launch = carrierLaunchCommand(overridden, surfaceId, configPath, carrier);
+    const launch = compilation?.launches.get(key) ?? carrierLaunchCommand(overridden, surfaceId, configPath, carrier);
     const base: JsonRecord = {
       transport: 'stdio',
       command: launch.command,
@@ -2141,7 +2255,7 @@ function emitKimiConfig(carrier: CarrierDef, configPath?: string): { content: st
   return { content: JSON.stringify(structured, null, 2) + '\n', structured };
 }
 
-function emitCodexConfig(carrier: CarrierDef, configPath?: string): { content: string; structured: JsonRecord } {
+function emitCodexConfig(carrier: CarrierDef, configPath?: string, compilation?: CarrierRuntimeMaterializationCompilation): { content: string; structured: JsonRecord } {
   const rawServers = collectCarrierServers(carrier);
   const codexPluginOverrides = carrier.codex_plugin_overrides ?? {};
   const lines: string[] = [];
@@ -2167,7 +2281,7 @@ function emitCodexConfig(carrier: CarrierDef, configPath?: string): { content: s
   for (const [key, server] of Object.entries(rawServers)) {
     const surfaceId = server.kind === 'local' ? (server.local as SiteLocalSurface).surface_id : (server.surface as RegistrarSurfaceRecord).id;
     const overridden = applySurfaceOverrides(carrier, server, surfaceId);
-    const launch = carrierLaunchCommand(overridden, surfaceId, configPath, carrier);
+    const launch = compilation?.launches.get(key) ?? carrierLaunchCommand(overridden, surfaceId, configPath, carrier);
     const carrierAvailableTools = codexCarrierAvailableTools(server);
     lines.push(`[mcp_servers.${key}]`);
     lines.push(`command = "${launch.command}"`);
@@ -2233,6 +2347,9 @@ function validateCarrierMaterialization(
   carrier: CarrierDef,
   result: { content: string; structured: JsonRecord },
   configPath?: string,
+  runtimePlan: RuntimeMaterializationPlan = runtimeMaterializationPlan,
+  carrierPlan?: JsonRecord,
+  proxyImplementation: RuntimeProxyImplementation = runtimeProxyImplementationForResolvedPlan(runtimePlan),
 ): {
   validation: ReturnType<typeof validateMaterializedConfiguration>;
   generation: ReturnType<typeof buildMaterializationGeneration> | null;
@@ -2240,7 +2357,7 @@ function validateCarrierMaterialization(
   const validation = validateMaterializedConfiguration({
     structured: result.structured,
     artifactManifestPath: MCP_WORKSPACE_ARTIFACT_MANIFEST,
-    runtimeProxyEntrypoint: selectedRuntimeProxyEntrypoint(),
+    runtimeProxyEntrypoint: selectedRuntimeProxyEntrypoint(proxyImplementation),
     expectedSidecarPath: configPath ? materializationSidecarPath(configPath) : undefined,
     requireSidecar: Boolean(configPath),
   });
@@ -2257,19 +2374,31 @@ function validateCarrierMaterialization(
     );
   }
   const generation = configPath
-    ? buildMaterializationGeneration({
+    ? (() => {
+      const planPath = runtimeMaterializationPlanPath(configPath);
+      const planFingerprint = typeof carrierPlan?.plan_fingerprint === 'string' ? carrierPlan.plan_fingerprint : null;
+      if (!planFingerprint) {
+        throw diagnosticError('registrar_runtime_materialization_plan_missing', 'A carrier generation cannot be written without its compiled runtime materialization plan.', { carrier_id: carrier.carrier_id, config_path: configPath });
+      }
+      return buildMaterializationGeneration({
       carrierId: carrier.carrier_id,
       carrierKind: carrier.kind,
       configPath,
       content: result.content,
       artifactManifestPath: MCP_WORKSPACE_ARTIFACT_MANIFEST,
       artifactManifestFingerprint: readWorkspaceManifestFingerprint(),
+      runtimeProfileKind: String(runtimePlan.runtime_profile_kind) as RuntimeProfileKind,
+      runtimeMaterializationPlanPath: planPath,
+      runtimeMaterializationPlanFingerprint: planFingerprint,
+      runtimeImplementationMatrixPath: MCP_RUNTIME_IMPLEMENTATION_MATRIX_PATH,
+      runtimeImplementationMatrixFingerprint: runtimePlanMatrixFingerprint(runtimePlan),
       registrarEntrypoint: MCP_REGISTRAR_RUNTIME_ENTRYPOINT,
-      proxyImplementation: runtimeProxyImplementation,
-      proxyEntrypoint: selectedRuntimeProxyEntrypoint(),
+      proxyImplementation,
+      proxyEntrypoint: selectedRuntimeProxyEntrypoint(proxyImplementation),
       serverCount: validation.server_count,
       proxyCount: validation.proxy_count,
-    })
+      });
+    })()
     : null;
   return { validation, generation };
 }
@@ -2367,21 +2496,22 @@ function runFreshRegistrarRequest(method: string, args: JsonRecord): Promise<Jso
   });
 }
 
-function materializeCarrierAtPath(carrier: CarrierDef, outputPath: string, persistSiteState: boolean): JsonRecord {
+function materializeCarrierAtPath(carrier: CarrierDef, outputPath: string, persistSiteState: boolean, proxyImplementationOverride?: RuntimeProxyImplementation, recoveryEscapeHatch = false): JsonRecord {
   const injectionSummary = carrierInjectionSummary(carrier);
+  const compilation = compileCarrierRuntimeMaterializationPlan(carrier, outputPath, proxyImplementationOverride, recoveryEscapeHatch);
   let result: { content: string; structured: JsonRecord };
   switch (carrier.kind) {
-    case 'opencode': result = emitOpencodeConfig(carrier, outputPath); break;
-    case 'kimi': result = emitKimiConfig(carrier, outputPath); break;
-    case 'codex': result = emitCodexConfig(carrier, outputPath); break;
+    case 'opencode': result = emitOpencodeConfig(carrier, outputPath, compilation); break;
+    case 'kimi': result = emitKimiConfig(carrier, outputPath, compilation); break;
+    case 'codex': result = emitCodexConfig(carrier, outputPath, compilation); break;
     default: throw diagnosticError('registrar_unknown_carrier_kind', `registrar_unknown_carrier_kind:${carrier.kind}`);
   }
-  const { validation, generation } = validateCarrierMaterialization(carrier, result, outputPath);
+  const { validation, generation } = validateCarrierMaterialization(carrier, result, outputPath, runtimeMaterializationPlan, compilation.plan, compilation.runtimeProxyImplementation);
   writeFileAtomic(outputPath, result.content);
+  writeRuntimeMaterializationPlan(runtimeMaterializationPlanPath(outputPath), compilation.plan);
   writeMaterializationGeneration(materializationSidecarPath(outputPath), generation!);
-  const runtimeMaterializationPlan = buildCarrierRuntimeMaterializationPlan(carrier, outputPath);
+  const carrierRuntimePlan = compilation.plan;
   const runtimeMaterializationPlanOutputPath = runtimeMaterializationPlanPath(outputPath);
-  writeRuntimeMaterializationPlan(runtimeMaterializationPlanOutputPath, runtimeMaterializationPlan);
   let siteSurfaceRegistries: JsonRecord[] | null = null;
   if (persistSiteState) {
     writeSiteAllowedRootsConfig(carrier);
@@ -2400,8 +2530,9 @@ function materializeCarrierAtPath(carrier: CarrierDef, outputPath: string, persi
     materialization_validation: validation,
     materialization_generation: generation,
     generation_sidecar_path: materializationSidecarPath(outputPath),
-    runtime_materialization_plan: runtimeMaterializationPlan,
+    runtime_materialization_plan: carrierRuntimePlan,
     runtime_materialization_plan_path: runtimeMaterializationPlanOutputPath,
+    ...(compilation.recoveryEscapeHatch ? { recovery_escape_hatch: true } : {}),
   };
 }
 
@@ -2459,7 +2590,12 @@ async function registrarSingleCarrierMaterialize(args: JsonRecord): Promise<Json
   const carrierId = requiredString(args.carrier_id, 'registrar_requires_carrier_id');
   const carrier = lookupCarrier(carrierId);
   const outputPath = optionalString(args.output_path) ?? carrier.config_path;
-  return materializeCarrierAtPath(carrier, resolve(outputPath), false);
+  const requestedProxyImplementation = optionalString(args.runtime_proxy_implementation);
+  const proxyImplementation: RuntimeProxyImplementation =
+    requestedProxyImplementation === 'bun' || requestedProxyImplementation === 'node' || requestedProxyImplementation === 'native'
+      ? requestedProxyImplementation
+      : runtimeProxyImplementationForPlan();
+  return materializeCarrierAtPath(carrier, resolve(outputPath), false, proxyImplementation, true);
 }
 
 function registrarCarrierValidate(args: JsonRecord): JsonRecord {
@@ -2549,14 +2685,15 @@ function registrarCarrierDiff(args: JsonRecord): JsonRecord {
   const currentPath = carrier.config_path;
   const currentContent = existsSync(currentPath) ? readFileSync(currentPath, 'utf8') : null;
   const currentStructured = currentContent ? parseCarrierConfig(carrier.kind, currentContent) : null;
+  const compilation = compileCarrierRuntimeMaterializationPlan(carrier, currentPath);
   let generated: { content: string; structured: JsonRecord };
   switch (carrier.kind) {
-    case 'opencode': generated = emitOpencodeConfig(carrier, currentPath); break;
-    case 'kimi': generated = emitKimiConfig(carrier, currentPath); break;
-    case 'codex': generated = emitCodexConfig(carrier, currentPath); break;
+    case 'opencode': generated = emitOpencodeConfig(carrier, currentPath, compilation); break;
+    case 'kimi': generated = emitKimiConfig(carrier, currentPath, compilation); break;
+    case 'codex': generated = emitCodexConfig(carrier, currentPath, compilation); break;
     default: throw diagnosticError('registrar_unknown_carrier_kind', `registrar_unknown_carrier_kind:${carrier.kind}`);
   }
-  const materializationValidation = validateCarrierMaterialization(carrier, generated).validation;
+  const materializationValidation = validateCarrierMaterialization(carrier, generated, undefined, runtimeMaterializationPlan, compilation.plan).validation;
 
   return {
     ...compareCarrierProjection({
@@ -4148,8 +4285,16 @@ async function registrarCarrierBind(args: JsonRecord): Promise<JsonRecord> {
     default:
       throw diagnosticError('registrar_unknown_carrier_kind', `registrar_unknown_carrier_kind:${carrier.kind}`);
   }
-  const finalized = validateCarrierMaterialization(carrier, { content: prepared.content, structured: prepared.structured }, carrier.config_path);
+  const recoveryPlan = buildRecoveryCarrierRuntimeMaterializationPlan(carrier, carrier.config_path, 'bind', surfaceId);
+  const finalized = validateCarrierMaterialization(
+    carrier,
+    { content: prepared.content, structured: prepared.structured },
+    carrier.config_path,
+    runtimeMaterializationPlan,
+    recoveryPlan,
+  );
   writeFileAtomic(carrier.config_path, prepared.content);
+  writeRuntimeMaterializationPlan(runtimeMaterializationPlanPath(carrier.config_path), recoveryPlan);
   writeMaterializationGeneration(materializationSidecarPath(carrier.config_path), finalized.generation!);
   writeSiteAllowedRootsConfig(carrier);
   return {
@@ -4158,6 +4303,9 @@ async function registrarCarrierBind(args: JsonRecord): Promise<JsonRecord> {
     materialization_validation: finalized.validation,
     materialization_generation: finalized.generation,
     generation_sidecar_path: materializationSidecarPath(carrier.config_path),
+    runtime_materialization_plan: recoveryPlan,
+    runtime_materialization_plan_path: runtimeMaterializationPlanPath(carrier.config_path),
+    recovery_escape_hatch: true,
   };
 }
 
@@ -4202,7 +4350,15 @@ async function registrarCarrierUnbind(args: JsonRecord): Promise<JsonRecord> {
     if (!structured) {
       throw diagnosticError('registrar_materialized_config_parse_failed', 'The carrier configuration could not be parsed after unbinding.', { config_path: carrier.config_path });
     }
-    const finalized = validateCarrierMaterialization(carrier, { content, structured }, carrier.config_path);
+    const recoveryPlan = buildRecoveryCarrierRuntimeMaterializationPlan(carrier, carrier.config_path, 'unbind', surfaceId);
+    const finalized = validateCarrierMaterialization(
+      carrier,
+      { content, structured },
+      carrier.config_path,
+      runtimeMaterializationPlan,
+      recoveryPlan,
+    );
+    writeRuntimeMaterializationPlan(runtimeMaterializationPlanPath(carrier.config_path), recoveryPlan);
     writeMaterializationGeneration(materializationSidecarPath(carrier.config_path), finalized.generation!);
     return {
       ...result,
@@ -4210,6 +4366,9 @@ async function registrarCarrierUnbind(args: JsonRecord): Promise<JsonRecord> {
       materialization_validation: finalized.validation,
       materialization_generation: finalized.generation,
       generation_sidecar_path: materializationSidecarPath(carrier.config_path),
+      runtime_materialization_plan: recoveryPlan,
+      runtime_materialization_plan_path: runtimeMaterializationPlanPath(carrier.config_path),
+      recovery_escape_hatch: true,
     };
   }
   return result;
@@ -4415,8 +4574,8 @@ function writeJsonRpcResponse(response: JsonRecord, { framed }: { framed: boolea
 export type RegistrarCliOptions =
   | { mode: 'stdio' }
   | { mode: 'help' }
-  | { mode: 'materialize-all'; outputDir: string | null; runtimeProxyImplementation: RuntimeProxyImplementation; runtimeProfile: RuntimeProfileKind }
-  | { mode: 'materialize-carrier'; carrierId: string; outputPath: string | null; allowSingleCarrier: true; runtimeProxyImplementation: RuntimeProxyImplementation; runtimeProfile: RuntimeProfileKind }
+  | { mode: 'materialize-all'; outputDir: string | null; runtimeProxyImplementation: RuntimeProxyImplementation; runtimeProfile: RuntimeProfileKind; recoveryEscapeHatch: false }
+  | { mode: 'materialize-carrier'; carrierId: string; outputPath: string | null; allowSingleCarrier: true; runtimeProxyImplementation: RuntimeProxyImplementation; runtimeProfile: RuntimeProfileKind; recoveryEscapeHatch: boolean }
 
 export function parseArgs(argv: string[]): RegistrarCliOptions {
   let carrierId: string | null = null;
@@ -4424,6 +4583,7 @@ export function parseArgs(argv: string[]): RegistrarCliOptions {
   let outputDir: string | null = null;
   let materializeAll = false;
   let allowSingleCarrier = false;
+  let recoveryEscapeHatch = false;
   let selectedProxyImplementation: RuntimeProxyImplementation = defaultRuntimeProxyImplementation();
   let selectedProxyImplementationExplicit = false;
   let selectedRuntimeProfile: RuntimeProfileKind = (process.env.NARADA_RUNTIME_PROFILE?.trim() || 'native') as RuntimeProfileKind;
@@ -4456,6 +4616,10 @@ export function parseArgs(argv: string[]): RegistrarCliOptions {
       allowSingleCarrier = true;
       continue;
     }
+    if (arg === '--recovery-escape-hatch') {
+      recoveryEscapeHatch = true;
+      continue;
+    }
     if (arg === '--runtime-profile') {
       const value = argv[++index];
       if (value !== 'native' && value !== 'bun' && value !== 'node-compat') throw new Error('registrar_invalid_runtime_profile');
@@ -4481,8 +4645,11 @@ export function parseArgs(argv: string[]): RegistrarCliOptions {
     throw new Error(`registrar_unknown_cli_argument:${arg}`);
   }
   const selectedPlan = acceptedRuntimeMaterializationPlan(selectedRuntimeProfile);
+  const matrixProxyImplementation = runtimeProxyImplementationForResolvedPlan(selectedPlan);
   if (!selectedProxyImplementationExplicit) {
-    selectedProxyImplementation = runtimeProxyImplementationForResolvedPlan(selectedPlan);
+    selectedProxyImplementation = matrixProxyImplementation;
+  } else if (selectedProxyImplementation !== matrixProxyImplementation && !recoveryEscapeHatch) {
+    throw new Error('registrar_runtime_proxy_override_requires_recovery_escape_hatch');
   }
   if (materializeAll && carrierId) throw new Error('registrar_materialize_modes_are_mutually_exclusive');
   if (materializeAll && allowSingleCarrier) throw new Error('registrar_allow_single_carrier_requires_materialize_carrier');
@@ -4490,10 +4657,11 @@ export function parseArgs(argv: string[]): RegistrarCliOptions {
   if (carrierId && outputDir) throw new Error('registrar_output_dir_requires_materialize_all');
   if (carrierId && !allowSingleCarrier) throw new Error('registrar_single_carrier_materialization_requires_explicit_escape_hatch');
   if (!carrierId && allowSingleCarrier) throw new Error('registrar_allow_single_carrier_requires_materialize_carrier');
+  if (recoveryEscapeHatch && (!carrierId || !allowSingleCarrier)) throw new Error('registrar_recovery_escape_hatch_requires_single_carrier');
   if (!materializeAll && !carrierId && (outputPath || outputDir)) throw new Error('registrar_output_requires_materialization_mode');
   if (!materializeAll && !carrierId && selectedProxyImplementationExplicit && selectedProxyImplementation !== 'bun') throw new Error('registrar_runtime_proxy_implementation_requires_materialization_mode');
-  if (materializeAll) return { mode: 'materialize-all', outputDir, runtimeProxyImplementation: selectedProxyImplementation, runtimeProfile: selectedRuntimeProfile };
-  if (carrierId) return { mode: 'materialize-carrier', carrierId, outputPath, allowSingleCarrier: true, runtimeProxyImplementation: selectedProxyImplementation, runtimeProfile: selectedRuntimeProfile };
+  if (materializeAll) return { mode: 'materialize-all', outputDir, runtimeProxyImplementation: selectedProxyImplementation, runtimeProfile: selectedRuntimeProfile, recoveryEscapeHatch: false };
+  if (carrierId) return { mode: 'materialize-carrier', carrierId, outputPath, allowSingleCarrier: true, runtimeProxyImplementation: selectedProxyImplementation, runtimeProfile: selectedRuntimeProfile, recoveryEscapeHatch };
   return { mode: 'stdio' };
 }
 
@@ -4508,7 +4676,7 @@ async function runDirectMaterialization(options: Extract<RegistrarCliOptions, { 
   }
   const result = options.mode === 'materialize-all'
     ? await registrarMaterializeAll({ ...(options.outputDir ? { output_dir: resolve(options.outputDir) } : {}), runtime_profile: options.runtimeProfile })
-    : await registrarSingleCarrierMaterialize({ carrier_id: options.carrierId, ...(options.outputPath ? { output_path: resolve(options.outputPath) } : {}) });
+    : await registrarSingleCarrierMaterialize({ carrier_id: options.carrierId, runtime_proxy_implementation: options.runtimeProxyImplementation, recovery_escape_hatch: options.recoveryEscapeHatch, ...(options.outputPath ? { output_path: resolve(options.outputPath) } : {}) });
   process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
 }
 
@@ -4520,7 +4688,7 @@ function printCliHelp(): void {
     '  mcp-registrar --materialize-all [--output-dir <directory>] [--runtime-profile native|bun|node-compat] [--runtime-proxy-implementation bun|node|native]',
     '',
     'Targeted recovery is intentionally difficult and is not an MCP operation:',
-    '  mcp-registrar --materialize-carrier <carrier-id> --allow-single-carrier [--output-path <carrier-config>] [--runtime-profile native|bun|node-compat] [--runtime-proxy-implementation bun|node|native]',
+    '  mcp-registrar --materialize-carrier <carrier-id> --allow-single-carrier [--output-path <carrier-config>] [--runtime-profile native|bun|node-compat] [--runtime-proxy-implementation bun|node|native] [--recovery-escape-hatch]',
     '',
     'Without arguments, mcp-registrar serves its MCP stdio protocol.',
     'Normal materialization writes every registered carrier config and its .narada-generation.json sidecar atomically.',

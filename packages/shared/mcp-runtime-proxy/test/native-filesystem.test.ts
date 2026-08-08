@@ -7,6 +7,7 @@ import { dirname, join, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
 import { resolveNativeArtifact } from '../src/native-artifact.js';
 import { fingerprintWorkspaceArtifactManifest } from '../src/workspace-artifact-manifest.js';
+import { MCP_RUNTIME_CONTRACT_VERSION } from '../src/materialization-contract.js';
 
 type JsonRecord = Record<string, any>;
 
@@ -64,7 +65,7 @@ writeFileSync(manifestPath, JSON.stringify({ ...unsigned, manifest_fingerprint: 
 const proxy = spawn(executable, [
   'proxy',
   '--artifact-manifest', manifestPath,
-  '--runtime-contract-version', '4',
+  '--runtime-contract-version', String(MCP_RUNTIME_CONTRACT_VERSION),
   '--child-command', executable,
   '--entrypoint', executable,
   '--child-invocation-kind', 'native_applet',

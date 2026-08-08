@@ -158,6 +158,8 @@ test('fresh registrar materializes, validates, and launches a carrier generation
     assert.equal(emergencyResult.status, 'materialized');
     assert.equal(emergencyResult.carrier_id, 'codex-andrey');
     assert.equal(emergencyResult.materialization_validation.ok, true, JSON.stringify(emergencyResult));
+    assert.equal(emergencyResult.recovery_escape_hatch, true);
+    assert.equal((emergencyResult.runtime_materialization_plan as JsonRecord).recovery_escape_hatch, true);
 
     const directMaterialize = await runCli([
       registrarEntrypoint,
@@ -174,6 +176,8 @@ test('fresh registrar materializes, validates, and launches a carrier generation
     const directCodex = (directResult.carriers as JsonRecord[]).find((carrier) => carrier.carrier_id === 'codex-andrey')!;
     assert.equal(directCodex.materialization_validation.ok, true, JSON.stringify(directCodex));
     assert.equal(directCodex.materialization_generation.proxy_implementation, materializationProfile === 'native' ? 'native' : 'bun');
+    assert.equal(typeof directCodex.materialization_generation.runtime_materialization_plan_fingerprint, 'string');
+    assert.equal(typeof directCodex.materialization_generation.runtime_implementation_matrix_fingerprint, 'string');
     assert.equal(existsSync(configPath), true);
     assert.equal(existsSync(sidecarPath), true);
     const planPath = `${resolve(configPath)}.narada-runtime-plan.json`;
@@ -208,6 +212,30 @@ test('fresh registrar materializes, validates, and launches a carrier generation
     const nativeCodex = (nativeResult.carriers as JsonRecord[]).find((carrier) => carrier.carrier_id === 'codex-andrey')!;
     assert.equal(nativeCodex.materialization_generation.proxy_implementation, 'native');
     assert.match(nativeCodex.materialization_generation.proxy_entrypoint, /narada-mcp-runtime\.exe$/i);
+    if (nativeRuntimeArtifactAvailable) {
+      const recoveryRoot = join(root, 'recovery');
+      const recoveryMaterialize = await runCli([
+        registrarEntrypoint,
+        '--materialize-carrier',
+        'codex-andrey',
+        '--allow-single-carrier',
+        '--output-path',
+        join(recoveryRoot, 'config.toml'),
+        '--runtime-profile',
+        'native',
+        '--runtime-proxy-implementation',
+        'bun',
+        '--recovery-escape-hatch',
+      ]);
+      assert.equal(recoveryMaterialize.exitCode, 0, recoveryMaterialize.stderr);
+      const recoveryResult = JSON.parse(recoveryMaterialize.stdout) as JsonRecord;
+      assert.equal(recoveryResult.recovery_escape_hatch, true);
+      assert.equal(recoveryResult.materialization_generation.proxy_implementation, 'bun');
+      const recoveryPlan = JSON.parse(readFileSync(join(recoveryRoot, 'config.toml.narada-runtime-plan.json'), 'utf8')) as JsonRecord;
+      assert.equal(recoveryPlan.recovery_escape_hatch, true);
+      assert.equal(recoveryPlan.runtime_proxy_implementation, 'bun');
+      assert.equal(recoveryPlan.runtime_proxy_implementation_override, true);
+    }
     const nativeConfig = readFileSync(join(nativeRoot, 'config.toml'), 'utf8');
     const nativeLaunch = codexLaunch(nativeConfig, 'narada-site-andrey-user-mcp-registrar');
     assert.match(nativeLaunch.command, /narada-mcp-runtime\.exe$/i);
@@ -238,6 +266,18 @@ test('fresh registrar materializes, validates, and launches a carrier generation
      assert.equal(nativeLoaderRun.exitCode, 0, nativeLoaderRun.stderr);
      assert.equal(nativeLoaderRun.responses[0]?.error, undefined, JSON.stringify(nativeLoaderRun.responses[0]));
      assert.equal(nativeLoaderRun.responses[0]?.result?.serverInfo?.name, 'mcp-loader-mcp');
+    const nativePlanPath = join(nativeRoot, 'config.toml.narada-runtime-plan.json');
+    const nativePlanText = readFileSync(nativePlanPath, 'utf8');
+    writeFileSync(nativePlanPath, nativePlanText.replace('"status": "accepted"', '"status": "refused"'), 'utf8');
+    const nativePlanStaleRun = await runRpc(nativeLaunch.command, nativeLaunch.args, {
+      jsonrpc: '2.0',
+      id: 'native-plan-stale',
+      method: 'initialize',
+      params: { protocolVersion: '2024-11-05' },
+    });
+    assert.notEqual(nativePlanStaleRun.exitCode, 0);
+    assert.equal(nativePlanStaleRun.responses[0]?.error?.data?.code, 'materialization_generation_stale');
+    writeFileSync(nativePlanPath, nativePlanText, 'utf8');
     writeFileSync(join(nativeRoot, 'config.toml'), nativeConfig + '# native stale generation test\n', 'utf8');
     const nativeStaleRun = await runRpc(nativeLaunch.command, nativeLaunch.args, {
       jsonrpc: '2.0',
