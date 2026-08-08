@@ -7,7 +7,7 @@ import { pathToFileURL } from 'node:url';
 import { buildGuidanceResult, guidanceToolDefinition, type GuidanceRecord } from './guidance.js';
 
 const SERVER_NAME = 'project-state-mcp';
-const SERVER_VERSION = '0.1.0';
+const SERVER_VERSION = '0.2.0';
 const PROTOCOL_VERSION = '2024-11-05';
 const MAX_OUTPUT_BYTES = 512 * 1024;
 const COMMAND_TIMEOUT_MS = 30_000;
@@ -78,6 +78,80 @@ const COMMANDS: CommandSpec[] = [
     properties: {
       program_id: stringSchema('Optional canonical program id filter.'),
       project_id: stringSchema('Optional canonical project id filter.'),
+    },
+  },
+  {
+    tool: 'project_state_standards_list',
+    cli: 'standards list [--selection <selection>]',
+    args: (input) => ['standards', 'list', ...optionalFlag(input, 'selection', '--selection')],
+    description: 'List registered standards and their tailored project applicability records.',
+    properties: { selection: stringSchema('Optional selection filter: core, conditional, or reference.') },
+  },
+  {
+    tool: 'project_state_standard_show',
+    cli: 'standards show <standard_id>',
+    args: (input) => ['standards', 'show', requiredString(input, 'standard_id')],
+    description: 'Show one standard reference, its internal control obligations, and trace mappings.',
+    properties: { standard_id: stringSchema('Canonical standard reference id.') },
+    required: ['standard_id'],
+  },
+  {
+    tool: 'project_state_applicability',
+    cli: 'applicability [--program] [--project] [--standard] [--status]',
+    args: (input) => [
+      'applicability',
+      ...optionalFlag(input, 'program_id', '--program'),
+      ...optionalFlag(input, 'project_id', '--project'),
+      ...optionalFlag(input, 'standard_id', '--standard'),
+      ...optionalFlag(input, 'status', '--status'),
+    ],
+    description: 'Read project-level standard applicability, tailoring status, and rationale.',
+    properties: {
+      program_id: stringSchema('Optional canonical program id filter.'),
+      project_id: stringSchema('Optional canonical project id filter.'),
+      standard_id: stringSchema('Optional canonical standard reference id filter.'),
+      status: stringSchema('Optional applicability status: selected, conditional, reference, or not_applicable.'),
+    },
+  },
+  {
+    tool: 'project_state_standard_trace',
+    cli: 'trace [--program] [--project] [--standard] [--obligation] [--object] [--lifecycle] [--status]',
+    args: (input) => [
+      'trace',
+      ...optionalFlag(input, 'program_id', '--program'),
+      ...optionalFlag(input, 'project_id', '--project'),
+      ...optionalFlag(input, 'standard_id', '--standard'),
+      ...optionalFlag(input, 'obligation_id', '--obligation'),
+      ...optionalFlag(input, 'object_id', '--object'),
+      ...optionalFlag(input, 'lifecycle', '--lifecycle'),
+      ...optionalFlag(input, 'status', '--status'),
+    ],
+    description: 'Trace internal standard obligations to program, project, object, lifecycle cell, evidence, review gate, and open gap.',
+    properties: {
+      program_id: stringSchema('Optional canonical program id filter.'),
+      project_id: stringSchema('Optional canonical project id filter.'),
+      standard_id: stringSchema('Optional canonical standard reference id filter.'),
+      obligation_id: stringSchema('Optional canonical internal obligation id filter.'),
+      object_id: stringSchema('Optional canonical project object id filter.'),
+      lifecycle: stringSchema('Optional lifecycle state filter.'),
+      status: stringSchema('Optional alignment status: virtually_supported, open_gap, or not_applicable.'),
+    },
+  },
+  {
+    tool: 'project_state_standard_gaps',
+    cli: 'standards gaps [--program] [--project] [--standard]',
+    args: (input) => [
+      'standards',
+      'gaps',
+      ...optionalFlag(input, 'program_id', '--program'),
+      ...optionalFlag(input, 'project_id', '--project'),
+      ...optionalFlag(input, 'standard_id', '--standard'),
+    ],
+    description: 'List standards mappings whose virtual applicability remains an explicit open gap.',
+    properties: {
+      program_id: stringSchema('Optional canonical program id filter.'),
+      project_id: stringSchema('Optional canonical project id filter.'),
+      standard_id: stringSchema('Optional canonical standard reference id filter.'),
     },
   },
   {

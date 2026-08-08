@@ -18,7 +18,16 @@ Tools:
 - `project_state_project_list` / `project_state_project_show`
 - `project_state_matrix`
 - `project_state_gaps`
+- `project_state_standards_list` / `project_state_standard_show`
+- `project_state_applicability`
+- `project_state_standard_trace` / `project_state_standard_gaps`
 - `project_state_validate`
+
+The standards tools expose the site's bounded applicability profile and trace
+internal control paraphrases to program, project, object, lifecycle cell,
+maturity, process phase, repository evidence, project-defined review gate, and
+open gap. They do not reproduce standard text or claim ISO conformity,
+certification, qualification, or flight credit.
 
 The projection receives `--project-root {site_root}`. Callers cannot replace the
 root or CLI path through tool arguments.

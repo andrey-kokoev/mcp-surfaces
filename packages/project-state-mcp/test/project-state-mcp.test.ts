@@ -16,6 +16,11 @@ assert.deepEqual(names.sort(), [
   'project_state_program_show',
   'project_state_project_list',
   'project_state_project_show',
+  'project_state_standards_list',
+  'project_state_standard_show',
+  'project_state_applicability',
+  'project_state_standard_trace',
+  'project_state_standard_gaps',
   'project_state_validate',
 ].sort());
 
@@ -52,6 +57,11 @@ try {
   assert.equal(show.result.args.includes('demo'), true);
   const bad = await handleRequest({ jsonrpc: '2.0', id: 4, method: 'tools/call', params: { name: 'project_state_program_show', arguments: {} } }, state) as JsonRpcResponse;
   assert.equal(bad.error?.data?.code, 'required_argument_missing');
+  const traceResponse = await handleRequest({ jsonrpc: '2.0', id: 5, method: 'tools/call', params: { name: 'project_state_standard_trace', arguments: { standard_id: 'iso-15288-2023', status: 'open_gap' } } }, state) as JsonRpcResponse;
+  const trace = JSON.parse(String(traceResponse.result?.content?.[0]?.text));
+  assert.equal(trace.result.args.includes('trace'), true);
+  assert.equal(trace.result.args.includes('iso-15288-2023'), true);
+  assert.equal(trace.result.args.includes('open_gap'), true);
 } finally {
   await rm(fixtureDir, { recursive: true, force: true });
 }

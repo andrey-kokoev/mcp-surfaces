@@ -11,13 +11,18 @@ const READ_ONLY_TOOLS = [
   'project_state_project_show',
   'project_state_matrix',
   'project_state_gaps',
+  'project_state_standards_list',
+  'project_state_standard_show',
+  'project_state_applicability',
+  'project_state_standard_trace',
+  'project_state_standard_gaps',
   'project_state_validate',
 ] as const;
 
 export function surfaceDefinition(): DefinedSurface {
   return defineNativeSurface({
     surface_id: 'project-state',
-    surface_version: '0.1.0',
+    surface_version: '0.2.0',
     package: '@narada-core/project-state-mcp',
     entrypoint: '{mcp_surfaces_root}/project-state-mcp/dist/src/main.js',
     tools: listTools() as McpToolDefinition[],

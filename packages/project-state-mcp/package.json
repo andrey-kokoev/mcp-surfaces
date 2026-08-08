@@ -1,6 +1,6 @@
 {
   "name": "@narada-core/project-state-mcp",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "license": "Apache-2.0",
   "type": "module",
   "description": "Read-only MCP projection for a Narada site's canonical virtual project-state registry.",

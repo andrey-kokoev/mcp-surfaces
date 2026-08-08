@@ -24,25 +24,30 @@ export function buildGuidanceResult(args: GuidanceRecord = {}): GuidanceRecord {
     first_use: [
       'Call project_state_guidance when this read-only surface is unfamiliar or a diagnostic needs interpretation.',
       'Call project_state_doctor to check the site root, canonical SQL, viewer binding, and generated-output freshness.',
-      'Use bounded program/project/matrix/gaps queries for orientation; project_state_validate is the complete virtual registry read.',
+      'Use bounded program/project/matrix/gaps and standards/applicability/trace queries for orientation; project_state_validate is the complete virtual registry read.',
       'Treat structuredContent as authoritative; text content is a readable serialization of the same result.',
     ],
     tool_preference: [
       { step: 'orient', guidance: 'Use guidance, then doctor and command_map.' },
       { step: 'discover', guidance: 'Use program_list or project_list with an explicit program filter when useful.' },
-      { step: 'inspect', guidance: 'Use program_show, project_show, matrix, or gaps for a bounded target.' },
+      { step: 'inspect', guidance: 'Use program_show, project_show, matrix, gaps, standards_list, applicability, or standard_trace for a bounded target.' },
+      { step: 'trace', guidance: 'Use standard_show, standard_trace, and standard_gaps to connect an internal control to its object, lifecycle cell, evidence, review gate, and open gap.' },
       { step: 'verify', guidance: 'Use project_state_validate only when the complete virtual registry payload is needed.' },
     ],
     examples: [
       { intent: 'First use', call: 'project_state_guidance({})' },
       { intent: 'Check local posture', call: 'project_state_doctor({})' },
       { intent: 'Inspect lifecycle gaps', call: 'project_state_gaps({ program_id: "orbital_compute_infrastructure" })' },
+      { intent: 'Inspect selected standards', call: 'project_state_standards_list({ selection: "core" })' },
+      { intent: 'Trace a standard', call: 'project_state_standard_trace({ standard_id: "iso-15288-2023" })' },
     ],
     anti_patterns: [
       'Do not interpret virtual maturity as fabrication, metrology, external evidence, qualification, or flight credit.',
       'Do not pass a different project root or executable through tool arguments; the projection owns its site root and CLI path.',
       'Do not use this read-only surface to mutate SQL, generated files, suppliers, or physical systems.',
       'Do not infer missing lifecycle states from a filtered result; use project_state_validate when complete coverage matters.',
+      'Do not interpret a virtually_supported standards mapping as ISO conformity, certification, qualification, or external approval.',
+      'Do not treat a standard identifier or source link as permission to reproduce copyrighted standard text; the site stores bounded internal paraphrases only.',
     ],
     recovery: [
       'For project_state_cli_missing, build or restore the narada.space project at the configured site root.',
